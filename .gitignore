@@ -1,0 +1,57 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python Cache and Compilations
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment configurations and Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+out/
+
+# Databases
+*.db
+*.sqlite
+local_test.db
+
+# Logs and Debug
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+webhook_logs/
+
+# Editor/System Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Retell agent state (auto-generated, contains agent/llm IDs)
+backend/retell_agent_state.json
+backend/retell_state.json
+
+# Scratch / temp scripts
+backend/list_calendars.py
+

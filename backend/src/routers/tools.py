@@ -1,0 +1,496 @@
+"""
+Retell AI Function Call Tools - Webhook endpoints for agent function calls.
+"""
+
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, model_validator
+from typing import Any, Optional
+from src.db import get_db, Contact, ScheduledCallback, Appointment, CallAttempt
+from src.knowledge import search_knowledge
+
+router = APIRouter(prefix="/api/webhooks/tools", tags=["Retell Tools"])
+
+
+class RetellToolBase(BaseModel):
+    call_id: Optional[str] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def extract_args(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "args" in data and isinstance(data["args"], dict):
+            merged = data.copy()
+            merged.update(data["args"])
+            return merged
+        return data
+
+
+class LookupRequest(RetellToolBase):
+    query: str
+
+
+class ScheduleCallbackRequest(RetellToolBase):
+    datetime_iso: str
+    reason: str = "requested callback"
+    contact_id: str = None  # Optional, can be inferred from call context
+    phone_number: str = None  # Optional, fallback
+
+
+class BookAppointmentRequest(RetellToolBase):
+    datetime_iso: str
+    purpose: str
+    attendee_name: str
+    attendee_phone: str
+    attendee_email: str = ""  # Optional — collected during call if not pre-filled
+    contact_id: str = None
+
+
+class MarkOutcomeRequest(RetellToolBase):
+    outcome: str  # interested_followup_scheduled, appointment_booked, not_interested, do_not_call, wrong_number, no_answer, undetermined
+    notes: str = ""
+    contact_id: str = None
+
+
+@router.post("/lookup")
+def lookup_school_info(
+    request: LookupRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Tool: lookup_school_info(query)
+    Returns short grounded answer from TSRA knowledge base.
+    Retell expects: {"result": "..."}  
+    """
+    if not request.query or len(request.query.strip()) < 3:
+        return {"result": "I couldn't process that query. Please try asking about a specific topic like fees, curriculum, or admissions."}
+    
+    results = search_knowledge(request.query, limit=3)
+    
+    if results:
+        combined_content = " ".join([r["content"] for r in results])
+        answer = combined_content[:600] + "..." if len(combined_content) > 600 else combined_content
+        return {"result": answer}
+    else:
+        return {"result": "I don't have that specific information right now. I'll make sure our admissions team follows up with the exact details."}
+
+
+@router.get("/lookup")
+def lookup_school_info_get(
+    query: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Tool: lookup_school_info(query) - GET version for testing
+    Returns short grounded answer from TSRA knowledge base.
+    """
+    if not query or len(query.strip()) < 3:
+        return {
+            "success": False,
+            "error": "Query must be at least 3 characters"
+        }
+    
+    results = search_knowledge(query, limit=3)
+    
+    if results:
+        # Synthesize answer from top results
+        combined_content = " ".join([r["content"] for r in results])
+        answer = combined_content[:500] + "..." if len(combined_content) > 500 else combined_content
+        return {
+            "success": True,
+            "answer": answer,
+            "sources": [r["source_url"] for r in results]
+        }
+    else:
+        return {
+            "success": True,
+            "answer": "I don't have that specific information in my knowledge base. Let me have our admissions team follow up with the exact details.",
+            "sources": []
+        }
+
+
+def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Contact]:
+    # 1. Try resolving via Retell call ID from JSON body / request data
+    call_id = getattr(request_data, "call_id", None)
+    if not call_id and req:
+        # Fallback to headers
+        call_id = req.headers.get("x-retell-call-id")
+
+    if call_id:
+        attempt = db.query(CallAttempt).filter(CallAttempt.retell_call_id == call_id).first()
+        if attempt and attempt.contact:
+            print(f"[TOOLS] Resolved contact {attempt.contact.id} from Retell Call ID: {call_id}")
+            return attempt.contact
+
+    # 2. Try resolving via contact_id parameter
+    contact_id = getattr(request_data, "contact_id", None)
+    if not contact_id and req:
+        contact_id = req.query_params.get("contact_id")
+    
+    if contact_id and not (contact_id.startswith("{{") or contact_id.endswith("}}")):
+        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        if contact:
+            print(f"[TOOLS] Resolved contact {contact.id} from contact_id parameter")
+            return contact
+
+    # 3. Try resolving via attendee_phone / phone_number
+    phone = getattr(request_data, "attendee_phone", None) or getattr(request_data, "phone_number", None)
+    if phone:
+        contact = db.query(Contact).filter(Contact.phone_number == phone).first()
+        if contact:
+            print(f"[TOOLS] Resolved contact {contact.id} from phone number: {phone}")
+            return contact
+
+    # 4. Fallback to the most recent "Calling", "Scheduled", or recently Completed contact
+    #    (mark_outcome often fires after book_appointment already set status to Completed,
+    #     so we include Completed in the fallback — take the most recently updated one)
+    contact = db.query(Contact).filter(
+        Contact.status.in_(["Calling", "Scheduled", "Completed"])
+    ).order_by(Contact.updated_at.desc()).first()
+    if contact:
+        print(f"[TOOLS] Resolved contact {contact.id} ({contact.name}) from fallback status={contact.status}")
+    else:
+        print(f"[TOOLS] resolve_contact: ALL resolution methods failed. call_id header={req.headers.get('x-retell-call-id')}")
+    return contact
+
+
+@router.post("/schedule-callback")
+def schedule_callback(
+    request: ScheduleCallbackRequest,
+    req: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Tool: schedule_callback(datetime_iso, reason)
+    Creates a scheduled callback for the contact.
+    Returns Retell-compatible {"result": "..."}.
+    """
+    try:
+        # Debug: log the raw request body to understand what Retell sends
+        try:
+            import asyncio
+            body_bytes = asyncio.get_event_loop().run_until_complete(req.body()) if hasattr(req, '_body') else b""
+        except Exception:
+            body_bytes = b""
+        print(f"[TOOLS] schedule_callback raw data: datetime_iso={request.datetime_iso!r}, reason={request.reason!r}, contact_id={request.contact_id!r}, phone={request.phone_number!r}")
+        
+        from datetime import timezone, timedelta
+        dt_str = request.datetime_iso
+        if dt_str.endswith("Z"):
+            dt_str = dt_str.replace("Z", "+05:30")
+        if "+" not in dt_str and (dt_str.count("-") < 3):
+            dt_str = dt_str + "+05:30"
+        dt = datetime.fromisoformat(dt_str)
+        scheduled_for = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        readable_time = dt.strftime('%A, %d %B at %I:%M %p')
+
+        # Guard: reject scheduling in the past or within 5 seconds
+        # This catches cases where the agent uses current_datetime verbatim
+        # instead of adding the requested duration offset.
+        now_utc = datetime.utcnow()
+        if scheduled_for <= now_utc + timedelta(seconds=5):
+            print(f"[TOOLS] schedule_callback: datetime {scheduled_for} UTC is in the past/too soon (now={now_utc}). Rejecting so agent retries with correct future time.", flush=True)
+            return {"result": f"Unable to schedule — the time {readable_time} is already past or too soon. Please add the requested duration to the current time and call this tool again with the correct future datetime."}
+
+        contact = resolve_contact(db, req, request)
+        if not contact:
+            print("[TOOLS] schedule_callback: No contact found, cannot schedule")
+            return {"result": "I couldn't schedule the callback because the contact details were missing. Please try again."}
+            
+        contact_id = contact.id
+        
+        # Check if there's already a pending ScheduledCallback for this contact
+        existing = db.query(ScheduledCallback).filter(
+            ScheduledCallback.contact_id == contact_id,
+            ScheduledCallback.status == "Scheduled"
+        ).first()
+        if existing:
+            # Update the existing one instead of creating a duplicate
+            existing.scheduled_for = scheduled_for
+            existing.reason = request.reason
+            db.commit()
+            return {"result": f"Callback successfully rescheduled for {readable_time}. We'll call you back then!"}
+        
+        # Create ScheduledCallback
+        callback = ScheduledCallback(
+            contact_id=contact_id,
+            scheduled_for=scheduled_for,
+            reason=request.reason,
+            status="Scheduled",
+            call_type="Follow-up"
+        )
+        db.add(callback)
+        
+        # Update contact status to Scheduled
+        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        if contact:
+            contact.status = "Scheduled"
+            contact.updated_at = datetime.utcnow()
+        
+        db.commit()
+        
+        # Register APScheduler one-shot job to fire the callback at the exact time
+        try:
+            from src.scheduler import get_scheduler
+            from src.routers.webhooks import trigger_callback_call
+            sched = get_scheduler()
+            if sched and sched.running:
+                sched.add_job(
+                    trigger_callback_call,
+                    "date",
+                    run_date=scheduled_for,
+                    args=[contact_id],
+                    id=f"tool_cb_{contact_id}_{int(scheduled_for.timestamp())}",
+                    replace_existing=True
+                )
+                print(f"[TOOLS] Registered APScheduler callback for {contact_id} at {scheduled_for} UTC")
+        except Exception as sched_err:
+            print(f"[TOOLS] APScheduler registration warning: {sched_err}")
+        
+        return {"result": f"Callback successfully scheduled for {readable_time}. We'll call you back then!"}
+        
+    except Exception as e:
+        print(f"[TOOLS] schedule_callback error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"result": f"There was an issue scheduling the callback: {str(e)}. Please confirm the time and try again."}
+
+
+def process_appointment_booking_async(
+    appointment_id: str,
+    credentials_json: str,
+    calendar_id: str,
+    start_iso: str,
+    summary: str,
+    description: str,
+    attendee_name: str,
+    attendee_phone: str,
+    attendee_email: str,
+    smtp_server: str,
+    smtp_port_val: int,
+    smtp_username: str,
+    smtp_password: str,
+    smtp_from_email: str,
+    readable_time: str,
+    purpose: str
+):
+    from src.db import SessionLocal, Appointment
+    from src.services.google_calendar import create_event
+    from src.services.email_sender import send_booking_email
+
+    db = SessionLocal()
+    gcal_html_link = None
+    try:
+        if credentials_json and calendar_id:
+            try:
+                result = create_event(
+                    credentials_json=credentials_json,
+                    calendar_id=calendar_id,
+                    start_iso=start_iso,
+                    summary=summary,
+                    description=description,
+                    attendee_name=attendee_name,
+                    attendee_phone=attendee_phone,
+                    appointment_id=appointment_id,
+                    attendee_email=attendee_email
+                )
+                
+                # Fetch appointment inside local db session and update GCal links
+                appointment = db.query(Appointment).filter(Appointment.id == appointment_id).first()
+                if appointment:
+                    appointment.google_calendar_event_id = result["event_id"]
+                    appointment.google_calendar_html_link = result["html_link"]
+                    gcal_html_link = result["html_link"]
+                    db.commit()
+                    print(f"[BACKGROUND] Google Calendar event created: {result['event_id']}", flush=True)
+            except Exception as gcal_err:
+                print(f"[BACKGROUND] Google Calendar event creation failed: {gcal_err}", flush=True)
+
+        # Dispatch booking confirmation email in the background
+        if attendee_email and attendee_email.strip():
+            try:
+                send_booking_email(
+                    smtp_server=smtp_server,
+                    smtp_port=smtp_port_val,
+                    username=smtp_username,
+                    password=smtp_password,
+                    from_email=smtp_from_email,
+                    to_email=attendee_email.strip(),
+                    attendee_name=attendee_name,
+                    purpose=purpose,
+                    scheduled_for_str=readable_time,
+                    gcal_link=gcal_html_link
+                )
+            except Exception as email_err:
+                print(f"[BACKGROUND] Email dispatch failed: {email_err}", flush=True)
+    except Exception as e:
+        print(f"[BACKGROUND] Error in process_appointment_booking_async: {e}", flush=True)
+    finally:
+        db.close()
+
+
+@router.post("/book-appointment")
+def book_appointment(
+    request: BookAppointmentRequest,
+    req: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Tool: book_appointment(datetime_iso, purpose, attendee_name, attendee_phone, attendee_email)
+    Creates an appointment record instantly, then offloads calendar sync and email dispatch
+    to a background task. This achieves zero latency/lag for the calling agent.
+    """
+    try:
+        from datetime import timezone, timedelta
+        dt_str = request.datetime_iso
+        if dt_str.endswith("Z"):
+            dt_str = dt_str.replace("Z", "+05:30")
+        if "+" not in dt_str and (dt_str.count("-") < 3):
+            dt_str = dt_str + "+05:30"
+        dt = datetime.fromisoformat(dt_str)
+        scheduled_for = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        readable_time = dt.strftime('%A, %d %B at %I:%M %p')
+        
+        contact = resolve_contact(db, req, request)
+        if not contact:
+            print("[TOOLS] book_appointment: No contact found")
+            return {"result": "I couldn't find the contact details to book the appointment. Please try again."}
+        
+        # Save or update contact email
+        if request.attendee_email and request.attendee_email.strip():
+            contact.email = request.attendee_email.strip()
+            contact.updated_at = datetime.utcnow()
+        
+        # Create Appointment record in DB
+        appointment = Appointment(
+            contact_id=contact.id,
+            scheduled_for=scheduled_for,
+            purpose=request.purpose,
+            status="Booked"
+        )
+        db.add(appointment)
+        db.flush()  # Populates appointment.id
+
+        contact.status = "Completed"
+        db.commit()
+
+        import os
+        from src.db import Settings
+
+        # Load credentials and configuration settings
+        smtp_server = None
+        smtp_port_val = 587
+        smtp_username = None
+        smtp_password = None
+        smtp_from_email = None
+        credentials_json = None
+        calendar_id = None
+
+        try:
+            settings_list = db.query(Settings).all()
+            settings_map = {s.key: s.value for s in settings_list}
+            credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
+            calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
+            
+            # Load SMTP settings for the background task
+            smtp_server = settings_map.get("smtp_server") or os.getenv("SMTP_SERVER")
+            smtp_port = settings_map.get("smtp_port") or os.getenv("SMTP_PORT")
+            smtp_port_val = int(smtp_port) if smtp_port else 587
+            smtp_username = settings_map.get("smtp_username") or os.getenv("SMTP_USERNAME")
+            smtp_password = settings_map.get("smtp_password") or os.getenv("SMTP_PASSWORD")
+            smtp_from_email = settings_map.get("smtp_from_email") or os.getenv("SMTP_FROM_EMAIL")
+        except Exception as conf_err:
+            print(f"[TOOLS] Failed to load background task settings: {conf_err}")
+
+        # Enqueue both Google Calendar event creation and email confirmation to run in the background
+        # This completely eliminates any lag/latency during the live phone call.
+        background_tasks.add_task(
+            process_appointment_booking_async,
+            appointment_id=appointment.id,
+            credentials_json=credentials_json,
+            calendar_id=calendar_id,
+            start_iso=dt.isoformat(),
+            summary=f"TSRA {request.purpose} — {request.attendee_name}",
+            description=f"Booked via Aegis voice calling agent. Purpose: {request.purpose}",
+            attendee_name=request.attendee_name,
+            attendee_phone=request.attendee_phone,
+            attendee_email=request.attendee_email,
+            smtp_server=smtp_server,
+            smtp_port_val=smtp_port_val,
+            smtp_username=smtp_username,
+            smtp_password=smtp_password,
+            smtp_from_email=smtp_from_email,
+            readable_time=readable_time,
+            purpose=request.purpose
+        )
+        
+        return {"result": f"Your appointment for {request.purpose} has been booked for {readable_time}. You'll receive a confirmation shortly. We look forward to seeing you!"}
+        
+    except Exception as e:
+        return {"result": f"There was an issue booking the appointment: {str(e)}. Please call us directly to confirm your slot."}
+
+
+
+@router.post("/mark-outcome")
+def mark_outcome(
+    request: MarkOutcomeRequest,
+    req: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Tool: mark_outcome(outcome, notes)
+    Marks the final outcome of a call and updates contact status.
+    Returns Retell-compatible {"result": "..."}.
+    """
+    try:
+        contact = resolve_contact(db, req, request)
+        if not contact:
+            return {"result": "Outcome recorded."}
+        
+        # Map outcome to contact status
+        outcome_mapping = {
+            "interested_followup_scheduled": "Scheduled",
+            "appointment_booked": "Completed",
+            "not_interested": "Completed",
+            "do_not_call": "DoNotCall",
+            "wrong_number": "Failed",
+            "no_answer": "NeedsReschedule",
+            "undetermined": "Pending"
+        }
+        
+        contact.status = outcome_mapping.get(request.outcome, "Pending")
+        contact.updated_at = datetime.utcnow()
+        
+        # Update the most recent CallAttempt with agent_outcome
+        attempt = db.query(CallAttempt).filter(
+            CallAttempt.contact_id == contact.id
+        ).order_by(CallAttempt.started_at.desc()).first()
+        
+        if attempt:
+            if attempt.summary:
+                attempt.summary += f"\n\nAgent Outcome: {request.outcome}\nNotes: {request.notes}"
+            else:
+                attempt.summary = f"Agent Outcome: {request.outcome}\nNotes: {request.notes}"
+        
+        db.commit()
+        return {"result": f"Call outcome recorded: {request.outcome}."}
+        
+    except Exception as e:
+        return {"result": "Outcome recorded."}
+
+
+@router.post("/end-call")
+def end_call(
+    req: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Tool: end_call()
+    Signals Retell to hang up the call immediately.
+    Retell interprets a {"result": ...} response and then terminates the call
+    when this custom function is marked as ending the call in the agent config.
+    """
+    call_id = req.headers.get("x-retell-call-id", "unknown")
+    print(f"[TOOLS] end_call invoked for call_id={call_id}")
+    return {"result": "Call ended. Goodbye!"}

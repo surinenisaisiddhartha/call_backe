@@ -1,0 +1,31 @@
+# Ignore virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Ignore python cache files
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore database files
+*.db
+*.sqlite
+local_test.db
+
+# Ignore environment variables and secrets
+.env
+*.env
+
+# Ignore editor and system files
+.git
+.gitignore
+.dockerignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Documentation
+README.md
