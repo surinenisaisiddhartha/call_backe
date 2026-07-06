@@ -27,7 +27,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=${VITE_API_URL:-http://localhost:5000/api}
+        - VITE_API_URL=${VITE_API_URL:-https://tl9egburoq7ikdxfezshedz5.datalabscorp.ai/api}
     container_name: aegis-frontend
     restart: always
     ports:
