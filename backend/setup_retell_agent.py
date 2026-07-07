@@ -254,6 +254,7 @@ def main():
             llm_id,
             general_prompt=general_prompt,
             general_tools=general_tools,
+            model_high_priority=True,
         )
         print("Prompt updated successfully. Existing agent will use the new prompt on its next call.")
 
@@ -265,10 +266,19 @@ def main():
             voice_id=new_voice_id,
             end_call_after_silence_ms=30000,
             language="multi",
-            webhook_url=new_webhook_url
+            webhook_url=new_webhook_url,
+            # Reported audio as glitchy/choppy across two different voice
+            # providers (11labs-Monika AND openai-Monika) — that rules out the
+            # TTS engine itself. Most likely cause: default interruption
+            # sensitivity is aggressive enough that background noise/line
+            # static on the caller's end falsely triggers "user interrupted,"
+            # abruptly cutting the agent's speech mid-word. Lowered so only a
+            # clearer, more sustained voice interrupts the agent.
+            interruption_sensitivity=0.4,
         )
         print(f"Voice updated to: {new_voice_id} (silence timeout: 30s, language: multi)")
         print(f"Call-lifecycle webhook_url updated to: {new_webhook_url}")
+        print("interruption_sensitivity lowered to 0.4 and LLM set to high priority to reduce choppy/glitchy audio.")
 
 
         print(f"agent_id to use in your backend/.env: {agent_id}")
