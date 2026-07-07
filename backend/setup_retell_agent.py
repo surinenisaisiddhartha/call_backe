@@ -2,7 +2,7 @@
 setup_retell_agent.py
 
 Creates (once) or updates (on every re-run) the single shared Retell AI
-"Maya" agent for Aegis Calling Manager, using agent_prompt.md as the
+"Arjun" agent for Aegis Calling Manager, using agent_prompt.md as the
 ENTIRE system prompt — nothing else, no default template content.
 
 Behaviour:
@@ -58,8 +58,8 @@ if not RETELL_API_KEY or not WEBHOOK_BASE_URL:
     except Exception as db_err:
         print(f"[SETUP] Note: could not load from SQLite db: {db_err}")
 
-VOICE_ID = os.environ.get("RETELL_VOICE_ID", "openai-Monika")
-AGENT_NAME = "TSRA Admissions Assistant - Maya"
+VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Adrian")
+AGENT_NAME = "TSRA Admissions Assistant - Arjun"
 
 # Optional shared secret sent as a header on every custom tool call so the
 # backend can verify these webhook requests actually came from Retell (see
