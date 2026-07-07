@@ -1,10 +1,18 @@
 import os
+import json
+import hmac
+import hashlib
 from datetime import datetime
-from fastapi import APIRouter, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, BackgroundTasks, Request, HTTPException
 from sqlalchemy.orm import Session
 from src.db import get_db, Contact, CallAttempt, ScheduledCallback, Settings
 
 router = APIRouter(prefix="/api/webhooks", tags=["Webhooks"])
+
+
+def _get_setting_or_env(db: Session, key: str, env_key: str) -> str:
+    s = db.query(Settings).filter(Settings.key == key).first()
+    return (s.value if s else None) or os.getenv(env_key)
 
 
 @router.post("/retell")
@@ -13,7 +21,30 @@ async def retell_webhook(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    payload = await request.json()
+    body_bytes = await request.body()
+    api_key = _get_setting_or_env(db, "retell_api_key", "RETELL_API_KEY")
+
+    # Verify Retell's HMAC signature (X-Retell-Signature) whenever a real API
+    # key is configured. This is what proves the request actually came from
+    # Retell and not from anyone who found this public webhook URL.
+    if api_key and api_key != "YOUR_RETELL_API_KEY" and "mock" not in api_key:
+        signature = request.headers.get("x-retell-signature")
+        if not signature:
+            print("[WEBHOOK] Rejected: missing X-Retell-Signature header")
+            raise HTTPException(status_code=401, detail="Missing signature")
+        try:
+            from retell.lib import verify as retell_verify_signature
+            valid = retell_verify_signature(body_bytes.decode("utf-8"), api_key, signature)
+        except Exception as verify_err:
+            print(f"[WEBHOOK] Signature verification error: {verify_err}")
+            valid = False
+        if not valid:
+            print("[WEBHOOK] Rejected: invalid Retell signature")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    else:
+        print("[WEBHOOK] WARNING: no real Retell API key configured — skipping signature verification (mock/demo mode)")
+
+    payload = json.loads(body_bytes)
     background_tasks.add_task(process_webhook_payload, payload)
     return {"received": True}
 
@@ -129,6 +160,18 @@ def process_webhook_payload(payload: dict):
         transcript = call.get("transcript") or call_analysis.get("transcript") or ""
         summary = call.get("summary") or call_analysis.get("summary") or ""
 
+        # Was mark_outcome already called mid-call? (it appends "Agent Outcome:"
+        # to the CallAttempt's summary — see tools.py mark_outcome). If so, the
+        # agent reached its scripted close (booked/rescheduled/DNC/etc.) before
+        # hanging up. If not, and the CALLER is the one who hung up, the call
+        # was abandoned mid-conversation with nothing actually resolved.
+        _existing_attempt = None
+        if call_id:
+            _existing_attempt = db.query(CallAttempt).filter(CallAttempt.retell_call_id == call_id).first()
+            if not _existing_attempt and batch_call_id:
+                _existing_attempt = db.query(CallAttempt).filter(CallAttempt.retell_call_id == batch_call_id).first()
+        mark_outcome_recorded = bool(_existing_attempt and _existing_attempt.summary and "Agent Outcome:" in _existing_attempt.summary)
+
         if disconnection_reason == "dial_no_answer":
             outcome, contact_status = "NoAnswer", "NeedsReschedule"
         elif disconnection_reason == "dial_busy":
@@ -137,6 +180,11 @@ def process_webhook_payload(payload: dict):
             outcome, contact_status = "NoAnswer", "NeedsReschedule"
         elif disconnection_reason == "dial_failed":
             outcome, contact_status = "Failed", "Failed"
+        elif disconnection_reason == "user_hangup" and not mark_outcome_recorded:
+            # Caller ended the call mid-conversation before the agent reached
+            # its scripted close — nothing was actually resolved, so this needs
+            # the same auto-reschedule treatment as a NoAnswer, not "Completed".
+            outcome, contact_status = "IncompleteHangup", "NeedsReschedule"
         elif disconnection_reason in ["user_hangup", "agent_hangup", None]:
             outcome, contact_status = "Answered", "Completed"
         else:
@@ -149,8 +197,11 @@ def process_webhook_payload(payload: dict):
         auto_scheduled = False
 
         if event == "call_analyzed":
-            # ── Retry/Backoff Logic for NoAnswer/Failed ──────────────────
-            if outcome in ["NoAnswer", "Failed"]:
+            # ── Retry/Backoff Logic for NoAnswer/Failed/IncompleteHangup ──
+            # max_retry_attempts counts TOTAL attempts for the contact, so the
+            # default of 3 means: 1 original call + up to 2 auto-rescheduled
+            # retries before giving up and marking the contact Failed.
+            if outcome in ["NoAnswer", "Failed", "IncompleteHangup"]:
                 s_max = db.query(Settings).filter(Settings.key == "max_retry_attempts").first()
                 s_backoff = db.query(Settings).filter(Settings.key == "retry_backoff_hours").first()
 
@@ -365,6 +416,28 @@ def trigger_callback_call(contact_id: str):
         if not contact:
             return
 
+        # ── Atomically claim the pending ScheduledCallback row ──────────────
+        # scheduler.py also has a generic 1-minute sweep (_fire_pending_callbacks)
+        # that fires any row still "Scheduled" once its time has passed. Without
+        # this claim, this exact-time job and that sweep could both fire the
+        # same callback around the same moment and double-dial the contact.
+        # The UPDATE...WHERE status='Scheduled' is atomic at the SQL level, so
+        # only one of the two code paths will ever see rowcount == 1.
+        cb = db.query(ScheduledCallback).filter(
+            ScheduledCallback.contact_id == contact_id,
+            ScheduledCallback.status == "Scheduled"
+        ).order_by(ScheduledCallback.scheduled_for.desc()).first()
+
+        if cb:
+            claimed = db.query(ScheduledCallback).filter(
+                ScheduledCallback.id == cb.id,
+                ScheduledCallback.status == "Scheduled"
+            ).update({"status": "Triggering"}, synchronize_session=False)
+            db.commit()
+            if not claimed:
+                print(f"[SCHEDULER] Callback for {contact_id} already claimed/fired elsewhere, skipping duplicate dial")
+                return
+
         # Get settings
         ak = db.query(Settings).filter(Settings.key == "retell_api_key").first()
         fn = db.query(Settings).filter(Settings.key == "retell_phone_number").first()
@@ -380,6 +453,7 @@ def trigger_callback_call(contact_id: str):
         dynamic_vars = {
             "contact_id": contact_id,
             "caller_name": contact.name,
+            "caller_email": contact.email or "",
             "notes": contact.notes or "",
             "campaign_name": f"Callback-{contact_id[:8]}",
             "current_datetime": datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(microsecond=0).isoformat()
@@ -413,17 +487,17 @@ def trigger_callback_call(contact_id: str):
             contact.status = "Calling"
             contact.updated_at = datetime.utcnow()
 
-            # Mark ScheduledCallback as triggered
-            cb = db.query(ScheduledCallback).filter(
-                ScheduledCallback.contact_id == contact_id,
-                ScheduledCallback.status == "Scheduled"
-            ).first()
             if cb:
                 cb.status = "Triggered"
             db.commit()
             print(f"[SCHEDULER] Callback call fired for {contact.name} | batch_call_id={batch_call_id}")
         else:
             print(f"[SCHEDULER] Retell error for callback: {r.text}")
+            # Dial failed — mark Triggered anyway (rather than leaving it stuck
+            # in "Triggering" forever) so it doesn't silently block future retries.
+            if cb:
+                cb.status = "Triggered"
+                db.commit()
     except Exception as e:
         print(f"[SCHEDULER] trigger_callback_call error: {e}")
         import traceback
@@ -438,8 +512,22 @@ async def cal_webhook(
     request: Request,
     db: Session = Depends(get_db)
 ):
+    body_bytes = await request.body()
+
+    # Verify Cal.com's HMAC signature (X-Cal-Signature-256) whenever a webhook
+    # secret is configured (set the same secret in the Cal.com webhook config).
+    secret = _get_setting_or_env(db, "cal_com_webhook_secret", "CAL_COM_WEBHOOK_SECRET")
+    if secret:
+        provided_sig = request.headers.get("x-cal-signature-256")
+        expected_sig = hmac.new(secret.encode(), body_bytes, hashlib.sha256).hexdigest()
+        if not provided_sig or not hmac.compare_digest(provided_sig, expected_sig):
+            print("[CAL.COM WEBHOOK] Rejected: missing or invalid signature")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    else:
+        print("[CAL.COM WEBHOOK] WARNING: cal_com_webhook_secret not configured — skipping signature verification")
+
     try:
-        body = await request.json()
+        body = json.loads(body_bytes)
         trigger_event = body.get("triggerEvent")
         payload = body.get("payload", {})
 

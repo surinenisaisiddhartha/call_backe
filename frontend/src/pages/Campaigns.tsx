@@ -27,6 +27,7 @@ interface Campaign {
 
 interface CallRecord {
   id: string;
+  contact_id: string;
   contact_name: string;
   contact_phone: string;
   outcome: string;
@@ -40,6 +41,7 @@ interface CallRecord {
 
 interface CampaignsProps {
   showToast: (msg: string, type?: 'success' | 'error') => void;
+  onViewContact?: (contactId: string) => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -55,6 +57,7 @@ const OUTCOME_COLORS: Record<string, string> = {
   Busy: '#f97316',
   Failed: '#ef4444',
   InProgress: '#6366f1',
+  IncompleteHangup: '#f59e0b',
 };
 
 function formatDuration(sec: number | null): string {
@@ -70,7 +73,7 @@ function formatDate(iso: string | null): string {
   return new Date(utcIso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true });
 }
 
-export default function Campaigns({ showToast }: CampaignsProps) {
+export default function Campaigns({ showToast, onViewContact }: CampaignsProps) {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -262,18 +265,23 @@ export default function Campaigns({ showToast }: CampaignsProps) {
       </div>
 
       {/* Premium Slim Stats Header Strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '28px' }}>
         {[
-          { label: 'Total Leads', value: stats.total, color: 'var(--accent-primary)' },
-          { label: 'Completed', value: stats.completed, color: 'var(--accent-success)' },
-          { label: 'Currently Dialing', value: stats.calling, color: 'var(--accent-secondary)' },
-          { label: 'Needs Reschedule', value: stats.needsReschedule, color: 'var(--accent-warning)' },
-          { label: 'Scheduled Callbacks', value: stats.scheduled, color: '#8b5cf6' },
-          { label: 'Active Concurrency', value: `${concurrency.current} / ${concurrency.limit}`, color: 'var(--accent-primary)' },
+          { label: 'Total Leads', value: stats.total, color: 'var(--accent-primary)', icon: Users },
+          { label: 'Completed', value: stats.completed, color: 'var(--accent-success)', icon: CheckCircle },
+          { label: 'Currently Dialing', value: stats.calling, color: 'var(--accent-secondary)', icon: Phone },
+          { label: 'Needs Reschedule', value: stats.needsReschedule, color: 'var(--accent-warning)', icon: AlertCircle },
+          { label: 'Scheduled Callbacks', value: stats.scheduled, color: '#8b5cf6', icon: Calendar },
+          { label: 'Active Concurrency', value: `${concurrency.current} / ${concurrency.limit}`, color: 'var(--accent-primary)', icon: BarChart2 },
         ].map(s => (
-          <div key={s.label} className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label}</div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: s.color }}>{s.value}</div>
+          <div key={s.label} className="glass-panel" style={{ padding: '18px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div className="icon-badge" style={{ background: `${s.color}18`, color: s.color }}>
+              <s.icon size={20} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, color: s.color, lineHeight: 1.1 }}>{s.value}</div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{s.label}</div>
+            </div>
           </div>
         ))}
       </div>
@@ -427,7 +435,16 @@ export default function Campaigns({ showToast }: CampaignsProps) {
                                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.2s' }}
                                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
                                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>{rec.contact_name}</td>
+                                  <td style={{ padding: '10px 12px', fontWeight: 600 }}>
+                                    {onViewContact ? (
+                                      <button
+                                        onClick={() => onViewContact(rec.contact_id)}
+                                        title="View this contact's full history, transcripts & recordings"
+                                        style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>
+                                        {rec.contact_name}
+                                      </button>
+                                    ) : rec.contact_name}
+                                  </td>
                                   <td style={{ padding: '10px 12px', color: 'var(--text-muted)' }}>{rec.contact_phone}</td>
                                   <td style={{ padding: '10px 12px' }}>
                                     <span style={{

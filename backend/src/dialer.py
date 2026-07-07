@@ -49,6 +49,9 @@ class CampaignDialer:
         self._lock = threading.Lock()
         # retell_call_id -> contact_id
         self._active: Dict[str, str] = {}
+        # retell_call_id -> batch_id (so we can refill the correct campaign's
+        # queue when a call ends, and compute per-campaign completion)
+        self._active_batch: Dict[str, str] = {}
         # batch_id -> list of contact_ids waiting to be called
         self._queues: Dict[str, list] = {}
         # batch_id -> effective concurrency limit (fetched from Retell)
@@ -133,27 +136,25 @@ class CampaignDialer:
             db.close()
 
     def on_call_ended(self, retell_call_id: str):
-        """Called from webhook when a call ends. Frees slot, fires next call."""
+        """Called from webhook when a call ends. Frees the slot for the SAME
+        campaign the call belonged to and fires that campaign's next queued
+        contact (if any). Calls that weren't tracked by the dialer (e.g. a
+        manual single call-now) simply have nothing to refill."""
+        next_cid = None
+        batch_id = None
         with self._lock:
-            batch_id = None
-            # Find which batch this call belonged to
-            for bid, cid in list(self._active.items()):
-                pass  # We track active differently below
-
-            # Remove from active
+            batch_id = self._active_batch.pop(retell_call_id, None)
             self._active.pop(retell_call_id, None)
 
-        # Find batch with non-empty queue and fire next
-        with self._lock:
-            for bid, queue in self._queues.items():
-                if queue:
-                    next_cid = queue.pop(0)
-                    threading.Thread(
-                        target=self._fire_call,
-                        args=(bid, next_cid),
-                        daemon=True
-                    ).start()
-                    break
+            if batch_id and self._queues.get(batch_id):
+                next_cid = self._queues[batch_id].pop(0)
+
+        if next_cid:
+            threading.Thread(
+                target=self._fire_call,
+                args=(batch_id, next_cid),
+                daemon=True
+            ).start()
 
         # Check if any campaign is now fully done
         self._check_completion()
@@ -165,10 +166,10 @@ class CampaignDialer:
             local_limit = _get_concurrency_limit(db)
         finally:
             db.close()
-            
+
         with self._lock:
             queue_len = len(self._queues.get(batch_id, []))
-            active_count = len(self._active)
+            active_count = sum(1 for bid in self._active_batch.values() if bid == batch_id)
             limit = self._limits.get(batch_id, local_limit)
         return {
             "active_calls": active_count,
@@ -176,10 +177,12 @@ class CampaignDialer:
             "effective_limit": limit,
         }
 
-    def register_active(self, retell_call_id: str, contact_id: str):
+    def register_active(self, retell_call_id: str, contact_id: str, batch_id: str = None):
         """Manually register an active call (for call-now and campaign flows)."""
         with self._lock:
             self._active[retell_call_id] = contact_id
+            if batch_id:
+                self._active_batch[retell_call_id] = batch_id
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -233,6 +236,7 @@ class CampaignDialer:
                 db.commit()
                 with self._lock:
                     self._active[fake_call_id] = contact_id
+                    self._active_batch[fake_call_id] = batch_id
                 print(f"[DIALER] MOCK call fired for {contact.name} | call_id={fake_call_id}")
                 return
 
@@ -268,6 +272,7 @@ class CampaignDialer:
 
                 with self._lock:
                     self._active[stored_call_id] = contact_id
+                    self._active_batch[stored_call_id] = batch_id
                 print(f"[DIALER] Call fired for {contact.name} | batch_call_id={stored_call_id}")
             else:
                 print(f"[DIALER] Retell call failed for {contact.name}: {response.text}")
@@ -303,20 +308,30 @@ class CampaignDialer:
         return fallback_limit
 
     def _check_completion(self):
-        """Mark campaigns as completed if queue is empty and no active calls."""
+        """Mark a campaign as completed once ITS OWN queue is empty and it has
+        no active calls in flight — checked per-batch so one campaign's calls
+        don't block another campaign from being marked complete."""
+        to_complete = []
         with self._lock:
+            active_counts: Dict[str, int] = {}
+            for bid in self._active_batch.values():
+                active_counts[bid] = active_counts.get(bid, 0) + 1
+
             for bid, queue in list(self._queues.items()):
-                if not queue and not self._active:
+                if not queue and active_counts.get(bid, 0) == 0:
+                    to_complete.append(bid)
                     del self._queues[bid]
                     del self._limits[bid]
-                    db = SessionLocal()
-                    try:
-                        batch = db.query(UploadBatch).filter(UploadBatch.id == bid).first()
-                        if batch:
-                            batch.status = "completed"
-                            db.commit()
-                    finally:
-                        db.close()
+
+        for bid in to_complete:
+            db = SessionLocal()
+            try:
+                batch = db.query(UploadBatch).filter(UploadBatch.id == bid).first()
+                if batch:
+                    batch.status = "completed"
+                    db.commit()
+            finally:
+                db.close()
 
 
 # Singleton instance

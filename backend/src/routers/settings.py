@@ -23,6 +23,8 @@ def get_settings(db: Session = Depends(get_db), current_user: dict = Depends(get
         "google_calendar_id",
         "ngrok_auth_token",
         "ngrok_url",
+        "aegis_tools_secret",
+        "cal_com_webhook_secret",
         "concurrency_limit",
         "max_retry_attempts",
         "retry_backoff_hours",
@@ -41,7 +43,7 @@ def get_settings(db: Session = Depends(get_db), current_user: dict = Depends(get
 
         # Mask secrets
         if val:
-            if "secret" in k or k in ["retell_api_key", "ngrok_auth_token", "google_calendar_credentials_json", "smtp_password"]:
+            if "secret" in k or k in ["retell_api_key", "ngrok_auth_token", "google_calendar_credentials_json", "smtp_password", "aegis_tools_secret", "cal_com_webhook_secret"]:
                 response_map[k] = "••••••••••••••••"
             else:
                 response_map[k] = val

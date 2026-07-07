@@ -44,6 +44,13 @@ export default function App() {
     return allowedTabs.includes(hash) ? hash : 'campaigns';
   };
   const [activeTab, setActiveTab] = useState<Tab>(getInitialTab());
+  const [jumpToContactId, setJumpToContactId] = useState<string | null>(null);
+
+  const viewContactFromElsewhere = (contactId: string) => {
+    setJumpToContactId(contactId);
+    setActiveTab('contacts');
+    window.location.hash = 'contacts';
+  };
 
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -153,8 +160,8 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="main-content">
-        {activeTab === 'campaigns'    && <Campaigns showToast={showToast} />}
-        {activeTab === 'contacts'     && <Contacts showToast={showToast} />}
+        {activeTab === 'campaigns'    && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+        {activeTab === 'contacts'     && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} />}
         {activeTab === 'scheduling'   && <Scheduling showToast={showToast} />}
         {activeTab === 'settings'     && userRole === 'admin' && <Settings showToast={showToast} />}
       </main>

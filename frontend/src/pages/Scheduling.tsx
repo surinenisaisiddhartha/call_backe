@@ -993,7 +993,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                   placeholder="Search by name or phone..."
                   value={contactSearch}
                   onChange={(e) => setContactSearch(e.target.value)}
-                  style={{ background: 'none', border: 'none', color: 'white', outline: 'none', width: '100%', fontSize: '0.9rem' }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', fontSize: '0.9rem' }}
                 />
               </div>
               <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'rgba(0,0,0,0.2)' }}>

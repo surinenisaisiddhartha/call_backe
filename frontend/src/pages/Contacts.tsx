@@ -33,9 +33,11 @@ interface Callback {
 
 interface ContactsProps {
   showToast: (msg: string, type?: 'success' | 'error') => void;
+  jumpToContactId?: string | null;
+  onJumpHandled?: () => void;
 }
 
-export default function Contacts({ showToast }: ContactsProps) {
+export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: ContactsProps) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -57,6 +59,14 @@ export default function Contacts({ showToast }: ContactsProps) {
   useEffect(() => {
     fetchContacts();
   }, [search, statusFilter]);
+
+  useEffect(() => {
+    if (jumpToContactId) {
+      viewHistoryById(jumpToContactId);
+      onJumpHandled?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpToContactId]);
 
   const fetchContacts = async () => {
     try {
@@ -132,6 +142,22 @@ export default function Contacts({ showToast }: ContactsProps) {
     }
   };
 
+  // Opens the history drawer for a contact we don't already have loaded
+  // (e.g. jumped to from another page's call-history table by contact_id only).
+  const viewHistoryById = async (contactId: string) => {
+    setLoadingHistory(true);
+    try {
+      const res = await api.get(`/contacts/${contactId}`);
+      setSelectedContact(res.data.contact);
+      setAttempts(res.data.attempts || []);
+      setSchedules(res.data.schedules || []);
+    } catch (err) {
+      showToast('Failed to load contact history', 'error');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   const deleteContact = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to delete ${name}? This cannot be undone.`)) return;
     try {
@@ -161,7 +187,7 @@ export default function Contacts({ showToast }: ContactsProps) {
             placeholder="Search by name or phone number..." 
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ background: 'none', border: 'none', color: 'white', outline: 'none', width: '100%', fontSize: '0.95rem' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', fontSize: '0.95rem' }}
           />
         </div>
         
@@ -206,7 +232,14 @@ export default function Contacts({ showToast }: ContactsProps) {
               <tbody>
                 {contacts.map((c) => (
                   <tr key={c.id}>
-                    <td style={{ fontWeight: 600 }}>{c.name}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div className="avatar-circle">
+                          {c.name.trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase()}
+                        </div>
+                        {c.name}
+                      </div>
+                    </td>
                     <td>{c.phone_number}</td>
                     <td>
                       <span className={`badge badge-${c.status.toLowerCase().replace(/\s+/g, '')}`}>
@@ -313,7 +346,7 @@ export default function Contacts({ showToast }: ContactsProps) {
             right: 0,
             bottom: 0,
             width: '500px',
-            background: 'rgba(10, 14, 26, 0.95)',
+            background: 'var(--sidebar-bg)',
             backdropFilter: 'blur(30px)',
             borderLeft: '1px solid var(--border-color)',
             boxShadow: '-10px 0 30px rgba(0,0,0,0.5)',

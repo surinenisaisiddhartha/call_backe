@@ -156,7 +156,7 @@ export default function Settings({ showToast }: SettingsProps) {
                 />
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   Set this endpoint as the Webhook URL in your Retell AI developer console:
-                  <strong style={{ color: 'white', display: 'block', wordBreak: 'break-all', marginTop: '4px' }}>
+                  <strong style={{ color: 'var(--text-primary)', display: 'block', wordBreak: 'break-all', marginTop: '4px' }}>
                     {form.ngrok_url}/api/webhooks/retell
                   </strong>
                 </span>
@@ -199,10 +199,10 @@ export default function Settings({ showToast }: SettingsProps) {
                 <CalendarRange size={15} /> Google Calendar Setup Checklist
               </div>
               <ol style={{ margin: 0, paddingLeft: '18px', color: 'var(--text-secondary)', lineHeight: 2 }}>
-                <li>Create a <strong style={{ color: 'white' }}>Google Service Account</strong> in your Google Cloud Console.</li>
-                <li>Enable the <strong style={{ color: 'white' }}>Google Calendar API</strong> for your project.</li>
-                <li>Create and download a new private key in <strong style={{ color: 'white' }}>JSON format</strong> for the Service Account, and paste it above.</li>
-                <li>Share your target Google Calendar with the Service Account email address, granting <strong style={{ color: 'white' }}>"Make changes to events"</strong> permission.</li>
+                <li>Create a <strong style={{ color: 'var(--text-primary)' }}>Google Service Account</strong> in your Google Cloud Console.</li>
+                <li>Enable the <strong style={{ color: 'var(--text-primary)' }}>Google Calendar API</strong> for your project.</li>
+                <li>Create and download a new private key in <strong style={{ color: 'var(--text-primary)' }}>JSON format</strong> for the Service Account, and paste it above.</li>
+                <li>Share your target Google Calendar with the Service Account email address, granting <strong style={{ color: 'var(--text-primary)' }}>"Make changes to events"</strong> permission.</li>
                 <li>Enter the target Google Calendar ID above (usually your email, or a long string from Calendar settings).</li>
               </ol>
             </div>

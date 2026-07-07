@@ -2,15 +2,38 @@
 Retell AI Function Call Tools - Webhook endpoints for agent function calls.
 """
 
+import os
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, model_validator
 from typing import Any, Optional
-from src.db import get_db, Contact, ScheduledCallback, Appointment, CallAttempt
-from src.knowledge import search_knowledge
+from src.db import get_db, Contact, ScheduledCallback, Appointment, CallAttempt, Settings
+from src.knowledge import search_knowledge, smart_truncate
 
 router = APIRouter(prefix="/api/webhooks/tools", tags=["Retell Tools"])
+
+
+def verify_tools_secret(req: Request, db: Session = Depends(get_db)) -> None:
+    """
+    Soft-enforced shared-secret check for these Retell custom-function webhooks.
+    These URLs are publicly reachable (ngrok/prod) and otherwise unauthenticated,
+    so anyone who finds them could invoke book_appointment/schedule_callback/
+    mark_outcome directly. If AEGIS_TOOLS_SECRET is configured (Settings key
+    "aegis_tools_secret" or env var), the request must carry a matching
+    X-Aegis-Tools-Secret header — set via setup_retell_agent.py's tool `headers`
+    config. If no secret is configured yet, the check is skipped (with a
+    warning) so existing unconfigured deployments keep working.
+    """
+    setting = db.query(Settings).filter(Settings.key == "aegis_tools_secret").first()
+    expected = (setting.value if setting else None) or os.getenv("AEGIS_TOOLS_SECRET")
+    if not expected:
+        print("[TOOLS] WARNING: aegis_tools_secret not configured — tool webhook endpoints are unauthenticated. Set it in Settings to lock these down.")
+        return
+    provided = req.headers.get("x-aegis-tools-secret")
+    if not provided or provided != expected:
+        print("[TOOLS] Rejected tool call: missing or invalid X-Aegis-Tools-Secret header")
+        raise HTTPException(status_code=401, detail="Invalid or missing tools secret")
 
 
 class RetellToolBase(BaseModel):
@@ -55,7 +78,8 @@ class MarkOutcomeRequest(RetellToolBase):
 @router.post("/lookup")
 def lookup_school_info(
     request: LookupRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
 ):
     """
     Tool: lookup_school_info(query)
@@ -69,7 +93,7 @@ def lookup_school_info(
     
     if results:
         combined_content = " ".join([r["content"] for r in results])
-        answer = combined_content[:600] + "..." if len(combined_content) > 600 else combined_content
+        answer = smart_truncate(combined_content, 600)
         return {"result": answer}
     else:
         return {"result": "I don't have that specific information right now. I'll make sure our admissions team follows up with the exact details."}
@@ -95,7 +119,7 @@ def lookup_school_info_get(
     if results:
         # Synthesize answer from top results
         combined_content = " ".join([r["content"] for r in results])
-        answer = combined_content[:500] + "..." if len(combined_content) > 500 else combined_content
+        answer = smart_truncate(combined_content, 500)
         return {
             "success": True,
             "answer": answer,
@@ -141,24 +165,56 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
             print(f"[TOOLS] Resolved contact {contact.id} from phone number: {phone}")
             return contact
 
-    # 4. Fallback to the most recent "Calling", "Scheduled", or recently Completed contact
-    #    (mark_outcome often fires after book_appointment already set status to Completed,
-    #     so we include Completed in the fallback — take the most recently updated one)
-    contact = db.query(Contact).filter(
-        Contact.status.in_(["Calling", "Scheduled", "Completed"])
-    ).order_by(Contact.updated_at.desc()).first()
-    if contact:
-        print(f"[TOOLS] Resolved contact {contact.id} ({contact.name}) from fallback status={contact.status}")
+    # 4. Safe last-resort fallback. The dialer supports multiple concurrent
+    #    calls, so guessing "the most recently updated contact" is only safe
+    #    when there is exactly ONE plausible candidate — otherwise we risk
+    #    attaching a booking/callback/outcome to the wrong lead. If it's
+    #    ambiguous, refuse to guess and let the caller-facing tool respond
+    #    gracefully instead of silently corrupting someone else's record.
+    from datetime import timedelta
+    calling_cutoff = datetime.utcnow() - timedelta(minutes=10)
+    calling_candidates = db.query(Contact).filter(
+        Contact.status == "Calling",
+        Contact.updated_at >= calling_cutoff
+    ).all()
+
+    if len(calling_candidates) == 1:
+        contact = calling_candidates[0]
+        print(f"[TOOLS] Resolved contact {contact.id} ({contact.name}) via unambiguous single active-call fallback")
+        return contact
+
+    if len(calling_candidates) > 1:
+        print(f"[TOOLS] resolve_contact: {len(calling_candidates)} contacts are simultaneously 'Calling' — refusing to guess to avoid cross-call mixup")
+        return None
+
+    # No contact currently "Calling" — this happens when mark_outcome fires
+    # after book_appointment/schedule_callback already flipped the status
+    # earlier in the same turn. Only guess if there's one unambiguous, very
+    # recent (last 2 minutes) status change.
+    recent_cutoff = datetime.utcnow() - timedelta(minutes=2)
+    recent_candidates = db.query(Contact).filter(
+        Contact.status.in_(["Scheduled", "Completed"]),
+        Contact.updated_at >= recent_cutoff
+    ).order_by(Contact.updated_at.desc()).all()
+
+    if len(recent_candidates) == 1:
+        contact = recent_candidates[0]
+        print(f"[TOOLS] Resolved contact {contact.id} ({contact.name}) via unambiguous recent status-change fallback")
+        return contact
+
+    if len(recent_candidates) > 1:
+        print(f"[TOOLS] resolve_contact: {len(recent_candidates)} contacts recently changed status — refusing to guess to avoid cross-call mixup")
     else:
-        print(f"[TOOLS] resolve_contact: ALL resolution methods failed. call_id header={req.headers.get('x-retell-call-id')}")
-    return contact
+        print(f"[TOOLS] resolve_contact: ALL resolution methods failed. call_id header={req.headers.get('x-retell-call-id') if req else None}")
+    return None
 
 
 @router.post("/schedule-callback")
 def schedule_callback(
     request: ScheduleCallbackRequest,
     req: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
 ):
     """
     Tool: schedule_callback(datetime_iso, reason)
@@ -272,16 +328,26 @@ def process_appointment_booking_async(
     smtp_password: str,
     smtp_from_email: str,
     readable_time: str,
-    purpose: str
+    purpose: str,
+    stale_calendar_event_id: str = None
 ):
     from src.db import SessionLocal, Appointment
-    from src.services.google_calendar import create_event
+    from src.services.google_calendar import create_event, cancel_event
     from src.services.email_sender import send_booking_email
 
     db = SessionLocal()
     gcal_html_link = None
     try:
         if credentials_json and calendar_id:
+            # Rebooking an existing appointment (see book_appointment) leaves the
+            # previous Google Calendar event dangling since it points at a time
+            # that's no longer valid — cancel it before creating the new one.
+            if stale_calendar_event_id:
+                try:
+                    cancel_event(credentials_json, calendar_id, stale_calendar_event_id)
+                    print(f"[BACKGROUND] Cancelled stale Google Calendar event: {stale_calendar_event_id}", flush=True)
+                except Exception as cancel_err:
+                    print(f"[BACKGROUND] Failed to cancel stale Google Calendar event {stale_calendar_event_id}: {cancel_err}", flush=True)
             try:
                 result = create_event(
                     credentials_json=credentials_json,
@@ -334,7 +400,8 @@ def book_appointment(
     request: BookAppointmentRequest,
     req: Request,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
 ):
     """
     Tool: book_appointment(datetime_iso, purpose, attendee_name, attendee_phone, attendee_email)
@@ -361,16 +428,33 @@ def book_appointment(
         if request.attendee_email and request.attendee_email.strip():
             contact.email = request.attendee_email.strip()
             contact.updated_at = datetime.utcnow()
-        
-        # Create Appointment record in DB
-        appointment = Appointment(
-            contact_id=contact.id,
-            scheduled_for=scheduled_for,
-            purpose=request.purpose,
-            status="Booked"
-        )
-        db.add(appointment)
-        db.flush()  # Populates appointment.id
+
+        # If the caller already has a Booked appointment (e.g. they change their
+        # mind on the date mid-call, or the agent calls this tool twice), update
+        # it in place instead of creating a duplicate row/calendar event/email —
+        # mirrors the existing-callback check in schedule_callback above.
+        existing_appointment = db.query(Appointment).filter(
+            Appointment.contact_id == contact.id,
+            Appointment.status == "Booked"
+        ).first()
+
+        stale_calendar_event_id = None
+        if existing_appointment:
+            stale_calendar_event_id = existing_appointment.google_calendar_event_id
+            existing_appointment.scheduled_for = scheduled_for
+            existing_appointment.purpose = request.purpose
+            existing_appointment.google_calendar_event_id = None
+            existing_appointment.google_calendar_html_link = None
+            appointment = existing_appointment
+        else:
+            appointment = Appointment(
+                contact_id=contact.id,
+                scheduled_for=scheduled_for,
+                purpose=request.purpose,
+                status="Booked"
+            )
+            db.add(appointment)
+            db.flush()  # Populates appointment.id
 
         contact.status = "Completed"
         db.commit()
@@ -422,9 +506,10 @@ def book_appointment(
             smtp_password=smtp_password,
             smtp_from_email=smtp_from_email,
             readable_time=readable_time,
-            purpose=request.purpose
+            purpose=request.purpose,
+            stale_calendar_event_id=stale_calendar_event_id
         )
-        
+
         return {"result": f"Your appointment for {request.purpose} has been booked for {readable_time}. You'll receive a confirmation shortly. We look forward to seeing you!"}
         
     except Exception as e:
@@ -436,7 +521,8 @@ def book_appointment(
 def mark_outcome(
     request: MarkOutcomeRequest,
     req: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
 ):
     """
     Tool: mark_outcome(outcome, notes)
@@ -483,7 +569,8 @@ def mark_outcome(
 @router.post("/end-call")
 def end_call(
     req: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
 ):
     """
     Tool: end_call()

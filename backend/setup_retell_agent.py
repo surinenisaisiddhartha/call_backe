@@ -2,7 +2,7 @@
 setup_retell_agent.py
 
 Creates (once) or updates (on every re-run) the single shared Retell AI
-"Arjun" agent for Aegis Calling Manager, using agent_prompt.md as the
+"Maya" agent for Aegis Calling Manager, using agent_prompt.md as the
 ENTIRE system prompt — nothing else, no default template content.
 
 Behaviour:
@@ -58,8 +58,30 @@ if not RETELL_API_KEY or not WEBHOOK_BASE_URL:
     except Exception as db_err:
         print(f"[SETUP] Note: could not load from SQLite db: {db_err}")
 
-VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Adrian")
-AGENT_NAME = "TSRA Admissions Assistant - Arjun"
+VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Monika")
+AGENT_NAME = "TSRA Admissions Assistant - Maya"
+
+# Optional shared secret sent as a header on every custom tool call so the
+# backend can verify these webhook requests actually came from Retell (see
+# verify_tools_secret in src/routers/tools.py). Set the same value in
+# Settings -> aegis_tools_secret (or AEGIS_TOOLS_SECRET env var) on the backend.
+AEGIS_TOOLS_SECRET = os.environ.get("AEGIS_TOOLS_SECRET", "")
+if not AEGIS_TOOLS_SECRET:
+    try:
+        import sqlite3
+        db_path = Path(__file__).parent / "local_test.db"
+        if db_path.exists():
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("select value from settings where key = 'aegis_tools_secret'")
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                AEGIS_TOOLS_SECRET = row[0]
+    except Exception:
+        pass
+if not AEGIS_TOOLS_SECRET:
+    print("[SETUP] WARNING: AEGIS_TOOLS_SECRET not set — tool webhook calls will be unauthenticated until you set one (Settings -> aegis_tools_secret or the env var) and re-run this script.")
 
 if not RETELL_API_KEY:
     sys.exit("ERROR: set RETELL_API_KEY in your environment/database first.")
@@ -88,7 +110,8 @@ def build_general_tools():
     Match these names EXACTLY to what agent_prompt.md Section 10 references.
     """
     base = WEBHOOK_BASE_URL.rstrip("/")
-    return [
+    tool_headers = {"X-Aegis-Tools-Secret": AEGIS_TOOLS_SECRET} if AEGIS_TOOLS_SECRET else None
+    tools = [
         {
             "type": "custom",
             "name": "lookup_school_info",
@@ -207,6 +230,13 @@ def build_general_tools():
         }
     ]
 
+    if tool_headers:
+        for tool in tools:
+            if tool["type"] == "custom":
+                tool["headers"] = tool_headers
+
+    return tools
+
 
 def main():
     general_prompt = PROMPT_FILE.read_text()
@@ -228,13 +258,17 @@ def main():
         print("Prompt updated successfully. Existing agent will use the new prompt on its next call.")
 
         new_voice_id = VOICE_ID
+        new_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/retell"
         client.agent.update(
             agent_id,
+            agent_name=AGENT_NAME,
             voice_id=new_voice_id,
             end_call_after_silence_ms=30000,
-            language="multi"
+            language="multi",
+            webhook_url=new_webhook_url
         )
         print(f"Voice updated to: {new_voice_id} (silence timeout: 30s, language: multi)")
+        print(f"Call-lifecycle webhook_url updated to: {new_webhook_url}")
 
 
         print(f"agent_id to use in your backend/.env: {agent_id}")

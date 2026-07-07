@@ -191,6 +191,32 @@ def search_knowledge(query: str, limit: int = 3) -> List[dict]:
         db.close()
 
 
+def smart_truncate(text: str, limit: int) -> str:
+    """
+    Truncate text to roughly `limit` characters without cutting mid-word or
+    mid-sentence, so answers read out on a live phone call don't trail off
+    awkwardly. Prefers the last sentence boundary (. ! ?) before the limit;
+    falls back to the last word boundary; falls back to a hard cut only if
+    neither is found within a reasonable window.
+    """
+    if not text or len(text) <= limit:
+        return text
+
+    window = text[:limit]
+
+    # Prefer ending on a sentence boundary within the last 40% of the window.
+    sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if sentence_end > limit * 0.6:
+        return window[:sentence_end + 1].strip()
+
+    # Otherwise end on a word boundary so we don't cut a word in half.
+    space_idx = window.rfind(" ")
+    if space_idx > limit * 0.5:
+        return window[:space_idx].strip() + "..."
+
+    return window.strip() + "..."
+
+
 def get_knowledge_status() -> dict:
     """
     Get status of knowledge base.

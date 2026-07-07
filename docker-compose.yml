@@ -17,6 +17,13 @@ services:
       # - SMTP_USERNAME=saisiddhartha234@gmail.com
       # - SMTP_PASSWORD=your_app_password
       # - SMTP_FROM_EMAIL=saisiddhartha234@gmail.com
+      # Security (recommended for production — see backend/README.md):
+      # - AEGIS_TOOLS_SECRET=set_a_random_string_and_rerun_setup_retell_agent.py
+      # - CAL_COM_WEBHOOK_SECRET=the_same_secret_configured_in_your_cal.com_webhook
+      # - ADMIN_EMAIL=you@yourschool.com
+      # - ADMIN_PASSWORD=choose_a_real_password
+      # - STAFF_EMAIL=staff@yourschool.com
+      # - STAFF_PASSWORD=choose_a_real_password
     ports:
       - "5000:5000"
     volumes:

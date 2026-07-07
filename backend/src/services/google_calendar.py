@@ -36,9 +36,23 @@ def create_event(
     start_dt = datetime.fromisoformat(dt_str)
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
+    # NOTE: we deliberately do NOT add the caller as a Calendar API "attendee".
+    # Bare (non-Workspace) service accounts are rejected by Google with a 403
+    # ("Service accounts cannot invite attendees without Domain-Wide Delegation
+    # of Authority") the moment an attendees list is present — Google blocks
+    # the ENTIRE event creation, not just the invite. Domain-wide delegation
+    # requires a paid Google Workspace admin console, which isn't available
+    # for a regular Gmail account. The caller is still notified separately via
+    # the booking confirmation email (send_booking_email) — this event just
+    # carries their name/phone/email in the description for visibility on the
+    # calendar itself.
+    contact_line = f"Phone: {attendee_phone}"
+    if attendee_email and attendee_email.strip():
+        contact_line += f"\nEmail: {attendee_email.strip()}"
+
     event = {
         "summary": summary,  # e.g. "TSRA Campus Visit — Siddhu Surineni"
-        "description": f"{description}\nPhone: {attendee_phone}",
+        "description": f"{description}\n{contact_line}",
         "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Kolkata"},
         "end": {"dateTime": end_dt.isoformat(), "timeZone": "Asia/Kolkata"},
         "extendedProperties": {
@@ -49,15 +63,9 @@ def create_event(
         },
     }
 
-    if attendee_email and attendee_email.strip():
-        event["attendees"] = [
-            {"email": attendee_email.strip(), "displayName": attendee_name}
-        ]
-
     created = service.events().insert(
-        calendarId=calendar_id, 
-        body=event,
-        sendUpdates="all"
+        calendarId=calendar_id,
+        body=event
     ).execute()
     return {
         "event_id": created["id"],

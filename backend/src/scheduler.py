@@ -134,6 +134,21 @@ def _fire_pending_callbacks():
 
         for cb in pending:
             try:
+                # ── Atomically claim this row before dialing ────────────────
+                # The exact-time one-shot job registered by the schedule_callback
+                # tool (trigger_callback_call in webhooks.py) can fire the same
+                # ScheduledCallback row around the same moment this sweep runs.
+                # The UPDATE...WHERE status='Scheduled' is atomic, so only one
+                # of the two paths will ever see claimed == 1 and actually dial.
+                claimed = db.query(ScheduledCallback).filter(
+                    ScheduledCallback.id == cb.id,
+                    ScheduledCallback.status == "Scheduled"
+                ).update({"status": "Triggering"}, synchronize_session=False)
+                db.commit()
+                if not claimed:
+                    print(f"[SCHEDULER] Callback {cb.id} already claimed elsewhere, skipping duplicate dial")
+                    continue
+
                 contact = db.query(Contact).filter(Contact.id == cb.contact_id).first()
                 if not contact:
                     print(f"[SCHEDULER] Contact not found for callback {cb.id}")
