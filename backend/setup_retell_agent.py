@@ -58,7 +58,7 @@ if not RETELL_API_KEY or not WEBHOOK_BASE_URL:
     except Exception as db_err:
         print(f"[SETUP] Note: could not load from SQLite db: {db_err}")
 
-VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Monika")
+VOICE_ID = os.environ.get("RETELL_VOICE_ID", "openai-Monika")
 AGENT_NAME = "TSRA Admissions Assistant - Maya"
 
 # Optional shared secret sent as a header on every custom tool call so the
