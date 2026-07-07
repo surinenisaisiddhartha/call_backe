@@ -10,24 +10,24 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# No DATABASE_URL configured at all (e.g. plain local dev) -> use local SQLite.
+# This is a deliberate default, not a fallback from a failed connection.
 if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./local_test.db"
+    DATABASE_URL = "sqlite:////app/data/local_test.db" if os.path.isdir("/app/data") else "sqlite:///./local_test.db"
 elif DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = None
-
+# If DATABASE_URL IS configured, it must actually work — no silent fallback to
+# SQLite on connection failure. Silently degrading to a different, ephemeral
+# database masked a misconfigured production DATABASE_URL for a long time
+# (all writes were going to a throwaway store instead of the real database).
+# Fail loudly at startup instead so a bad DATABASE_URL is impossible to miss.
 if DATABASE_URL.startswith("sqlite://"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    try:
-        engine = create_engine(DATABASE_URL, connect_args={"connect_timeout": 3})
-        with engine.connect() as conn:
-            pass
-    except Exception as e:
-        print(f"Database connection failed: {e}. Falling back to local SQLite database.")
-        DATABASE_URL = "sqlite:///./local_test.db"
-        engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine(DATABASE_URL, connect_args={"connect_timeout": 3})
+    with engine.connect():
+        pass
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
