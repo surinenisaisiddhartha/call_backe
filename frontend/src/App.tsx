@@ -7,7 +7,8 @@ import Campaigns from './pages/Campaigns';
 import Dashboard from './pages/Dashboard';
 import {
   Users, Settings as SettingsIcon, LogOut, MessageSquare,
-  BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard
+  BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'scheduling' | 'settings';
 
@@ -23,6 +24,16 @@ export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>(
     (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
+    localStorage.getItem('sidebar_collapsed') === '1'
+  );
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed(prev => {
+      localStorage.setItem('sidebar_collapsed', prev ? '0' : '1');
+      return !prev;
+    });
+  };
 
   const getRole = (): string => {
     if (!token) return 'user';
@@ -116,9 +127,17 @@ export default function App() {
   return (
     <div className="app-container">
       {/* Sidebar Navigation */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+        <button
+          className="sidebar-toggle"
+          onClick={toggleSidebar}
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
+
         <div className="logo-container">
-          <MessageSquare style={{ color: 'var(--accent-primary)' }} size={28} />
+          <MessageSquare style={{ color: 'var(--accent-primary)', flexShrink: 0 }} size={28} />
           <span className="logo-text">Call Manager</span>
         </div>
 
@@ -130,9 +149,10 @@ export default function App() {
                   href={`#${tab}`}
                   className={`nav-link ${activeTab === tab ? 'active' : ''}`}
                   onClick={() => setActiveTab(tab)}
+                  title={sidebarCollapsed ? label : undefined}
                 >
                   {icon}
-                  {label}
+                  <span className="nav-label">{label}</span>
                 </a>
               </li>
             ))}
@@ -144,24 +164,26 @@ export default function App() {
             onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
             className="btn btn-secondary"
             style={{ width: '100%', justifyContent: 'center' }}
+            title={sidebarCollapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : undefined}
           >
-            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-            {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+            {theme === 'dark' ? <Sun size={18} style={{ flexShrink: 0 }} /> : <Moon size={18} style={{ flexShrink: 0 }} />}
+            <span className="nav-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
           </button>
-          
+
           <button
             onClick={handleLogout}
             className="btn btn-secondary"
             style={{ width: '100%', justifyContent: 'center' }}
+            title={sidebarCollapsed ? 'Sign Out' : undefined}
           >
-            <LogOut size={18} />
-            Sign Out
+            <LogOut size={18} style={{ flexShrink: 0 }} />
+            <span className="nav-label">Sign Out</span>
           </button>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <main className="main-content">
+      <main className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
         {activeTab === 'dashboard'    && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
         {activeTab === 'campaigns'    && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
         {activeTab === 'contacts'     && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} />}

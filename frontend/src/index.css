@@ -211,7 +211,55 @@ body {
   position: fixed;
   height: 100vh;
   z-index: 100;
-  transition: background-color 0.3s, border-color 0.3s;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s, border-color 0.3s;
+}
+
+.sidebar.collapsed {
+  width: 76px;
+  padding: 30px 12px;
+}
+
+.sidebar.collapsed .logo-text,
+.sidebar.collapsed .nav-label {
+  display: none;
+}
+
+.sidebar.collapsed .logo-container {
+  justify-content: center;
+}
+
+.sidebar.collapsed .nav-link {
+  justify-content: center;
+  padding: 12px;
+}
+
+.sidebar.collapsed .nav-link:hover,
+.sidebar.collapsed .nav-link.active {
+  border-left: none;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  top: 34px;
+  right: -13px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  z-index: 101;
+  transition: var(--transition-smooth);
+}
+
+.sidebar-toggle:hover {
+  background: var(--accent-primary);
+  color: white;
+  border-color: var(--accent-primary);
 }
 
 .logo-container {
@@ -261,6 +309,12 @@ body {
   flex-grow: 1;
   padding: 40px;
   min-height: 100vh;
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.main-content.expanded {
+  margin-left: 76px;
+  width: calc(100% - 76px);
 }
 
 /* Form controls */
