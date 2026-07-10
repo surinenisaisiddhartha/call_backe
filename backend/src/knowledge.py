@@ -145,7 +145,6 @@ def search_knowledge(query: str, limit: int = 3) -> List[dict]:
     
     Args:
         query: Search query
-        limit: Maximum number of results to return
     
     Returns:
         List of dicts with source_url, page_title, content
@@ -159,6 +158,19 @@ def search_knowledge(query: str, limit: int = 3) -> List[dict]:
         if not query_words:
             query_words = [w for w in clean_query.split() if w]
             
+        # STT Typo & Homophone Tolerations:
+        # 1. 'economy' is a common transcription error for 'academy'
+        if "economy" in query_words:
+            query_words.append("academy")
+            query_words.append("school")
+        # 2. Phonetic spellings of 'Shri Ram'
+        for ph in ["seeram", "siaram", "सीराम", "shriram"]:
+            if any(ph in w for w in query_words) or ph in clean_query:
+                query_words.extend(["shri", "ram", "academy"])
+        # 3. If query contains 'about' or 'brief' or 'overview', add school overview keywords
+        if any(w in query_words for w in ["about", "brief", "overview", "info", "information"]):
+            query_words.extend(["academy", "school", "overview"])
+
         results = []
         
         if not query_words:
