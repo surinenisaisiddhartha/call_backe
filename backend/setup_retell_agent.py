@@ -61,6 +61,12 @@ if not RETELL_API_KEY or not WEBHOOK_BASE_URL:
 VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Adrian")
 AGENT_NAME = "TSRA Admissions Assistant - Arjun"
 
+# Retell-native knowledge base id ("TSRA School Info") — created once via the
+# Retell API from the TSRA site URLs + static fact sheets, with auto-refresh
+# enabled so Retell re-scrapes the site itself. Attached to the LLM on every
+# setup run so it can never be silently detached.
+KNOWLEDGE_BASE_ID = os.environ.get("RETELL_KNOWLEDGE_BASE_ID", "knowledge_base_76fd44f08752bcb8")
+
 # Optional shared secret sent as a header on every custom tool call so the
 # backend can verify these webhook requests actually came from Retell (see
 # verify_tools_secret in src/routers/tools.py). Set the same value in
@@ -255,8 +261,16 @@ def main():
             general_prompt=general_prompt,
             general_tools=general_tools,
             model_high_priority=True,
+            # Retell-native knowledge base ("TSRA School Info"): semantic
+            # retrieval over the school's site + static facts, auto-injected
+            # into the conversation. Far more robust to messy real-caller
+            # phrasing than the keyword lookup tool (which stays as fallback).
+            # Passed explicitly on every update so a re-run can never detach it.
+            knowledge_base_ids=[KNOWLEDGE_BASE_ID] if KNOWLEDGE_BASE_ID else None,
         )
         print("Prompt updated successfully. Existing agent will use the new prompt on its next call.")
+        if KNOWLEDGE_BASE_ID:
+            print(f"Native knowledge base attached: {KNOWLEDGE_BASE_ID}")
 
         new_voice_id = VOICE_ID
         new_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/retell"
