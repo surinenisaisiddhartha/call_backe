@@ -22,7 +22,7 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setTheme] = useState<'dark' | 'light'>(
-    (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
+    (localStorage.getItem('theme') as 'dark' | 'light') || 'light'
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     localStorage.getItem('sidebar_collapsed') === '1'
@@ -91,7 +91,9 @@ export default function App() {
   }, [activeTab, userRole]);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
-    const id = Date.now();
+    // Date.now() alone collides when two toasts fire in the same millisecond
+    // (e.g. several pages erroring at once), producing duplicate React keys.
+    const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { message, type, id }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
