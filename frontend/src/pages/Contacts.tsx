@@ -259,16 +259,16 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
                           Call
                         </button>
                         
-                        {c.status === 'NeedsReschedule' && (
-                          <button 
-                            className="btn btn-primary" 
-                            style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-                            onClick={() => openRescheduleModal(c)}
-                          >
-                            <Calendar size={14} />
-                            Reschedule
-                          </button>
-                        )}
+                        {/* Always rendered (hidden when N/A) so buttons align vertically across rows */}
+                        <button
+                          className="btn btn-primary"
+                          style={{ padding: '6px 12px', fontSize: '0.8rem', visibility: c.status === 'NeedsReschedule' ? 'visible' : 'hidden' }}
+                          onClick={() => openRescheduleModal(c)}
+                          tabIndex={c.status === 'NeedsReschedule' ? 0 : -1}
+                        >
+                          <Calendar size={14} />
+                          Reschedule
+                        </button>
 
                         <button 
                           className="btn btn-secondary" 
