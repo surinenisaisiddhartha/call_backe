@@ -25,6 +25,60 @@ TSRA_URLS = [
     "https://tsrahyderabad.com/ib-admissions-hyderabad/",
 ]
 
+# Static knowledge chunks injected directly — used for critical info that must be
+# 100% deterministic (e.g. admission open/closed status, Merak program details).
+# Source: TSRA Admissions landing page shared by admin.
+STATIC_KNOWLEDGE_CHUNKS = [
+    {
+        "source_url": "https://tsrahyderabad.com/admission-process/",
+        "page_title": "TSRA Admissions 2026-27 — Grade-wise Status",
+        "content": (
+            "TSRA Admissions 2026-27 status by grade: "
+            "EYP 1 (Nursery) — Admissions OPEN. "
+            "EYP 2 (LKG) — Admissions OPEN. "
+            "EYP 3 (UKG) — Admissions CLOSED. "
+            "PYP 1 (Grade 1) — Admissions CLOSED. "
+            "PYP 2 (Grade 2) — Admissions CLOSED. "
+            "PYP 3 (Grade 3) — Admissions CLOSED. "
+            "PYP 4 (Grade 4) — Admissions CLOSED. "
+            "PYP 5 (Grade 5) — Admissions OPEN. "
+            "MYP 1 (Grade 6) — Admissions OPEN. "
+            "MYP 2 (Grade 7) — Admissions CLOSED. "
+            "MYP 3 (Grade 8) — Admissions CLOSED. "
+            "MYP 4 (Grade 9) — Admissions CLOSED. "
+            "MYP 5 (Grade 10) — Admissions CLOSED. "
+            "Curriculum offered: International Baccalaureate (IB) only. "
+            "For enquiries call: 091542 65287. "
+            "School location: Gachibowli, Hyderabad."
+        ),
+    },
+    {
+        "source_url": "https://tsrahyderabad.com/",
+        "page_title": "TSRA — Merak Programme Overview",
+        "content": (
+            "The Merak Programme is a signature initiative of The Shri Ram Academy (TSRA). "
+            "It is designed to cultivate curiosity, creativity, and a love of learning beyond the standard IB curriculum. "
+            "Merak focuses on experiential learning, project-based challenges, and student-driven inquiry. "
+            "It is one of the key differentiators that sets TSRA apart from other IB schools in Hyderabad."
+        ),
+    },
+    {
+        "source_url": "https://tsrahyderabad.com/",
+        "page_title": "TSRA — School Overview & Key Facts",
+        "content": (
+            "The Shri Ram Academy (TSRA) is an IB day-boarding school located in Gachibowli, Hyderabad, India. "
+            "It offers the International Baccalaureate (IB) curriculum from Nursery (EYP 1) through Grade 10 (MYP 5). "
+            "TSRA is an IB World School. It is affiliated with The Shri Ram Schools group. "
+            "Key programmes: EYP (Early Years Programme, ages 3-5), PYP (Primary Years Programme, Grades 1-5), "
+            "MYP (Middle Years Programme, Grades 6-10). "
+            "Core values: Integrity, Courage, Care, and Wisdom. "
+            "Contact: +91 75698 91111 | +91 91542 65287. "
+            "Address: Gachibowli, Hyderabad. "
+            "Admissions enquiry: visit tsrahyderabad.com or call the admissions office."
+        ),
+    },
+]
+
 
 def scrape_url(url: str) -> Optional[tuple]:
     """
@@ -124,6 +178,24 @@ def refresh_knowledge_base():
                     scraped_at=datetime.utcnow()
                 )
                 db.add(knowledge_chunk)
+                total_chunks += 1
+
+        # Inject static curated chunks (admission status, Merak, school overview)
+        print(f"[SCRAPER] Injecting {len(STATIC_KNOWLEDGE_CHUNKS)} static knowledge chunks...")
+        for sc in STATIC_KNOWLEDGE_CHUNKS:
+            content_hash = hashlib.sha256(sc["content"].encode()).hexdigest()
+            # Only insert if not already present (idempotent by content hash)
+            existing = db.query(KnowledgeChunk).filter(
+                KnowledgeChunk.content_hash == content_hash
+            ).first()
+            if not existing:
+                db.add(KnowledgeChunk(
+                    source_url=sc["source_url"],
+                    page_title=sc["page_title"],
+                    content=sc["content"],
+                    content_hash=content_hash,
+                    scraped_at=datetime.utcnow()
+                ))
                 total_chunks += 1
 
         db.commit()
