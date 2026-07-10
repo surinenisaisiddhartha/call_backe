@@ -20,6 +20,9 @@ TSRA_URLS = [
     "https://tsrahyderabad.com/sports-facilities/",
     "https://tsrahyderabad.com/contact-us/",
     "https://tsrahyderabad.com/our-team-tsra/",
+    "https://tsrahyderabad.com/events/",
+    # Dynamic admissions landing page containing the grade-wise open/closed status, Merak program, and FAQs
+    "https://tsrahyderabad.com/ib-admissions-hyderabad/",
 ]
 
 
@@ -34,7 +37,7 @@ def scrape_url(url: str) -> Optional[tuple]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        response = httpx.get(url, headers=headers, timeout=30.0)
+        response = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
         if response.status_code != 200:
             print(f"[SCRAPER] Failed to fetch {url}: {response.status_code}")
             return None
@@ -122,7 +125,7 @@ def refresh_knowledge_base():
                 )
                 db.add(knowledge_chunk)
                 total_chunks += 1
-        
+
         db.commit()
         print(f"[SCRAPER] Knowledge base refreshed: {total_chunks} chunks")
         return total_chunks

@@ -68,6 +68,28 @@ def startup_event():
         init_scheduler()
     except Exception as e:
         print(f"WARNING: Scheduler failed to start: {e}")
+
+    # Auto-seed knowledge base on first startup if it's empty
+    import threading
+    def _seed_knowledge_if_empty():
+        try:
+            from src.db import SessionLocal, KnowledgeChunk
+            db = SessionLocal()
+            try:
+                count = db.query(KnowledgeChunk).count()
+                if count == 0:
+                    print("[STARTUP] Knowledge base is empty — seeding now from TSRA website...")
+                    from src.knowledge import refresh_knowledge_base
+                    total = refresh_knowledge_base()
+                    print(f"[STARTUP] Knowledge base seeded: {total} chunks loaded.")
+                else:
+                    print(f"[STARTUP] Knowledge base already has {count} chunks — skipping seed.")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[STARTUP] Knowledge base seed failed: {e}")
+
+    threading.Thread(target=_seed_knowledge_if_empty, daemon=True).start()
     print("Aegis Calling API is ready.")
 
 if __name__ == "__main__":

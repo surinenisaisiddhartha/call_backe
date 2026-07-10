@@ -53,6 +53,7 @@ def get_appointments(
             "purpose": apt.purpose,
             "google_calendar_event_id": apt.google_calendar_event_id,
             "google_calendar_html_link": apt.google_calendar_html_link,
+            "calcom_booking_id": apt.calcom_booking_id,
             "status": apt.status,
             "created_at": apt.created_at.isoformat()
         })

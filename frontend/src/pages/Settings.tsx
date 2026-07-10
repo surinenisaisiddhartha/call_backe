@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
-import { Calendar, CalendarRange, Shield, Cpu, RefreshCw, CheckCircle, HelpCircle, Mail } from 'lucide-react';
+import { Calendar, CalendarRange, Shield, Cpu, RefreshCw, CheckCircle, HelpCircle, Mail, Database, Search, BookOpen, AlertTriangle } from 'lucide-react';
 
 interface SettingsProps {
   showToast: (msg: string, type?: 'success' | 'error') => void;
@@ -9,6 +9,13 @@ interface SettingsProps {
 export default function Settings({ showToast }: SettingsProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Knowledge Base state
+  const [kbStatus, setKbStatus] = useState<{ total_chunks: number; last_scraped: string | null; urls_monitored: number } | null>(null);
+  const [kbRefreshing, setKbRefreshing] = useState(false);
+  const [kbSearchQuery, setKbSearchQuery] = useState('');
+  const [kbSearchResult, setKbSearchResult] = useState<string | null>(null);
+  const [kbSearching, setKbSearching] = useState(false);
   const [form, setForm] = useState({
     retell_api_key: '',
     retell_phone_number: '',
@@ -29,7 +36,51 @@ export default function Settings({ showToast }: SettingsProps) {
 
   useEffect(() => {
     fetchSettings();
+    fetchKnowledgeStatus();
   }, []);
+
+  const fetchKnowledgeStatus = async () => {
+    try {
+      const res = await api.get('/knowledge/status');
+      setKbStatus(res.data);
+    } catch (err) {
+      console.error('Failed to load knowledge base status', err);
+    }
+  };
+
+  const refreshKnowledgeBase = async () => {
+    setKbRefreshing(true);
+    setKbSearchResult(null);
+    try {
+      await api.post('/knowledge/refresh');
+      showToast('Knowledge base refresh started in background. It may take 30-60 seconds.', 'success');
+      // Poll for updated status after a delay
+      setTimeout(async () => {
+        await fetchKnowledgeStatus();
+        setKbRefreshing(false);
+      }, 8000);
+    } catch (err) {
+      showToast('Failed to trigger knowledge base refresh', 'error');
+      setKbRefreshing(false);
+    }
+  };
+
+  const searchKnowledgeBase = async () => {
+    if (!kbSearchQuery.trim() || kbSearchQuery.trim().length < 3) {
+      showToast('Please enter at least 3 characters to search', 'error');
+      return;
+    }
+    setKbSearching(true);
+    setKbSearchResult(null);
+    try {
+      const res = await api.get('/knowledge/search', { params: { query: kbSearchQuery } });
+      setKbSearchResult(res.data.answer || 'No results found.');
+    } catch (err) {
+      showToast('Knowledge base search failed', 'error');
+    } finally {
+      setKbSearching(false);
+    }
+  };
 
   const fetchSettings = async () => {
     try {
@@ -350,6 +401,83 @@ export default function Settings({ showToast }: SettingsProps) {
             <button type="submit" className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: '10px' }} disabled={saving}>
               {saving ? 'Saving...' : 'Save Configuration'}
             </button>
+          </div>
+
+          {/* Knowledge Base Panel */}
+          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Database size={18} style={{ color: '#8b5cf6' }} />
+              AI Knowledge Base
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', margin: 0 }}>
+              The AI agent uses this knowledge base to answer questions about TSRA during calls. It is scraped from the school website.
+            </p>
+
+            {/* Status display */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+              {[
+                { label: 'Knowledge Chunks', value: kbStatus ? kbStatus.total_chunks : '…', color: kbStatus && kbStatus.total_chunks > 0 ? 'var(--accent-success)' : 'var(--accent-error)' },
+                { label: 'URLs Monitored', value: kbStatus ? kbStatus.urls_monitored : '…', color: 'var(--accent-primary)' },
+                { label: 'Last Scraped', value: kbStatus?.last_scraped ? new Date(kbStatus.last_scraped + 'Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Never', color: kbStatus?.last_scraped ? 'var(--accent-success)' : 'var(--accent-error)' },
+              ].map(s => (
+                <div key={s.label} style={{ background: 'var(--bg-secondary)', borderRadius: '10px', padding: '12px', textAlign: 'center' }}>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 800, color: s.color }}>{s.value}</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {kbStatus && kbStatus.total_chunks === 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '10px', fontSize: '0.85rem', color: '#f87171' }}>
+                <AlertTriangle size={16} />
+                <span>Knowledge base is empty! The AI will not be able to answer school questions during calls. Click <strong>Refresh Now</strong> to seed it.</span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px' }}
+              onClick={refreshKnowledgeBase}
+              disabled={kbRefreshing}
+            >
+              <RefreshCw size={15} style={{ animation: kbRefreshing ? 'spin 1.5s linear infinite' : 'none' }} />
+              {kbRefreshing ? 'Refreshing...' : 'Refresh Now'}
+            </button>
+
+            {/* Test search */}
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '10px' }}>
+                <BookOpen size={13} style={{ display: 'inline', marginRight: '4px' }} /> Test Search
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ flex: 1 }}
+                  placeholder="e.g. fees, IB curriculum, admission process"
+                  value={kbSearchQuery}
+                  onChange={e => setKbSearchQuery(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && searchKnowledgeBase()}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}
+                  onClick={searchKnowledgeBase}
+                  disabled={kbSearching}
+                >
+                  <Search size={14} />
+                  {kbSearching ? 'Searching...' : 'Search'}
+                </button>
+              </div>
+              {kbSearchResult && (
+                <div style={{ marginTop: '12px', background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: '10px', padding: '14px', fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                  <div style={{ fontWeight: 700, color: '#8b5cf6', marginBottom: '6px', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Result</div>
+                  {kbSearchResult}
+                </div>
+              )}
+            </div>
           </div>
 
         </div>

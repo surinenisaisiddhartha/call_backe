@@ -137,9 +137,21 @@ async def schedule_callback(
     }
 
 @router.get("")
-def get_schedules(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    schedules = db.query(ScheduledCallback).filter(ScheduledCallback.status == "Scheduled").all()
-    
+def get_schedules(
+    status: str = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Return scheduled callbacks. Defaults to Scheduled + Triggered. Pass ?status=Scheduled to filter."""
+    query = db.query(ScheduledCallback)
+    if status:
+        query = query.filter(ScheduledCallback.status == status)
+    else:
+        # Return both Scheduled and Triggered so the frontend can see recently fired callbacks
+        query = query.filter(ScheduledCallback.status.in_(["Scheduled", "Triggered"]))
+
+    schedules = query.order_by(ScheduledCallback.scheduled_for.desc()).all()
+
     # Map schedules to include contact details
     results = []
     for s in schedules:
@@ -154,7 +166,8 @@ def get_schedules(db: Session = Depends(get_db), current_user: dict = Depends(ge
             "google_calendar_event_id": s.google_calendar_event_id,
             "status": s.status,
             "batch_call_id": s.batch_call_id,
-            "call_type": s.call_type
+            "call_type": s.call_type,
+            "reason": s.reason,
         })
     return results
 
