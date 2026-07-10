@@ -159,9 +159,9 @@ def get_schedules(
         results.append({
             "id": s.id,
             "contact_id": s.contact_id,
-            "contact_name": c.name,
-            "contact_phone": c.phone_number,
-            "contact_email": c.email,
+            "contact_name": c.name if c else "Unknown Contact",
+            "contact_phone": c.phone_number if c else "N/A",
+            "contact_email": c.email if c else "N/A",
             "scheduled_for": s.scheduled_for.isoformat() + "Z",
             "google_calendar_event_id": s.google_calendar_event_id,
             "status": s.status,
