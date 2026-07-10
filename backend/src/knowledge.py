@@ -229,7 +229,27 @@ def search_knowledge(query: str, limit: int = 3) -> List[dict]:
         query_words = [w for w in clean_query.split() if len(w) > 2]
         if not query_words:
             query_words = [w for w in clean_query.split() if w]
-            
+
+        # Strip common filler/stop words BEFORE scoring. Real callers ask in full
+        # sentences ("what are the fees", "does the school have transport") —
+        # words like "what"/"are"/"the" appear in nearly every chunk by pure
+        # coincidence, so they accumulate spurious partial/substring matches
+        # across many chunks. Without this filter, a chunk that's actually
+        # unrelated to the real topic word (e.g. "fees") can still "win" on
+        # filler-word noise alone, causing the agent to confidently state
+        # unrelated content instead of admitting it doesn't have that info.
+        STOP_WORDS = {
+            "what", "are", "the", "is", "does", "can", "you", "your", "for",
+            "and", "with", "have", "has", "this", "that", "will", "would",
+            "could", "should", "please", "tell", "know", "there", "their",
+            "here", "how", "when", "where", "who", "which", "any", "some",
+            "much", "many", "was", "were", "been", "being", "our", "out",
+            "not", "yes", "just", "like", "want", "need", "kindly",
+        }
+        filtered = [w for w in query_words if w not in STOP_WORDS]
+        if filtered:
+            query_words = filtered
+
         # STT Typo & Homophone Tolerations:
         # 1. 'economy' is a common transcription error for 'academy'
         if "economy" in query_words:
