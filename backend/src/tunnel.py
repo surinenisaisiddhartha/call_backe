@@ -4,6 +4,19 @@ from sqlalchemy.orm import Session
 from src.db import Settings
 
 def start_ngrok_tunnel(db: Session):
+    # HARD GUARD: never start an ngrok tunnel in production. The tunnel is a
+    # local-development convenience only; production has a real public domain.
+    # When this ran inside the Coolify container it auto-ran setup_retell_agent.py
+    # with the ngrok URL, and because retell_agent_state.json is gitignored (not
+    # in the image), every redeploy "found no existing agent" and created a NEW
+    # duplicate Retell agent pointed at a throwaway tunnel. Coolify injects
+    # COOLIFY_FQDN/COOLIFY_URL into containers, so their presence identifies
+    # production; DISABLE_NGROK=1 is an explicit manual override for any other
+    # hosted environment.
+    if os.getenv("COOLIFY_FQDN") or os.getenv("COOLIFY_URL") or os.getenv("DISABLE_NGROK"):
+        print("INFO: Production/hosted environment detected (COOLIFY_* or DISABLE_NGROK set) — ngrok tunneling skipped.")
+        return
+
     token_setting = db.query(Settings).filter(Settings.key == "ngrok_auth_token").first()
     auth_token = token_setting.value if token_setting else os.getenv("NGROK_AUTH_TOKEN")
 
