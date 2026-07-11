@@ -60,15 +60,25 @@ def start_ngrok_tunnel(db: Session):
             url_setting.value = public_url
         db.commit()
 
-        # Automatically update Retell Agent definitions with the new webhook URL
+        # Automatically update Retell Agent definitions with the new webhook URL.
+        # ⚠️ OPT-IN ONLY (AUTO_UPDATE_RETELL_AGENT=1): there is ONE shared live
+        # agent, so this step repoints PRODUCTION's webhooks at this machine's
+        # throwaway tunnel — it silently broke live calls whenever the dev
+        # laptop that last ran it went offline. The tunnel itself still starts
+        # (useful for inspecting incoming webhooks); only the agent rewrite is
+        # gated. To point the agent somewhere deliberately, run
+        # setup_retell_agent.py yourself with the intended WEBHOOK_BASE_URL.
+        if os.getenv("AUTO_UPDATE_RETELL_AGENT") != "1":
+            print("[TUNNEL] Tunnel is up, but NOT repointing the shared Retell agent (set AUTO_UPDATE_RETELL_AGENT=1 to opt in).")
+            return
         try:
             import subprocess
             import sys
-            
+
             # Get api key from db or env
             api_key_setting = db.query(Settings).filter(Settings.key == "retell_api_key").first()
             api_key = api_key_setting.value if api_key_setting else os.getenv("RETELL_API_KEY")
-            
+
             if api_key:
                 env = os.environ.copy()
                 env["RETELL_API_KEY"] = api_key
