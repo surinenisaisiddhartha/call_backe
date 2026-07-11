@@ -6,8 +6,54 @@ from sqlalchemy.orm import Session
 from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback
 from src.routers.auth import get_current_user
 import openpyxl
+import phonenumbers
 
 router = APIRouter(prefix="/api/contacts", tags=["Contacts"])
+
+
+def _normalize_phone(raw_phone) -> str | None:
+    """
+    Parse/validate a phone number with libphonenumber instead of a
+    length-guessing heuristic. Defaults to India ("IN") as the region for
+    numbers with no country code, since that was the prior hardcoded
+    assumption (+91). Returns E.164 (e.g. "+919876543210") or None if the
+    number isn't a real, valid number.
+    """
+    raw = str(raw_phone).strip()
+    try:
+        parsed = phonenumbers.parse(raw, "IN")
+    except phonenumbers.NumberParseException:
+        return None
+    if not phonenumbers.is_valid_number(parsed):
+        return None
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
+def _extract_row(name_val, phone_val, email_val, notes_val, row_idx: int, dnc_numbers: set):
+    """
+    Shared validation for one CSV/Excel row (used by both parsing branches
+    below). Returns (contact_dict, None) on success or (None, error_dict) on
+    a skippable row-level problem.
+    """
+    if not name_val:
+        return None, {"row": row_idx, "error": "Name is empty"}
+    if not phone_val:
+        return None, {"row": row_idx, "error": "Phone number is empty"}
+
+    clean_phone = _normalize_phone(phone_val)
+    if not clean_phone:
+        return None, {"row": row_idx, "error": f"'{phone_val}' is not a valid phone number"}
+
+    if clean_phone in dnc_numbers:
+        return None, {"row": row_idx, "error": f"Phone number {clean_phone} is on DoNotCall list"}
+
+    return {
+        "name": str(name_val).strip(),
+        "phone": clean_phone,
+        "email": str(email_val).strip() if email_val else None,
+        "notes": str(notes_val).strip() if notes_val else None
+    }, None
+
 
 @router.post("/upload")
 async def upload_excel(
@@ -24,6 +70,11 @@ async def upload_excel(
         errors = []
 
         is_csv = file.filename.endswith('.csv')
+
+        # Fetch the Do-Not-Call list once instead of one query per row
+        # (the old code ran a fresh SELECT per row — an N+1 pattern that
+        # meant a 5,000-row file issued 5,000 individual DNC lookups).
+        dnc_numbers = {row[0] for row in db.query(Contact.phone_number).filter(Contact.status == "DoNotCall").all()}
 
         if is_csv:
             # --- CSV Parsing ---
@@ -51,38 +102,11 @@ async def upload_excel(
                 email_val = row.get(email_key) if email_key else None
                 notes_val = row.get(notes_key) if notes_key else None
 
-                if not name_val:
-                    errors.append({"row": row_idx, "error": "Name is empty"})
+                contact, error = _extract_row(name_val, phone_val, email_val, notes_val, row_idx, dnc_numbers)
+                if error:
+                    errors.append(error)
                     continue
-                if not phone_val:
-                    errors.append({"row": row_idx, "error": "Phone number is empty"})
-                    continue
-
-                clean_phone = "".join(c for c in str(phone_val) if c.isdigit() or c == "+")
-                if not clean_phone.startswith("+"):
-                    if len(clean_phone) == 10:
-                        clean_phone = "+91" + clean_phone
-                    elif len(clean_phone) == 12 and clean_phone.startswith("91"):
-                        clean_phone = "+" + clean_phone
-                    else:
-                        clean_phone = "+" + clean_phone
-
-                # Check if phone number is on DoNotCall list
-                existing_do_not_call = db.query(Contact).filter(
-                    Contact.phone_number == clean_phone,
-                    Contact.status == "DoNotCall"
-                ).first()
-                
-                if existing_do_not_call:
-                    errors.append({"row": row_idx, "error": f"Phone number {clean_phone} is on DoNotCall list"})
-                    continue
-
-                contacts.append({
-                    "name": str(name_val).strip(),
-                    "phone": clean_phone,
-                    "email": str(email_val).strip() if email_val else None,
-                    "notes": str(notes_val).strip() if notes_val else None
-                })
+                contacts.append(contact)
         else:
             # --- Excel Parsing (existing logic) ---
             workbook = openpyxl.load_workbook(filename=io.BytesIO(contents))
@@ -120,38 +144,11 @@ async def upload_excel(
                 email_val = worksheet.cell(row=row_idx, column=email_col_idx).value if email_col_idx else None
                 notes_val = worksheet.cell(row=row_idx, column=notes_col_idx).value if notes_col_idx else None
 
-                if not name_val:
-                    errors.append({"row": row_idx, "error": "Name is empty"})
+                contact, error = _extract_row(name_val, phone_val, email_val, notes_val, row_idx, dnc_numbers)
+                if error:
+                    errors.append(error)
                     continue
-                if not phone_val:
-                    errors.append({"row": row_idx, "error": "Phone number is empty"})
-                    continue
-
-                clean_phone = "".join(c for c in str(phone_val) if c.isdigit() or c == "+")
-                if not clean_phone.startswith("+"):
-                    if len(clean_phone) == 10:
-                        clean_phone = "+91" + clean_phone
-                    elif len(clean_phone) == 12 and clean_phone.startswith("91"):
-                        clean_phone = "+" + clean_phone
-                    else:
-                        clean_phone = "+" + clean_phone
-
-                # Check if phone number is on DoNotCall list
-                existing_do_not_call = db.query(Contact).filter(
-                    Contact.phone_number == clean_phone,
-                    Contact.status == "DoNotCall"
-                ).first()
-                
-                if existing_do_not_call:
-                    errors.append({"row": row_idx, "error": f"Phone number {clean_phone} is on DoNotCall list"})
-                    continue
-
-                contacts.append({
-                    "name": str(name_val).strip(),
-                    "phone": clean_phone,
-                    "email": str(email_val).strip() if email_val else None,
-                    "notes": str(notes_val).strip() if notes_val else None
-                })
+                contacts.append(contact)
 
         if not contacts:
             raise HTTPException(status_code=400, detail="No valid rows found in file")

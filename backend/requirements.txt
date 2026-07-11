@@ -16,3 +16,4 @@ pyngrok==7.1.6
 dateparser==1.2.0
 retell-sdk==5.53.0
 beautifulsoup4==4.12.3
+phonenumbers==8.13.42

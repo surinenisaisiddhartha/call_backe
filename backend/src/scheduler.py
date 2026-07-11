@@ -94,6 +94,25 @@ def _reset_stuck_calling_contacts():
         db.close()
 
 
+def _requeue_or_give_up(cb, contact_label, retry_delay_minutes: int = 2, max_attempts: int = 1):
+    """
+    A dial attempt just failed (non-2xx from Retell, or a request exception).
+    Previously this always gave up immediately ("avoid infinite loop") — now
+    it gives a transient failure ONE bounded retry a couple minutes later
+    before giving up for good, via cb.dial_attempts. Mutates cb in place;
+    caller is responsible for the surrounding db.commit().
+    """
+    attempts = (cb.dial_attempts or 0) + 1
+    cb.dial_attempts = attempts
+    if attempts <= max_attempts:
+        cb.status = "Scheduled"
+        cb.scheduled_for = datetime.utcnow() + timedelta(minutes=retry_delay_minutes)
+        print(f"[SCHEDULER] Dial failed for {contact_label} — requeued for retry #{attempts} in {retry_delay_minutes} min")
+    else:
+        cb.status = "Triggered"  # Give up after the bounded retry to avoid an infinite loop
+        print(f"[SCHEDULER] Dial failed for {contact_label} after {attempts} attempts — giving up")
+
+
 def _fire_pending_callbacks():
     """Fire pending ScheduledCallback rows whose time has arrived."""
     from src.db import SessionLocal, ScheduledCallback, Contact, Settings
@@ -133,6 +152,7 @@ def _fire_pending_callbacks():
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         for cb in pending:
+            contact = None
             try:
                 # ── Atomically claim this row before dialing ────────────────
                 # The exact-time one-shot job registered by the schedule_callback
@@ -198,11 +218,11 @@ def _fire_pending_callbacks():
                     print(f"[SCHEDULER] Callback call fired for {contact.name}")
                 else:
                     print(f"[SCHEDULER] Retell error {r.status_code} for {contact.name}: {r.text[:200]}")
-                    cb.status = "Triggered"  # Avoid infinite loop
+                    _requeue_or_give_up(cb, contact.name)
 
             except Exception as e:
                 print(f"[SCHEDULER] Error firing callback for {cb.id}: {e}")
-                cb.status = "Triggered"
+                _requeue_or_give_up(cb, contact.name if contact else cb.contact_id)
 
         db.commit()
 

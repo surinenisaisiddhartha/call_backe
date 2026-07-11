@@ -95,6 +95,7 @@ class ScheduledCallback(Base):
     call_type = Column(String(50), default="Follow-up")   # Follow-up, Reminder, Check-in
     reason = Column(Text, nullable=True)                  # Reason for callback
     created_at = Column(DateTime, default=datetime.utcnow)
+    dial_attempts = Column(Integer, default=0)            # Bounds the dial-failure retry in scheduler.py
 
     contact = relationship("Contact", back_populates="schedules")
 
@@ -131,6 +132,13 @@ def init_db():
             print("[DB] Self-healing migration: adding google_calendar_html_link to appointments table")
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE appointments ADD COLUMN google_calendar_html_link TEXT;"))
+                conn.commit()
+
+        cb_columns = [c['name'] for c in inspector.get_columns('scheduled_callbacks')]
+        if 'dial_attempts' not in cb_columns:
+            print("[DB] Self-healing migration: adding dial_attempts to scheduled_callbacks table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE scheduled_callbacks ADD COLUMN dial_attempts INTEGER DEFAULT 0;"))
                 conn.commit()
     except Exception as e:
         print(f"[DB] Migration warning: {e}")
