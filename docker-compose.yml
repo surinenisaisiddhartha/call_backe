@@ -8,7 +8,10 @@ services:
     container_name: aegis-backend
     restart: always
     environment:
-      - DATABASE_URL=sqlite:////app/data/local_test.db
+      # REQUIRED: Postgres connection string — the app refuses to start
+      # without it (no SQLite fallback anymore). In Coolify, set this in the
+      # service's environment variables panel.
+      - DATABASE_URL=${DATABASE_URL}
       - JWT_SECRET=demo_secret_key_12345678
       # You can override other environment variables in Coolify settings:
       # - RETELL_API_KEY=your_retell_key

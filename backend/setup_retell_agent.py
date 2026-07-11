@@ -37,26 +37,24 @@ load_dotenv()
 RETELL_API_KEY = os.environ.get("RETELL_API_KEY")
 WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_BASE_URL")
 
-# Fetch from database if still missing
-if not RETELL_API_KEY or not WEBHOOK_BASE_URL:
-    try:
-        import sqlite3
-        db_path = Path(__file__).parent / "local_test.db"
-        if db_path.exists():
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("select key, value from settings")
-            settings_map = {row[0]: row[1] for row in cursor.fetchall()}
-            conn.close()
-            
-            if not RETELL_API_KEY:
-                RETELL_API_KEY = settings_map.get("retell_api_key")
-            if not WEBHOOK_BASE_URL:
-                ngrok_url = settings_map.get("ngrok_url")
-                if ngrok_url:
-                    WEBHOOK_BASE_URL = f"{ngrok_url.rstrip('/')}/api/webhooks"
-    except Exception as db_err:
-        print(f"[SETUP] Note: could not load from SQLite db: {db_err}")
+# Load the shared Postgres settings table to fill any gaps (env vars win).
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from src.db import SessionLocal, Settings as SettingsModel
+    _db = SessionLocal()
+    settings_map = {s.key: s.value for s in _db.query(SettingsModel).all()}
+    _db.close()
+except Exception as db_err:
+    settings_map = {}
+    print(f"[SETUP] Note: could not load settings from database: {db_err}")
+
+if not RETELL_API_KEY:
+    RETELL_API_KEY = settings_map.get("retell_api_key")
+if not WEBHOOK_BASE_URL:
+    ngrok_url = settings_map.get("ngrok_url")
+    if ngrok_url:
+        WEBHOOK_BASE_URL = f"{ngrok_url.rstrip('/')}/api/webhooks"
 
 VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Adrian")
 AGENT_NAME = "TSRA Admissions Assistant - Arjun"
@@ -71,21 +69,7 @@ KNOWLEDGE_BASE_ID = os.environ.get("RETELL_KNOWLEDGE_BASE_ID", "knowledge_base_7
 # backend can verify these webhook requests actually came from Retell (see
 # verify_tools_secret in src/routers/tools.py). Set the same value in
 # Settings -> aegis_tools_secret (or AEGIS_TOOLS_SECRET env var) on the backend.
-AEGIS_TOOLS_SECRET = os.environ.get("AEGIS_TOOLS_SECRET", "")
-if not AEGIS_TOOLS_SECRET:
-    try:
-        import sqlite3
-        db_path = Path(__file__).parent / "local_test.db"
-        if db_path.exists():
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-            cursor.execute("select value from settings where key = 'aegis_tools_secret'")
-            row = cursor.fetchone()
-            conn.close()
-            if row and row[0]:
-                AEGIS_TOOLS_SECRET = row[0]
-    except Exception:
-        pass
+AEGIS_TOOLS_SECRET = os.environ.get("AEGIS_TOOLS_SECRET", "") or settings_map.get("aegis_tools_secret", "")
 if not AEGIS_TOOLS_SECRET:
     print("[SETUP] WARNING: AEGIS_TOOLS_SECRET not set — tool webhook calls will be unauthenticated until you set one (Settings -> aegis_tools_secret or the env var) and re-run this script.")
 
