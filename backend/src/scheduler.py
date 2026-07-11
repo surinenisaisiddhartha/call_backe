@@ -35,6 +35,15 @@ def init_scheduler():
     )
 
     # Job 2: Callback dialer - fires pending callbacks
+    #
+    # ⚠️ DO NOT REMOVE THIS SWEEP. It looks redundant next to the exact-time
+    # one-shot jobs that tools.py/webhooks.py register per callback, but those
+    # one-shot jobs live in APScheduler's default IN-MEMORY store and are
+    # silently lost on every process restart/redeploy. This 1-minute DB sweep
+    # is the ONLY correctness guarantee that a ScheduledCallback ever fires;
+    # the one-shot jobs are purely a latency optimization on top of it. The
+    # atomic status='Scheduled'->'Triggering' claim in _fire_pending_callbacks
+    # is what keeps the two mechanisms from double-dialing.
     _scheduler.add_job(
         _fire_pending_callbacks,
         "interval",
