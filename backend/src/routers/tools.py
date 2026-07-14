@@ -178,6 +178,18 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
                 print(f"[TOOLS] Resolved contact {contact.id} from phone number: {phone} (matched last10={last10})")
                 return contact
 
+    # 3b. Try resolving via attendee_email — the agent confirms the email on
+    #     every booking, so if it matches a stored contact, use that.
+    email = getattr(request_data, "attendee_email", None)
+    if email and email.strip():
+        from sqlalchemy import func
+        contact = db.query(Contact).filter(
+            func.lower(Contact.email) == email.strip().lower()
+        ).first()
+        if contact:
+            print(f"[TOOLS] Resolved contact {contact.id} from attendee_email: {email}")
+            return contact
+
     # 4. Safe last-resort fallback. The dialer supports multiple concurrent
     #    calls, so guessing "the most recently updated contact" is only safe
     #    when there is exactly ONE plausible candidate — otherwise we risk
