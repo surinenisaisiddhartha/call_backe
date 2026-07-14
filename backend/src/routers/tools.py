@@ -157,13 +157,26 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
             print(f"[TOOLS] Resolved contact {contact.id} from contact_id parameter")
             return contact
 
-    # 3. Try resolving via attendee_phone / phone_number
+    # 3. Try resolving via attendee_phone / phone_number. Callers speak their
+    #    number as bare national digits ("6300130119"), but it is stored in
+    #    E.164 form ("+916300130119"), so an exact string match fails and the
+    #    booking wrongly reports "couldn't find contact". Compare on the last
+    #    10 digits (the national number) after stripping all non-digits.
     phone = getattr(request_data, "attendee_phone", None) or getattr(request_data, "phone_number", None)
     if phone:
-        contact = db.query(Contact).filter(Contact.phone_number == phone).first()
-        if contact:
-            print(f"[TOOLS] Resolved contact {contact.id} from phone number: {phone}")
-            return contact
+        import re
+        digits = re.sub(r"\D", "", phone)
+        last10 = digits[-10:] if len(digits) >= 10 else digits
+        if last10:
+            contact = db.query(Contact).filter(Contact.phone_number == phone).first()
+            if not contact:
+                for cand in db.query(Contact).filter(Contact.phone_number.like(f"%{last10}")).all():
+                    if re.sub(r"\D", "", cand.phone_number or "")[-10:] == last10:
+                        contact = cand
+                        break
+            if contact:
+                print(f"[TOOLS] Resolved contact {contact.id} from phone number: {phone} (matched last10={last10})")
+                return contact
 
     # 4. Safe last-resort fallback. The dialer supports multiple concurrent
     #    calls, so guessing "the most recently updated contact" is only safe
