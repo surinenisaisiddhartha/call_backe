@@ -244,6 +244,11 @@ def main():
             llm_id,
             general_prompt=general_prompt,
             general_tools=general_tools,
+            # Faster model = lower time-to-first-word, which is the main driver
+            # of the "agent reply delay" on live calls. gpt-4.1-mini is plenty
+            # capable for this scripted admissions flow; switch back to
+            # "gpt-4.1" here and re-run if higher reasoning is ever needed.
+            model="gpt-4.1-mini",
             model_high_priority=True,
             # Retell-native knowledge base ("TSRA School Info"): semantic
             # retrieval over the school's site + static facts, auto-injected
@@ -265,6 +270,9 @@ def main():
             end_call_after_silence_ms=30000,
             language="multi",
             webhook_url=new_webhook_url,
+            # Max responsiveness: agent starts speaking as soon as it can,
+            # trimming the pause before each reply.
+            responsiveness=1,
             # Reported audio as glitchy/choppy across two different voice
             # providers (11labs-Monika AND openai-Monika) — that rules out the
             # TTS engine itself. Most likely cause: default interruption
