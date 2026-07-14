@@ -244,11 +244,10 @@ def main():
             llm_id,
             general_prompt=general_prompt,
             general_tools=general_tools,
-            # Faster model = lower time-to-first-word, which is the main driver
-            # of the "agent reply delay" on live calls. gpt-4.1-mini is plenty
-            # capable for this scripted admissions flow; switch back to
-            # "gpt-4.1" here and re-run if higher reasoning is ever needed.
-            model="gpt-4.1-mini",
+            # gpt-4.1 for stronger reasoning (better time-expression parsing and
+            # intent handling on messy real calls). Trades a little latency for
+            # accuracy; mini was tried and reverted.
+            model="gpt-4.1",
             model_high_priority=True,
             # Retell-native knowledge base ("TSRA School Info"): semantic
             # retrieval over the school's site + static facts, auto-injected
