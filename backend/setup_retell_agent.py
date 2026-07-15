@@ -158,7 +158,12 @@ def build_general_tools():
                 },
                 "required": ["datetime_iso", "reason"],
             },
-            "timeout_ms": 8000,
+            # 8000ms was too tight: the DB round-trip to the remote Postgres
+            # plus APScheduler job registration occasionally exceeded it,
+            # causing Retell to abort with ECONNABORTED even though the
+            # backend would have succeeded a moment later. Raised to give
+            # real headroom.
+            "timeout_ms": 20000,
         },
         {
             "type": "custom",
@@ -186,7 +191,9 @@ def build_general_tools():
                 },
                 "required": ["datetime_iso", "purpose"],
             },
-            "timeout_ms": 10000,
+            # Same reasoning as schedule_callback's timeout: give the remote
+            # Postgres round-trip real headroom instead of aborting early.
+            "timeout_ms": 20000,
         },
         {
             "type": "custom",
@@ -218,7 +225,7 @@ def build_general_tools():
                 },
                 "required": ["outcome"],
             },
-            "timeout_ms": 5000,
+            "timeout_ms": 12000,
         },
         {
             "type": "end_call",

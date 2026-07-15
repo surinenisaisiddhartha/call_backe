@@ -25,7 +25,20 @@ if DATABASE_URL.startswith("postgres://"):
 
 # The connection must actually work — fail loudly at startup so a bad
 # DATABASE_URL is impossible to miss.
-engine = create_engine(DATABASE_URL, connect_args={"connect_timeout": 3})
+# pool_pre_ping + pool_recycle: DATABASE_URL points at a remote Postgres over
+# the public internet, which silently drops idle connections. Without these,
+# the pool hands out a stale connection, the request hangs on a dead socket
+# until the OS-level TCP timeout (~20s+), and Retell's tool-call timeout aborts
+# before the backend ever responds — even though a fresh connection works
+# instantly. pool_pre_ping validates (and transparently replaces) a stale
+# connection before use; pool_recycle proactively retires connections before
+# they go stale.
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"connect_timeout": 3},
+    pool_pre_ping=True,
+    pool_recycle=280,
+)
 with engine.connect():
     pass
 
