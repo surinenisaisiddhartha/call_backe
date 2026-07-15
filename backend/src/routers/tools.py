@@ -63,8 +63,8 @@ class ScheduleCallbackRequest(RetellToolBase):
 class BookAppointmentRequest(RetellToolBase):
     datetime_iso: str
     purpose: str
-    attendee_name: str
-    attendee_phone: str
+    attendee_name: str = ""   # Optional — backend already knows it from the contact
+    attendee_phone: str = ""  # Optional — backend uses the dialed number / call_id
     attendee_email: str = ""  # Optional — collected during call if not pre-filled
     contact_id: str = None
 
@@ -448,7 +448,13 @@ def book_appointment(
         if not contact:
             print("[TOOLS] book_appointment: No contact found")
             return {"result": "I couldn't find the contact details to book the appointment. Please try again."}
-        
+
+        # attendee_name/phone are optional from the agent now — fall back to the
+        # resolved contact's own details so the calendar event and email are
+        # still complete.
+        attendee_name = (request.attendee_name or "").strip() or contact.name or "Guest"
+        attendee_phone = (request.attendee_phone or "").strip() or contact.phone_number or ""
+
         # Save or update contact email
         if request.attendee_email and request.attendee_email.strip():
             contact.email = request.attendee_email.strip()
@@ -520,11 +526,11 @@ def book_appointment(
             credentials_json=credentials_json,
             calendar_id=calendar_id,
             start_iso=dt.isoformat(),
-            summary=f"TSRA {request.purpose} — {request.attendee_name}",
+            summary=f"TSRA {request.purpose} — {attendee_name}",
             description=f"Booked via Aegis voice calling agent. Purpose: {request.purpose}",
-            attendee_name=request.attendee_name,
-            attendee_phone=request.attendee_phone,
-            attendee_email=request.attendee_email,
+            attendee_name=attendee_name,
+            attendee_phone=attendee_phone,
+            attendee_email=(request.attendee_email or "").strip() or (contact.email or ""),
             smtp_server=smtp_server,
             smtp_port_val=smtp_port_val,
             smtp_username=smtp_username,
