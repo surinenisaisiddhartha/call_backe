@@ -161,8 +161,12 @@ def build_general_tools():
             "type": "custom",
             "name": "book_appointment",
             "description": (
-                "Call this once the caller has confirmed a specific date, "
-                "time, and purpose for a campus visit or counseling session."
+                "REQUIRED to create any campus visit / counseling booking. You "
+                "MUST call this function as soon as the caller has confirmed a "
+                "date, time, and purpose — nothing is booked until you call it. "
+                "Never promise, describe, or claim a booking (or a booking "
+                "problem) without actually calling this. You do NOT need the "
+                "caller's phone number; the system already has it."
             ),
             "url": f"{base}/tools/book-appointment",
             "method": "POST",
