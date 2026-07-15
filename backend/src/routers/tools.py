@@ -38,15 +38,35 @@ def verify_tools_secret(req: Request, db: Session = Depends(get_db)) -> None:
 
 class RetellToolBase(BaseModel):
     call_id: Optional[str] = None
+    to_number: Optional[str] = None
 
     @model_validator(mode='before')
     @classmethod
     def extract_args(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "args" in data and isinstance(data["args"], dict):
-            merged = data.copy()
+        if not isinstance(data, dict):
+            return data
+        merged = dict(data)
+        # Retell nests the live-call info under a "call" object — the call_id
+        # (and dialed number) live there, NOT at the top level. Pull them up so
+        # resolve_contact's most reliable path (call_id -> CallAttempt -> contact)
+        # actually works instead of falling through to fragile guesses.
+        call = data.get("call")
+        if isinstance(call, dict):
+            if not merged.get("call_id"):
+                merged["call_id"] = call.get("call_id")
+            if not merged.get("to_number"):
+                merged["to_number"] = call.get("to_number")
+        # Also honour a call_id sent via retell_llm_dynamic_variables, if present.
+        dv = data.get("retell_llm_dynamic_variables") or (call.get("retell_llm_dynamic_variables") if isinstance(call, dict) else None)
+        if isinstance(dv, dict):
+            if not merged.get("call_id") and dv.get("call_id"):
+                merged["call_id"] = dv.get("call_id")
+            if not merged.get("contact_id") and dv.get("contact_id"):
+                merged["contact_id"] = dv.get("contact_id")
+        # Flatten the tool arguments Retell passes under "args".
+        if isinstance(data.get("args"), dict):
             merged.update(data["args"])
-            return merged
-        return data
+        return merged
 
 
 class LookupRequest(RetellToolBase):
@@ -162,7 +182,9 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
     #    E.164 form ("+916300130119"), so an exact string match fails and the
     #    booking wrongly reports "couldn't find contact". Compare on the last
     #    10 digits (the national number) after stripping all non-digits.
-    phone = getattr(request_data, "attendee_phone", None) or getattr(request_data, "phone_number", None)
+    phone = (getattr(request_data, "attendee_phone", None)
+             or getattr(request_data, "phone_number", None)
+             or getattr(request_data, "to_number", None))
     if phone:
         import re
         digits = re.sub(r"\D", "", phone)
