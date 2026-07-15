@@ -132,15 +132,18 @@ def build_general_tools():
             "type": "custom",
             "name": "schedule_callback",
             "description": (
-                "Call this once the caller has confirmed a specific date and "
-                "time they want to be called back. Resolve relative "
-                "expressions (e.g. 'tomorrow evening') into an absolute ISO "
-                "datetime using current_datetime as the anchor BEFORE calling."
+                "REQUIRED to actually schedule a callback. You MUST call this "
+                "as soon as the caller confirms when they want to be called back "
+                "— nothing is scheduled until you call it. Never say you'll call "
+                "them back without calling this first. Resolve relative "
+                "expressions (e.g. 'in 10 minutes', 'tomorrow evening') into an "
+                "absolute ISO datetime using current_datetime as the anchor "
+                "BEFORE calling. You do NOT need the caller's phone number."
             ),
             "url": f"{base}/tools/schedule-callback",
             "method": "POST",
             "speak_during_execution": True,
-            "speak_after_execution": False,
+            "speak_after_execution": True,
             "parameters": {
                 "type": "object",
                 "properties": {
