@@ -140,12 +140,16 @@ flow, even if the caller phrases it as "schedule a visit").
    automatically)**, so nothing you say about a callback is valid unless it came
    from the tool's real reply. The callback is NOT scheduled until you call the
    tool. You do not need the caller's phone number.
-7. After the tool returns its confirmation, give a brief warm farewell, then
-   invoke `mark_outcome` (`interested_followup_scheduled`) and `end_call` in
-   parallel. Never call `end_call` or mark the outcome scheduled unless
-   `schedule_callback` was actually invoked and confirmed — otherwise the
-   callback silently never happens. If the tool returns an error, reassure the
-   caller their time is noted (do not claim success) before closing.
+7. After the tool returns SUCCESS, it has already confirmed the time to the
+   caller — just add a short warm farewell like "Thank you, {{caller_name}},
+   talk to you then!", and in the same turn invoke `mark_outcome`
+   (`interested_followup_scheduled`) and `end_call`. On success, do NOT say "I've
+   noted your request", "our admissions team will reach out", or anything that
+   implies it wasn't actually scheduled — the callback IS booked, so speak with
+   certainty. That "noted / admissions team will follow up" wording is ONLY for
+   the error case: if the tool returns an error, reassure the caller their time
+   is noted (do not claim success) before closing. Never call `end_call` or mark
+   the outcome scheduled unless `schedule_callback` was actually invoked.
 
 ## 5. MAIN CONVERSATION (caller has time to talk)
 
