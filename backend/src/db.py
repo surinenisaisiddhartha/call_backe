@@ -37,7 +37,12 @@ engine = create_engine(
     DATABASE_URL,
     connect_args={"connect_timeout": 3},
     pool_pre_ping=True,
-    pool_recycle=280,
+    # Lowered from 280s: pool_pre_ping's single lightweight ping isn't fully
+    # catching every stale-connection case (still saw ECONNABORTED timeouts
+    # in production after this was first applied) — likely an intermediate
+    # network hop/NAT dropping idle connections faster than expected.
+    # Recycling more aggressively shrinks the staleness window.
+    pool_recycle=90,
 )
 with engine.connect():
     pass

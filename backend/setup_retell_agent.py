@@ -128,7 +128,11 @@ def build_general_tools():
                 },
                 "required": ["query"],
             },
-            "timeout_ms": 15000,
+            # Was 15000ms; observed hitting ECONNABORTED twice in real calls
+            # despite the DB pool_pre_ping fix (idle-connection staleness isn't
+            # fully caught by a single pre-flight ping under some network
+            # conditions). Raised to match the other tools' safety margin.
+            "timeout_ms": 20000,
         },
         {
             "type": "custom",
