@@ -2,7 +2,7 @@
 setup_retell_agent.py
 
 Creates (once) or updates (on every re-run) the single shared Retell AI
-"Arjun" agent for Aegis Calling Manager, using agent_prompt.md as the
+"Maya" agent for Aegis Calling Manager, using agent_prompt.md as the
 ENTIRE system prompt — nothing else, no default template content.
 
 Behaviour:
@@ -57,7 +57,7 @@ if not WEBHOOK_BASE_URL:
         WEBHOOK_BASE_URL = f"{ngrok_url.rstrip('/')}/api/webhooks"
 
 VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Monika")
-AGENT_NAME = "TSRA Admissions Assistant - Arjun"
+AGENT_NAME = "TSRA Admissions Assistant - Maya"
 
 # Retell-native knowledge base id ("TSRA School Info") — created once via the
 # Retell API from the TSRA site URLs + static fact sheets, with auto-refresh
