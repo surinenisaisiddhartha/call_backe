@@ -56,7 +56,7 @@ if not WEBHOOK_BASE_URL:
     if ngrok_url:
         WEBHOOK_BASE_URL = f"{ngrok_url.rstrip('/')}/api/webhooks"
 
-VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Adrian")
+VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Monika")
 AGENT_NAME = "TSRA Admissions Assistant - Arjun"
 
 # Retell-native knowledge base id ("TSRA School Info") — created once via the
