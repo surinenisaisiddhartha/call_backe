@@ -286,18 +286,19 @@ def main():
             # Max responsiveness: agent starts speaking as soon as it can,
             # trimming the pause before each reply.
             responsiveness=1,
-            # Reported audio as glitchy/choppy across two different voice
-            # providers (11labs-Monika AND openai-Monika) — that rules out the
-            # TTS engine itself. Most likely cause: default interruption
-            # sensitivity is aggressive enough that background noise/line
-            # static on the caller's end falsely triggers "user interrupted,"
-            # abruptly cutting the agent's speech mid-word. Lowered so only a
-            # clearer, more sustained voice interrupts the agent.
-            interruption_sensitivity=0.4,
+            # 0.4 was tried to stop background noise/line static from falsely
+            # triggering "user interrupted" and chopping the agent's speech.
+            # That overcorrected the other way: real callers speaking over the
+            # agent stopped interrupting it at all — the agent just talked
+            # through them. Raised to a middle value so genuine caller speech
+            # reliably interrupts, without being as trigger-happy as the
+            # (likely ~0.7-1.0) platform default that caused the original
+            # noise-triggered choppiness.
+            interruption_sensitivity=0.6,
         )
         print(f"Voice updated to: {new_voice_id} (silence timeout: 30s, language: multi)")
         print(f"Call-lifecycle webhook_url updated to: {new_webhook_url}")
-        print("interruption_sensitivity lowered to 0.4 and LLM set to high priority to reduce choppy/glitchy audio.")
+        print("interruption_sensitivity set to 0.6 (balanced: real interruptions work, noise-triggered chopping stays reduced).")
 
 
         print(f"agent_id to use in your backend/.env: {agent_id}")
