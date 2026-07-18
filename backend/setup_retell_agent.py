@@ -106,11 +106,13 @@ def build_general_tools():
             "type": "custom",
             "name": "lookup_school_info",
             "description": (
-                "Look up current, factual information about The Shri Ram "
-                "Academy (curriculum, admissions, fees, campus, facilities, "
-                "contact details, events). ALWAYS call this before answering "
-                "any factual question about the school — never answer from "
-                "memory since school details change."
+                "REQUIRED before answering ANY factual question about The Shri "
+                "Ram Academy (curriculum, admissions, fees, campus, facilities, "
+                "contact details, events, hostel/boarding, transport, etc). You "
+                "MUST actually call this function — never skip straight to "
+                "apologizing or saying you don't have information without "
+                "having called it first. Never answer from memory; school "
+                "details change."
             ),
             "url": f"{base}/tools/lookup",
             "method": "POST",
