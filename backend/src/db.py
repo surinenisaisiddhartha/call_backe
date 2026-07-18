@@ -35,7 +35,20 @@ if DATABASE_URL.startswith("postgres://"):
 # they go stale.
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"connect_timeout": 3},
+    # TCP keepalives: pool_pre_ping's own validation ping can itself hang if a
+    # connection died silently (no clean FIN/RST — common on a remote/public
+    # internet path) — the ping just sits waiting on a dead socket exactly
+    # like a real query would, so it doesn't fully protect against this.
+    # Keepalives make the OS detect and report a dead connection within
+    # ~30-50s instead of relying on default OS timeouts (often much longer),
+    # so both pre_ping and real queries fail fast instead of hanging.
+    connect_args={
+        "connect_timeout": 3,
+        "keepalives": 1,
+        "keepalives_idle": 20,
+        "keepalives_interval": 10,
+        "keepalives_count": 3,
+    },
     pool_pre_ping=True,
     # Lowered from 280s: pool_pre_ping's single lightweight ping isn't fully
     # catching every stale-connection case (still saw ECONNABORTED timeouts
