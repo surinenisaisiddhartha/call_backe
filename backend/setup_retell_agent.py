@@ -286,12 +286,14 @@ def main():
             # between them mid-call — seen directly in transcripts as random
             # Spanish/Russian words when the caller was speaking Hindi.
             # Narrowing to an explicit locale array (per Retell SDK's
-            # agent_update_params.py) restricts detection to just these two,
+            # agent_update_params.py) restricts detection to just these,
             # and en-IN (vs en-US) is tuned for Indian accents/Hinglish.
-            # NOTE: Retell has no Telugu locale at all (no "te-IN" in its
-            # ~60-locale list) — Telugu speech will still be misdetected
-            # regardless of this setting; that's a platform limitation.
-            language=["en-IN", "hi-IN"],
+            # Agent now converses in English, Hindi, or Tamil (agent_prompt.md
+            # Hard Rule 7). NOTE: Retell has NO Telugu locale at all anywhere
+            # on the platform (confirmed via docs.retellai.com/build/
+            # language-support — no te-IN, no provider covers it for STT or
+            # TTS) — this is a hard platform ceiling, not a config gap.
+            language=["en-IN", "hi-IN", "ta-IN"],
             webhook_url=new_webhook_url,
             # Max responsiveness: agent starts speaking as soon as it can,
             # trimming the pause before each reply.
@@ -334,8 +336,8 @@ def main():
         webhook_url=f"{WEBHOOK_BASE_URL.rstrip('/')}/retell",
         # See the matching comment in the update-path above: explicit locale
         # array instead of legacy "multi" to avoid Hindi/Spanish/Russian
-        # cross-detection.
-        language=["en-IN", "hi-IN"],
+        # cross-detection. Telugu is not supported anywhere on the platform.
+        language=["en-IN", "hi-IN", "ta-IN"],
         end_call_after_silence_ms=30000,
     )
     agent_id = agent_response.agent_id
