@@ -281,7 +281,17 @@ def main():
             agent_name=AGENT_NAME,
             voice_id=new_voice_id,
             end_call_after_silence_ms=30000,
-            language="multi",
+            # "multi" is Retell's legacy catch-all covering 10 languages
+            # (incl. Hindi, Spanish, Russian) and is documented to misdetect
+            # between them mid-call — seen directly in transcripts as random
+            # Spanish/Russian words when the caller was speaking Hindi.
+            # Narrowing to an explicit locale array (per Retell SDK's
+            # agent_update_params.py) restricts detection to just these two,
+            # and en-IN (vs en-US) is tuned for Indian accents/Hinglish.
+            # NOTE: Retell has no Telugu locale at all (no "te-IN" in its
+            # ~60-locale list) — Telugu speech will still be misdetected
+            # regardless of this setting; that's a platform limitation.
+            language=["en-IN", "hi-IN"],
             webhook_url=new_webhook_url,
             # Max responsiveness: agent starts speaking as soon as it can,
             # trimming the pause before each reply.
@@ -296,7 +306,7 @@ def main():
             # noise-triggered choppiness.
             interruption_sensitivity=0.6,
         )
-        print(f"Voice updated to: {new_voice_id} (silence timeout: 30s, language: multi)")
+        print(f"Voice updated to: {new_voice_id} (silence timeout: 30s, language: en-IN + hi-IN)")
         print(f"Call-lifecycle webhook_url updated to: {new_webhook_url}")
         print("interruption_sensitivity set to 0.6 (balanced: real interruptions work, noise-triggered chopping stays reduced).")
 
@@ -322,7 +332,10 @@ def main():
         voice_id=VOICE_ID,
         agent_name=AGENT_NAME,
         webhook_url=f"{WEBHOOK_BASE_URL.rstrip('/')}/retell",
-        language="multi",
+        # See the matching comment in the update-path above: explicit locale
+        # array instead of legacy "multi" to avoid Hindi/Spanish/Russian
+        # cross-detection.
+        language=["en-IN", "hi-IN"],
         end_call_after_silence_ms=30000,
     )
     agent_id = agent_response.agent_id
