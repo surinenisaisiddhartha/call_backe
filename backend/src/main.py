@@ -90,6 +90,24 @@ def startup_event():
             print(f"[STARTUP] Knowledge base seed failed: {e}")
 
     threading.Thread(target=_seed_knowledge_if_empty, daemon=True).start()
+
+    # Auto-configure the shared Retell agent to point at THIS deployment.
+    # Permanent fix for "every new deployment needs someone to manually run
+    # setup_retell_agent.py" — the agent/llm ids are persisted in the DB
+    # settings table (shared across every deployment), so this always finds
+    # and patches the SAME agent instead of creating a duplicate, using
+    # whatever WEBHOOK_BASE_URL this specific deployment was started with.
+    # Non-fatal: a transient Retell API issue must never block app startup.
+    def _configure_retell_agent():
+        try:
+            from setup_retell_agent import run_agent_setup
+            result = run_agent_setup()
+            if result:
+                print(f"[STARTUP] Retell agent auto-configured: agent_id={result.get('agent_id')}")
+        except Exception as e:
+            print(f"[STARTUP] Retell agent auto-configuration failed (non-fatal): {e}")
+
+    threading.Thread(target=_configure_retell_agent, daemon=True).start()
     print("Aegis Calling API is ready.")
 
 if __name__ == "__main__":

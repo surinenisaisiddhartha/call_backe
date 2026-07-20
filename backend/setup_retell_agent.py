@@ -1,22 +1,28 @@
 """
 setup_retell_agent.py
 
-Creates (once) or updates (on every re-run) the single shared Retell AI
+Creates (once) or updates (on every run) the single shared Retell AI
 "Maya" agent for Aegis Calling Manager, using agent_prompt.md as the
 ENTIRE system prompt — nothing else, no default template content.
 
-Behaviour:
-- First run: creates a Retell LLM Response Engine with your prompt + tools,
-  creates an Agent on top of it, and saves both ids to retell_agent_state.json.
-- Every subsequent run: finds the saved ids, PATCHES the existing LLM's
-  general_prompt (so prompt edits go live without creating a new agent), and
-  does NOT create a second agent. This is what guarantees "once created,
-  only that agent should be used."
+PERMANENT / DEPLOYMENT-AGNOSTIC BEHAVIOUR:
+The agent's llm_id/agent_id are persisted in the shared Postgres `settings`
+table (keys: local_agent_id, retell_llm_id) — NOT a local JSON file. A local
+file doesn't travel with a fresh deployment (Coolify, AWS, or anywhere else),
+which used to mean every new deployment had no way to find the existing
+agent and either required someone to manually re-run this script with the
+right env vars, or risked creating a duplicate agent. Since the database is
+the one thing every deployment shares, storing the IDs there makes this
+fully self-healing: `run_agent_setup()` is called automatically on backend
+startup (see src/main.py) and always finds/updates the SAME agent, pointing
+its webhook at whatever WEBHOOK_BASE_URL *this* deployment is running with.
 
-Usage:
-    pip install retell-sdk python-dotenv --break-system-packages
+A local retell_agent_state.json is still written as a convenience cache for
+fast local dev, but it is never required and never the source of truth.
+
+Manual usage (still supported):
     export RETELL_API_KEY=your_key
-    export WEBHOOK_BASE_URL=https://your-ngrok-or-prod-domain/api/webhooks
+    export WEBHOOK_BASE_URL=https://your-domain/api/webhooks
     python setup_retell_agent.py
 """
 
@@ -25,82 +31,104 @@ import json
 import sys
 from pathlib import Path
 
-from retell import Retell
-
 STATE_FILE = Path(__file__).parent / "retell_agent_state.json"
 PROMPT_FILE = Path(__file__).parent / "agent_prompt.md"
 
-# Load dotenv if present
-from dotenv import load_dotenv
-load_dotenv()
-
-RETELL_API_KEY = os.environ.get("RETELL_API_KEY")
-WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_BASE_URL")
-
-# Load the shared Postgres settings table to fill any gaps (env vars win).
-try:
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).parent))
-    from src.db import SessionLocal, Settings as SettingsModel
-    _db = SessionLocal()
-    settings_map = {s.key: s.value for s in _db.query(SettingsModel).all()}
-    _db.close()
-except Exception as db_err:
-    settings_map = {}
-    print(f"[SETUP] Note: could not load settings from database: {db_err}")
-
-if not RETELL_API_KEY:
-    RETELL_API_KEY = settings_map.get("retell_api_key")
-if not WEBHOOK_BASE_URL:
-    ngrok_url = settings_map.get("ngrok_url")
-    if ngrok_url:
-        WEBHOOK_BASE_URL = f"{ngrok_url.rstrip('/')}/api/webhooks"
-
-VOICE_ID = os.environ.get("RETELL_VOICE_ID", "11labs-Monika")
+VOICE_ID_DEFAULT = "11labs-Monika"
 AGENT_NAME = "TSRA Admissions Assistant - Maya"
-
-# Retell-native knowledge base id ("TSRA School Info") — created once via the
-# Retell API from the TSRA site URLs + static fact sheets, with auto-refresh
-# enabled so Retell re-scrapes the site itself. Attached to the LLM on every
-# setup run so it can never be silently detached.
-KNOWLEDGE_BASE_ID = os.environ.get("RETELL_KNOWLEDGE_BASE_ID", "knowledge_base_76fd44f08752bcb8")
-
-# Optional shared secret sent as a header on every custom tool call so the
-# backend can verify these webhook requests actually came from Retell (see
-# verify_tools_secret in src/routers/tools.py). Set the same value in
-# Settings -> aegis_tools_secret (or AEGIS_TOOLS_SECRET env var) on the backend.
-AEGIS_TOOLS_SECRET = os.environ.get("AEGIS_TOOLS_SECRET", "") or settings_map.get("aegis_tools_secret", "")
-if not AEGIS_TOOLS_SECRET:
-    print("[SETUP] WARNING: AEGIS_TOOLS_SECRET not set — tool webhook calls will be unauthenticated until you set one (Settings -> aegis_tools_secret or the env var) and re-run this script.")
-
-if not RETELL_API_KEY:
-    sys.exit("ERROR: set RETELL_API_KEY in your environment/database first.")
-if not WEBHOOK_BASE_URL:
-    sys.exit("ERROR: set WEBHOOK_BASE_URL (your ngrok/prod base URL) first.")
-if not PROMPT_FILE.exists():
-    sys.exit(f"ERROR: {PROMPT_FILE} not found. Put agent_prompt.md next to this script.")
-
-client = Retell(api_key=RETELL_API_KEY)
+KNOWLEDGE_BASE_ID_DEFAULT = "knowledge_base_76fd44f08752bcb8"
 
 
-def load_state():
+def _load_db_settings() -> dict:
+    """Best-effort read of the shared settings table. Never raises."""
+    try:
+        from src.db import SessionLocal, Settings as SettingsModel
+        db = SessionLocal()
+        try:
+            return {s.key: s.value for s in db.query(SettingsModel).all()}
+        finally:
+            db.close()
+    except Exception as db_err:
+        print(f"[SETUP] Note: could not load settings from database: {db_err}")
+        return {}
+
+
+def load_state(retell_api_key: str, settings_map: dict) -> dict:
+    """
+    Find the existing agent/llm ids. DB settings are the source of truth
+    (survive across deployments); the local JSON file is only a fallback for
+    environments where the DB isn't reachable yet.
+    """
+    agent_id = settings_map.get("local_agent_id")
+    llm_id = settings_map.get("retell_llm_id")
+
+    if agent_id and not llm_id:
+        # Migration case: an agent_id was already persisted (e.g. by
+        # agent_manager.py / earlier runs) but retell_llm_id never got
+        # backfilled. Look it up from the live agent instead of creating a
+        # new one, then persist it so this only happens once.
+        try:
+            from retell import Retell
+            client = Retell(api_key=retell_api_key)
+            agent = client.agent.retrieve(agent_id)
+            llm_id = agent.response_engine.llm_id
+            print(f"[SETUP] Backfilled retell_llm_id={llm_id} from existing agent {agent_id}.")
+            _save_db_setting("retell_llm_id", llm_id)
+        except Exception as backfill_err:
+            print(f"[SETUP] Could not backfill llm_id for existing agent {agent_id}: {backfill_err}")
+
+    if agent_id and llm_id:
+        return {"agent_id": agent_id, "llm_id": llm_id}
+
+    # Fallback: local file (dev convenience only, not deployment-portable).
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            pass
     return {}
 
 
-def save_state(state: dict):
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+def _save_db_setting(key: str, value: str) -> None:
+    try:
+        from src.db import SessionLocal, Settings as SettingsModel
+        db = SessionLocal()
+        try:
+            row = db.query(SettingsModel).filter(SettingsModel.key == key).first()
+            if row:
+                row.value = value
+            else:
+                db.add(SettingsModel(key=key, value=value))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as db_err:
+        print(f"[SETUP] WARNING: could not persist {key} to DB settings: {db_err}")
 
 
-def build_general_tools():
+def save_state(state: dict) -> None:
+    """Persist to DB (source of truth) and mirror to a local file (dev cache)."""
+    if "agent_id" in state:
+        _save_db_setting("local_agent_id", state["agent_id"])
+        # Keep the legacy manual-override key in sync too, since dialer.py /
+        # agent_manager.py's fallback path reads it.
+        _save_db_setting("retell_agent_id", state["agent_id"])
+    if "llm_id" in state:
+        _save_db_setting("retell_llm_id", state["llm_id"])
+    try:
+        STATE_FILE.write_text(json.dumps(state, indent=2))
+    except Exception:
+        pass  # local file is a convenience cache only — never fatal
+
+
+def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
     """
     The four custom function tools the agent can call mid-conversation.
     URLs point at your FastAPI backend's tool webhook endpoints.
     Match these names EXACTLY to what agent_prompt.md Section 10 references.
     """
-    base = WEBHOOK_BASE_URL.rstrip("/")
-    tool_headers = {"X-Aegis-Tools-Secret": AEGIS_TOOLS_SECRET} if AEGIS_TOOLS_SECRET else None
+    base = webhook_base_url.rstrip("/")
+    tool_headers = {"X-Aegis-Tools-Secret": aegis_tools_secret} if aegis_tools_secret else None
     tools = [
         {
             "type": "custom",
@@ -248,17 +276,62 @@ def build_general_tools():
     return tools
 
 
-def main():
+def run_agent_setup(webhook_base_url: str = None, retell_api_key: str = None, raise_on_error: bool = False) -> dict:
+    """
+    Idempotently create-or-update the single shared Retell agent, pointing its
+    webhook + tool URLs at `webhook_base_url` (defaults to the WEBHOOK_BASE_URL
+    env var / DB setting for whichever deployment calls this).
+
+    Safe to call on every backend startup: finds the existing agent via DB
+    settings and PATCHES it in place — never creates a duplicate once one
+    exists. Returns {"agent_id":..., "llm_id":...} on success, or {} if
+    skipped/failed (and raise_on_error is False).
+    """
+    from retell import Retell
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    settings_map = _load_db_settings()
+
+    api_key = retell_api_key or os.environ.get("RETELL_API_KEY") or settings_map.get("retell_api_key")
+    base_url = webhook_base_url or os.environ.get("WEBHOOK_BASE_URL")
+    if not base_url:
+        ngrok_url = settings_map.get("ngrok_url")
+        if ngrok_url:
+            base_url = f"{ngrok_url.rstrip('/')}/api/webhooks"
+
+    voice_id = os.environ.get("RETELL_VOICE_ID", VOICE_ID_DEFAULT)
+    knowledge_base_id = os.environ.get("RETELL_KNOWLEDGE_BASE_ID", KNOWLEDGE_BASE_ID_DEFAULT)
+    aegis_tools_secret = os.environ.get("AEGIS_TOOLS_SECRET", "") or settings_map.get("aegis_tools_secret", "")
+
+    problems = []
+    if not api_key:
+        problems.append("RETELL_API_KEY not set (env or Settings->retell_api_key)")
+    if not base_url:
+        problems.append("WEBHOOK_BASE_URL not set (env), and no ngrok_url fallback in Settings")
+    if not PROMPT_FILE.exists():
+        problems.append(f"{PROMPT_FILE} not found")
+
+    if problems:
+        msg = "[SETUP] Skipping Retell agent auto-configuration: " + "; ".join(problems)
+        print(msg)
+        if raise_on_error:
+            raise RuntimeError(msg)
+        return {}
+
+    if not aegis_tools_secret:
+        print("[SETUP] WARNING: AEGIS_TOOLS_SECRET not set — tool webhook calls will be unauthenticated until you set one (Settings -> aegis_tools_secret or the env var).")
+
+    client = Retell(api_key=api_key)
     general_prompt = PROMPT_FILE.read_text()
-    general_tools = build_general_tools()
-    state = load_state()
+    general_tools = build_general_tools(base_url, aegis_tools_secret)
+    state = load_state(api_key, settings_map)
 
     if "llm_id" in state and "agent_id" in state:
         # --- REUSE PATH: update the existing LLM's prompt, don't create anything new ---
         llm_id = state["llm_id"]
         agent_id = state["agent_id"]
-        print(f"Found existing agent (agent_id={agent_id}, llm_id={llm_id}).")
-        print("Updating its prompt + tools in place (no new agent created)...")
+        print(f"[SETUP] Found existing agent (agent_id={agent_id}, llm_id={llm_id}). Updating in place...")
 
         client.llm.update(
             llm_id,
@@ -271,92 +344,69 @@ def main():
             model_high_priority=True,
             # Retell-native knowledge base ("TSRA School Info"): semantic
             # retrieval over the school's site + static facts, auto-injected
-            # into the conversation. Far more robust to messy real-caller
-            # phrasing than the keyword lookup tool (which stays as fallback).
-            # Passed explicitly on every update so a re-run can never detach it.
-            knowledge_base_ids=[KNOWLEDGE_BASE_ID] if KNOWLEDGE_BASE_ID else None,
+            # into the conversation. Passed explicitly every run so a re-run
+            # can never silently detach it.
+            knowledge_base_ids=[knowledge_base_id] if knowledge_base_id else None,
         )
-        print("Prompt updated successfully. Existing agent will use the new prompt on its next call.")
-        if KNOWLEDGE_BASE_ID:
-            print(f"Native knowledge base attached: {KNOWLEDGE_BASE_ID}")
+        print("[SETUP] Prompt/tools updated.")
 
-        new_voice_id = VOICE_ID
-        new_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/retell"
+        new_webhook_url = f"{base_url.rstrip('/')}/retell"
         client.agent.update(
             agent_id,
             agent_name=AGENT_NAME,
-            voice_id=new_voice_id,
+            voice_id=voice_id,
             end_call_after_silence_ms=30000,
             # "multi" is Retell's legacy catch-all covering 10 languages
             # (incl. Hindi, Spanish, Russian) and is documented to misdetect
-            # between them mid-call — seen directly in transcripts as random
-            # Spanish/Russian words when the caller was speaking Hindi.
-            # Narrowing to an explicit locale array (per Retell SDK's
-            # agent_update_params.py) restricts detection to just these,
-            # and en-IN (vs en-US) is tuned for Indian accents/Hinglish.
-            # Agent now converses in English, Hindi, or Tamil (agent_prompt.md
-            # Hard Rule 7). NOTE: Retell has NO Telugu locale at all anywhere
-            # on the platform (confirmed via docs.retellai.com/build/
-            # language-support — no te-IN, no provider covers it for STT or
-            # TTS) — this is a hard platform ceiling, not a config gap.
+            # between them mid-call. Explicit locale array restricts detection
+            # to just these; en-IN is tuned for Indian accents/Hinglish.
+            # Retell has NO Telugu locale anywhere on the platform — hard
+            # ceiling, not a config gap (agent_prompt.md Hard Rule 7 handles
+            # this gracefully in-conversation).
             language=["en-IN", "hi-IN", "ta-IN"],
             webhook_url=new_webhook_url,
-            # Max responsiveness: agent starts speaking as soon as it can,
-            # trimming the pause before each reply.
             responsiveness=1,
-            # 0.4 was tried to stop background noise/line static from falsely
-            # triggering "user interrupted" and chopping the agent's speech.
-            # That overcorrected the other way: real callers speaking over the
-            # agent stopped interrupting it at all — the agent just talked
-            # through them. Raised to a middle value so genuine caller speech
-            # reliably interrupts, without being as trigger-happy as the
-            # (likely ~0.7-1.0) platform default that caused the original
-            # noise-triggered choppiness.
+            # Balanced value: high enough that real caller interruptions work,
+            # low enough that background-noise/line-static false interrupts
+            # (the original choppiness complaint) stay reduced.
             interruption_sensitivity=0.6,
         )
-        print(f"Voice updated to: {new_voice_id} (silence timeout: 30s, language: en-IN + hi-IN)")
-        print(f"Call-lifecycle webhook_url updated to: {new_webhook_url}")
-        print("interruption_sensitivity set to 0.6 (balanced: real interruptions work, noise-triggered chopping stays reduced).")
-
-
-        print(f"agent_id to use in your backend/.env: {agent_id}")
-        return
+        print(f"[SETUP] Agent updated: voice={voice_id}, webhook={new_webhook_url}")
+        save_state({"llm_id": llm_id, "agent_id": agent_id})
+        return {"agent_id": agent_id, "llm_id": llm_id}
 
     # --- FIRST-RUN PATH: create LLM, then Agent, then persist ids ---
-    print("No existing agent found in state file — creating for the first time...")
+    print("[SETUP] No existing agent found anywhere (DB or local cache) — creating for the first time...")
 
     llm_response = client.llm.create(
         general_prompt=general_prompt,
         general_tools=general_tools,
         model="gpt-4.1",
-        # start_speaker left as default; begin_message left unset so the LLM
-        # generates the opening line dynamically per agent_prompt.md Section 3
     )
     llm_id = llm_response.llm_id
-    print(f"Created Retell LLM: {llm_id}")
+    print(f"[SETUP] Created Retell LLM: {llm_id}")
 
     agent_response = client.agent.create(
         response_engine={"llm_id": llm_id, "type": "retell-llm"},
-        voice_id=VOICE_ID,
+        voice_id=voice_id,
         agent_name=AGENT_NAME,
-        webhook_url=f"{WEBHOOK_BASE_URL.rstrip('/')}/retell",
-        # See the matching comment in the update-path above: explicit locale
-        # array instead of legacy "multi" to avoid Hindi/Spanish/Russian
-        # cross-detection. Telugu is not supported anywhere on the platform.
+        webhook_url=f"{base_url.rstrip('/')}/retell",
         language=["en-IN", "hi-IN", "ta-IN"],
         end_call_after_silence_ms=30000,
     )
     agent_id = agent_response.agent_id
-    print(f"Created Agent: {agent_id}")
+    print(f"[SETUP] Created Agent: {agent_id}")
 
     save_state({"llm_id": llm_id, "agent_id": agent_id})
-    print(f"Saved to {STATE_FILE} — future runs will UPDATE this agent, not create a new one.")
-    print()
-    print("Next steps:")
-    print(f"  1. Put RETELL_AGENT_ID={agent_id} in your backend's Settings/.env")
-    print(f"  2. Confirm webhook URL in Retell dashboard matches: {WEBHOOK_BASE_URL.rstrip('/')}/retell")
-    print(f"  3. Make a test call and confirm the agent opens with the TSRA greeting, not a generic one.")
+    print("[SETUP] Persisted agent_id/llm_id to DB settings — every future deployment will reuse this same agent automatically.")
+    return {"agent_id": agent_id, "llm_id": llm_id}
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        result = run_agent_setup(raise_on_error=True)
+        print()
+        print(f"agent_id: {result.get('agent_id')}")
+        print(f"llm_id:   {result.get('llm_id')}")
+    except Exception as e:
+        sys.exit(f"ERROR: {e}")
