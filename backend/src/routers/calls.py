@@ -152,59 +152,70 @@ async def call_now(
     if contact.status == "Calling":
         raise HTTPException(status_code=409, detail="This contact is already on an active call.")
 
+    previous_status = contact.status
     contact.status = "Calling"
     contact.updated_at = datetime.utcnow()
     db.commit()
 
-    # Only use local agent with static prompt
-    from src.agent_manager import get_or_create_local_agent
-    agent_id = get_or_create_local_agent()
+    # Everything below can fail (agent lookup, the Retell API call itself,
+    # a network error). Without reverting on failure, the contact was left
+    # permanently stuck showing "Calling" in the dashboard even though no
+    # call was ever actually placed — confirmed happening in production.
+    try:
+        # Only use local agent with static prompt
+        from src.agent_manager import get_or_create_local_agent
+        agent_id = get_or_create_local_agent()
 
-    from_number = os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
-    from datetime import timezone, timedelta
-    dynamic_vars = {
-        "contact_id": contact_id,
-        "caller_name": contact.name,
-        "caller_email": contact.email or "",
-        "notes": contact.notes or "",
-        "campaign_name": f"Manual-Call-{contact_id[:8]}",
-        "current_datetime": datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(microsecond=0).isoformat()
-    }
-    task_data = {
-        "to_number": contact.phone_number,
-        "retell_llm_dynamic_variables": dynamic_vars
-    }
-    if agent_id and agent_id.strip() and not agent_id.startswith("agent_mock"):
-        task_data["override_agent_id"] = agent_id.strip()
+        from_number = os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
+        from datetime import timezone, timedelta
+        dynamic_vars = {
+            "contact_id": contact_id,
+            "caller_name": contact.name,
+            "caller_email": contact.email or "",
+            "notes": contact.notes or "",
+            "campaign_name": f"Manual-Call-{contact_id[:8]}",
+            "current_datetime": datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(microsecond=0).isoformat()
+        }
+        task_data = {
+            "to_number": contact.phone_number,
+            "retell_llm_dynamic_variables": dynamic_vars
+        }
+        if agent_id and agent_id.strip() and not agent_id.startswith("agent_mock"):
+            task_data["override_agent_id"] = agent_id.strip()
 
-    retell_res = await make_retell_request("/create-batch-call", "POST", {
-        "from_number": from_number,
-        "name": f"Single Call - {contact.name}",
-        "tasks": [task_data]
-    })
+        retell_res = await make_retell_request("/create-batch-call", "POST", {
+            "from_number": from_number,
+            "name": f"Single Call - {contact.name}",
+            "tasks": [task_data]
+        })
 
-    if "error" in retell_res and "batch_call_id" not in retell_res:
-        raise HTTPException(status_code=400, detail=f"Failed to trigger call: {retell_res.get('error')}")
+        if "error" in retell_res and "batch_call_id" not in retell_res:
+            raise RuntimeError(f"Failed to trigger call: {retell_res.get('error')}")
 
-    # Create CallAttempt row immediately with batch_call_id so the
-    # call_started webhook can upgrade it to the real call_id, and
-    # tools (schedule_callback, book_appointment) can resolve the contact.
-    from src.db import CallAttempt
-    batch_call_id = retell_res.get("batch_call_id", f"batch_manual_{contact_id[:8]}")
-    attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact_id).count()
-    attempt = CallAttempt(
-        contact_id=contact_id,
-        retell_call_id=batch_call_id,
-        attempt_number=attempt_count + 1,
-        started_at=datetime.utcnow(),
-    )
-    db.add(attempt)
-    db.commit()
+        # Create CallAttempt row immediately with batch_call_id so the
+        # call_started webhook can upgrade it to the real call_id, and
+        # tools (schedule_callback, book_appointment) can resolve the contact.
+        from src.db import CallAttempt
+        batch_call_id = retell_res.get("batch_call_id", f"batch_manual_{contact_id[:8]}")
+        attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact_id).count()
+        attempt = CallAttempt(
+            contact_id=contact_id,
+            retell_call_id=batch_call_id,
+            attempt_number=attempt_count + 1,
+            started_at=datetime.utcnow(),
+        )
+        db.add(attempt)
+        db.commit()
 
-    return {
-        "success": True,
-        "message": f"Triggered call to {contact.name}",
-        "retellBatch": retell_res
-    }
+        return {
+            "success": True,
+            "message": f"Triggered call to {contact.name}",
+            "retellBatch": retell_res
+        }
+    except Exception as e:
+        contact.status = previous_status
+        contact.updated_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"Failed to trigger call: {e}")
 
 
