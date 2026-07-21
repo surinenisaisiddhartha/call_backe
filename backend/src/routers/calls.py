@@ -149,6 +149,9 @@ async def call_now(
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
 
+    if contact.status == "Calling":
+        raise HTTPException(status_code=409, detail="This contact is already on an active call.")
+
     contact.status = "Calling"
     contact.updated_at = datetime.utcnow()
     db.commit()
