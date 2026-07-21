@@ -152,12 +152,12 @@ dialer for first-contact outreach.
 ## 5. System Architecture
 
 ```
-Frontend (React 19 + TS)  ──HTTPS──►  Backend (FastAPI)  ──►  PostgreSQL (dedicated DB)
-                                            │
-        ┌───────────────┬───────────────┬──┴────────────┬──────────────────┐
-        ▼                ▼               ▼               ▼                  ▼
+Frontend (React 19 + TS)  --HTTPS-->  Backend (FastAPI)  -->  PostgreSQL (dedicated DB)
+                                            |
+        +----------------+----------------+----------------+------------------+
+        v                v                v                v                  v
    Voice AI          Google           SMTP/Gmail      TSRA Website     Shared voice
-   (Retell —         Calendar         (confirmation    (scraped for     agent config
+   (Retell -         Calendar         (confirmation    (scraped for     agent config
    calls, STT/TTS,   (service         emails)          knowledge base)  (self-configured
    webhooks)         account)                                           on startup)
 ```
@@ -196,19 +196,19 @@ Frontend (React 19 + TS)  ──HTTPS──►  Backend (FastAPI)  ──►  Po
 
 ## 8. Known Constraints / Out of Scope
 
-1. **Telugu is not supported** by the underlying voice platform for either
-   speech recognition or speech synthesis, on any provider. This is a
-   platform-level limitation, not a configuration gap — no setting can add it.
-2. **Google Calendar attendee invites** are not possible with the current
-   service-account setup (requires a paid Google Workspace domain with
-   delegated authority).
-3. Caller-initiated reschedule requests ("call me back later") are not
-   capped — a caller can request unlimited callbacks; only the
-   *system-initiated* no-answer retry is capped at 3 total attempts.
-4. The voice platform's "multi" legacy language mode is intentionally not
-   used — it covers a wider but less accurate set of languages (including
-   documented cross-language misdetection); the system uses an explicit
-   English/Hindi/Tamil locale set instead for better accuracy.
+- **Telugu is not supported** by the underlying voice platform for either
+  speech recognition or speech synthesis, on any provider. This is a
+  platform-level limitation, not a configuration gap — no setting can add it.
+- **Google Calendar attendee invites** are not possible with the current
+  service-account setup (requires a paid Google Workspace domain with
+  delegated authority).
+- Caller-initiated reschedule requests ("call me back later") are not
+  capped — a caller can request unlimited callbacks; only the
+  system-initiated no-answer retry is capped at 3 total attempts.
+- The voice platform's "multi" legacy language mode is intentionally not
+  used — it covers a wider but less accurate set of languages (including
+  documented cross-language misdetection); the system uses an explicit
+  English/Hindi/Tamil locale set instead for better accuracy.
 
 ---
 
