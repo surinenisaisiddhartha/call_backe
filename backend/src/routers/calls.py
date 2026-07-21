@@ -43,15 +43,23 @@ async def make_retell_request(endpoint: str, method: str, body: dict = None) -> 
                 raise HTTPException(status_code=response.status_code, detail=f"Retell API failed: {response.text}")
 
             return response.json()
+        except HTTPException:
+            raise
         except Exception as e:
-            print("Retell request failure:", e)
-            # Fallback to mock for smooth demo
-            return {
-                "batch_call_id": f"batch_fallback_{random.randint(100000, 999999)}",
-                "total_task_count": len(body.get("tasks", [])) if body else 1,
-                "scheduled_timestamp": body.get("trigger_timestamp") if body else int(time.time() * 1000),
-                "error": str(e)
-            }
+            # Previously this silently faked a "batch_fallback_..." success
+            # response ("fallback to mock for smooth demo") whenever the real
+            # Retell request raised ANY exception (timeout, network error,
+            # etc). Callers checked for a real failure via
+            # `"error" in retell_res and "batch_call_id" not in retell_res`
+            # — which never triggered, because the fake response always
+            # included a batch_call_id alongside the error. The result: a
+            # totally failed call was reported to the UI as successfully
+            # triggered, and the contact got stuck showing "Calling" forever
+            # with no way to know the real call was never placed, and no way
+            # to see what actually went wrong. Real failures must surface as
+            # real failures.
+            print(f"[RETELL] Request to {endpoint} failed: {e}")
+            raise HTTPException(status_code=502, detail=f"Could not reach Retell: {e}")
 
 @router.get("/concurrency")
 async def get_concurrency(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
