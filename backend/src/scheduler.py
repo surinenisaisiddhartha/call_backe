@@ -184,6 +184,29 @@ def _fire_pending_callbacks():
                     cb.status = "Triggered"
                     continue
 
+                # ── Don't dial a contact already on an active call ──────────
+                # The claim above only stops THIS row firing twice; it doesn't
+                # know about a call placed via a different trigger (manual
+                # "Call Now", another campaign call, etc.). Defer instead of
+                # ringing them a second time mid-conversation.
+                if contact.status == "Calling":
+                    print(f"[SCHEDULER] Contact {contact.id} is already on an active call — deferring callback {cb.id} instead of double-dialing")
+                    retry_at = datetime.utcnow() + timedelta(minutes=5)
+                    cb.status = "Scheduled"
+                    cb.scheduled_for = retry_at
+                    db.commit()
+                    try:
+                        from src.routers.webhooks import trigger_callback_call
+                        sched = get_scheduler()
+                        if sched and sched.running:
+                            sched.add_job(
+                                trigger_callback_call, "date", run_date=retry_at, args=[contact.id],
+                                id=f"tool_cb_{contact.id}_{int(retry_at.timestamp())}", replace_existing=True
+                            )
+                    except Exception as resched_err:
+                        print(f"[SCHEDULER] Could not re-register deferred callback job: {resched_err}")
+                    continue
+
                 # ─── Build dynamic variables (THIS was the critical missing piece) ───
                 from datetime import timezone, timedelta
                 dynamic_vars = {

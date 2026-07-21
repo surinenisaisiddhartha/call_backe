@@ -438,6 +438,35 @@ def trigger_callback_call(contact_id: str):
                 print(f"[SCHEDULER] Callback for {contact_id} already claimed/fired elsewhere, skipping duplicate dial")
                 return
 
+        # ── Don't dial a contact who's already on an active call ────────────
+        # The claim above only stops the SAME scheduled_callback row firing
+        # twice; it doesn't know about a call placed via a different trigger
+        # (a manual "Call Now", another campaign call, etc.). Without this
+        # check, a callback can ring the contact again while they're still
+        # mid-conversation on an unrelated call. If busy, push this callback
+        # a few minutes out and let it retry then instead of double-dialing.
+        db.refresh(contact)
+        if contact.status == "Calling":
+            print(f"[SCHEDULER] Contact {contact_id} is already on an active call — deferring this callback instead of double-dialing")
+            if cb:
+                from datetime import timedelta as _td
+                retry_at = datetime.utcnow() + _td(minutes=5)
+                db.query(ScheduledCallback).filter(ScheduledCallback.id == cb.id).update(
+                    {"status": "Scheduled", "scheduled_for": retry_at}, synchronize_session=False
+                )
+                db.commit()
+                try:
+                    from src.scheduler import get_scheduler
+                    sched = get_scheduler()
+                    if sched and sched.running:
+                        sched.add_job(
+                            trigger_callback_call, "date", run_date=retry_at, args=[contact_id],
+                            id=f"tool_cb_{contact_id}_{int(retry_at.timestamp())}", replace_existing=True
+                        )
+                except Exception as resched_err:
+                    print(f"[SCHEDULER] Could not re-register deferred callback job: {resched_err}")
+            return
+
         # Get settings
         ak = db.query(Settings).filter(Settings.key == "retell_api_key").first()
         fn = db.query(Settings).filter(Settings.key == "retell_phone_number").first()
