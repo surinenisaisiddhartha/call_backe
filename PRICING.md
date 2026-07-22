@@ -1,8 +1,10 @@
 # Call Manager (Aegis Calling) — Pricing
 
-**Document version:** 1.0
+**Document version:** 1.1 (INR)
 **Covers:** (1) monthly operating cost to run the system, (2) a project
 pricing estimate for delivering it to a client.
+**Exchange rate used:** ₹96.3 / USD (as of 22 July 2026) — reverify before
+quoting, since this rate moves daily.
 
 ---
 
@@ -20,31 +22,31 @@ the LLM, and telephony.
 
 | Component | Rate |
 |---|---|
-| Retell voice infrastructure (STT + orchestration) | $0.07 / min |
-| LLM (this project uses `gpt-4.1`, not a basic model) | ~$0.03–$0.06 / min |
+| Retell voice infrastructure (STT + orchestration) | ₹6.7 / min |
+| LLM (this project uses `gpt-4.1`, not a basic model) | ~₹3 – ₹6 / min |
 | Text-to-speech (ElevenLabs `11labs-Monika`) | included in blended rate below |
-| **Blended real-world rate for this exact setup** | **~$0.20–$0.25 / min** |
+| **Blended real-world rate for this exact setup** | **~₹19 – ₹24 / min** |
 
 | Monthly call volume | Estimated minutes | Estimated Retell cost/month |
 |---|---|---|
-| Light (50 calls/day, ~2 min avg) | ~3,000 min | **$600 – $750** |
-| Moderate (150 calls/day, ~2 min avg) | ~9,000 min | **$1,800 – $2,250** |
-| Heavy (400 calls/day, ~2 min avg) | ~24,000 min | **$4,800 – $6,000** |
+| Light (50 calls/day, ~2 min avg) | ~3,000 min | **₹57,600 – ₹72,000** |
+| Moderate (150 calls/day, ~2 min avg) | ~9,000 min | **₹1,72,800 – ₹2,16,000** |
+| Heavy (400 calls/day, ~2 min avg) | ~24,000 min | **₹4,60,800 – ₹5,76,000** |
 
 Additional Retell line items:
-- Branded Caller ID (if desired): **+$200/month**
-- New accounts get $10 in free credit (~67–90 minutes) — not meaningful at production volume.
+- Branded Caller ID (if desired): **+₹19,200/month**
+- New accounts get ₹960 in free credit (~67–90 minutes) — not meaningful at production volume.
 
 ### Fixed infrastructure
 
 | Item | Typical monthly cost |
 |---|---|
-| AWS EC2 (backend — small instance, e.g. `t3.small`) | $15 – $25 |
-| AWS RDS PostgreSQL (small instance, e.g. `db.t3.micro`) | $15 – $30 |
-| Domain + SSL (if not already owned) | ~$1 – $2 (amortized) |
-| Retell phone number rental | ~$2 – $10 |
+| AWS EC2 (backend — small instance, e.g. `t3.small`) | ₹1,440 – ₹2,400 |
+| AWS RDS PostgreSQL (small instance, e.g. `db.t3.micro`) | ₹1,440 – ₹2,880 |
+| Domain + SSL (if not already owned) | ~₹100 – ₹200 (amortized) |
+| Retell phone number rental | ~₹200 – ₹960 |
 
-**Fixed infra subtotal: ~$35 – $70/month**
+**Fixed infra subtotal: ~₹3,200 – ₹6,400/month**
 
 ### Free / near-zero cost
 
@@ -58,9 +60,9 @@ Additional Retell line items:
 
 | Volume tier | Retell (calling) | Fixed infra | **Total/month** |
 |---|---|---|---|
-| Light | $600 – $750 | $35 – $70 | **~$635 – $820** |
-| Moderate | $1,800 – $2,250 | $35 – $70 | **~$1,835 – $2,320** |
-| Heavy | $4,800 – $6,000 | $35 – $70 | **~$4,835 – $6,070** |
+| Light | ₹57,600 – ₹72,000 | ₹3,200 – ₹6,400 | **~₹61,000 – ₹78,000** |
+| Moderate | ₹1,72,800 – ₹2,16,000 | ₹3,200 – ₹6,400 | **~₹1.76L – ₹2.22L** |
+| Heavy | ₹4,60,800 – ₹5,76,000 | ₹3,200 – ₹6,400 | **~₹4.64L – ₹5.82L** |
 
 > Calling cost dominates the bill at any real volume — infrastructure is a
 > small, fairly fixed line item by comparison. The single biggest lever for
@@ -89,9 +91,11 @@ determine on your behalf.
 
 | Model | Basis | Estimated range |
 |---|---|---|
-| **Fixed-price project** | Comparable custom AI-voice-agent + dashboard builds | **$8,000 – $18,000** (one-time) |
-| **Time & materials** | ~250–450 hours at a blended $40–$80/hr rate (varies heavily by region/market) | **$10,000 – $36,000** |
-| **Monthly retainer** (ongoing support/iteration, post-launch) | Bug fixes, prompt tuning, feature additions | **$800 – $2,500/month** |
+| **Fixed-price project** | Comparable custom AI-voice-agent + dashboard builds | **₹7.7L – ₹17.3L** (one-time) |
+| **Time & materials** | ~250–450 hours at a blended ₹3,850–₹7,700/hr rate (varies heavily by region/market) | **₹9.6L – ₹34.6L** |
+| **Monthly retainer** (ongoing support/iteration, post-launch) | Bug fixes, prompt tuning, feature additions | **₹77,000 – ₹2.4L/month** |
+
+*(L = lakh = ₹100,000)*
 
 ### What drives the estimate up or down
 
@@ -106,7 +110,9 @@ determine on your behalf.
 
 ## Assumptions & Caveats
 
-- Retell pricing changes over time — reverify current rates at
+- Retell pricing is in USD; converted at **₹96.3/USD (22 July 2026)** — a
+  materially different exchange rate later should be re-applied to these figures.
+- Retell's own pricing changes over time — reverify current rates at
   [retellai.com/pricing](https://www.retellai.com) before quoting a client,
   since AI-voice pricing has moved quickly year over year.
 - The development estimate is a **market-rate reference**, not a fixed quote
@@ -120,4 +126,6 @@ determine on your behalf.
 
 *Sources: Retell AI 2026 pricing data gathered via current market research
 ([retellai.com/blog](https://www.retellai.com/blog/ai-voice-agent-pricing-full-cost-breakdown-platform-comparison-roi-analysis),
-[cekura.ai](https://www.cekura.ai/blogs/retell-ai-pricing-per-minute)); AWS/Google/SMTP costs based on standard published rates for comparable instance sizes.*
+[cekura.ai](https://www.cekura.ai/blogs/retell-ai-pricing-per-minute)); USD/INR
+rate via live market data (22 July 2026); AWS/Google/SMTP costs based on
+standard published rates for comparable instance sizes.*
