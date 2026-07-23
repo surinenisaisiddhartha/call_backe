@@ -42,7 +42,7 @@ async def get_cal_event_type_id(db: Session) -> int:
 
     async with httpx.AsyncClient() as client:
         try:
-            res = await client.get(f"{CAL_BASE_URL}/event-types", headers=headers, timeout=10.0)
+            res = await client.get(f"{CAL_BASE_URL}/event-types", headers=headers, timeout=30.0)
             print(f"[CAL] Event types status: {res.status_code}")
             if res.status_code == 200:
                 data = res.json()
@@ -153,7 +153,12 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
 
     async with httpx.AsyncClient() as client:
         try:
-            res = await client.post(f"{CAL_BASE_URL}/bookings", headers=headers, json=body, timeout=15.0)
+            # 15s was too tight in production: a real booking was confirmed
+            # (createdAt) by Cal.com's server ~3s after we gave up waiting,
+            # so the link was never saved even though the booking succeeded.
+            # This runs in a background task with no caller waiting on it —
+            # there's no latency cost to giving it real headroom.
+            res = await client.post(f"{CAL_BASE_URL}/bookings", headers=headers, json=body, timeout=30.0)
             print(f"[CAL] Booking status: {res.status_code}")
             if res.status_code in [200, 201]:
                 data = res.json().get("data", {})
@@ -166,9 +171,39 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
             else:
                 print("Failed to create booking on Cal.com:", res.text)
                 return {"success": False, "uid": None, "meeting_url": None, "error": res.text}
+        except httpx.TimeoutException as e:
+            # Our request timed out, but Cal.com may have still completed the
+            # booking server-side (exactly what happened in production once
+            # already) — look it up before giving up on the link entirely.
+            print(f"[CAL] Booking request timed out, checking if it went through anyway: {e}")
+            recovered = await _find_recent_booking(client, headers, event_type_id, contact_email, start_time)
+            if recovered:
+                print(f"[CAL] Recovered booking after timeout: uid={recovered.get('uid')}")
+                return {"success": True, "uid": recovered.get("uid"), "meeting_url": recovered.get("meetingUrl") or recovered.get("location"), "error": None}
+            return {"success": False, "uid": None, "meeting_url": None, "error": str(e)}
         except Exception as e:
             print("Error creating Cal.com booking:", e)
             return {"success": False, "uid": None, "meeting_url": None, "error": str(e)}
+
+
+async def _find_recent_booking(client: httpx.AsyncClient, headers: dict, event_type_id: int, attendee_email: str, start_time: str):
+    """Looks up a booking by event type + attendee + start time — used to recover
+    from a client-side timeout on POST /bookings that still succeeded server-side."""
+    try:
+        params = {
+            "eventTypeId": event_type_id,
+            "attendeeEmail": attendee_email,
+            "afterStart": start_time,
+        }
+        res = await client.get(f"{CAL_BASE_URL}/bookings", headers=headers, params=params, timeout=15.0)
+        if res.status_code == 200:
+            bookings = res.json().get("data", [])
+            for b in bookings:
+                if b.get("start", "").startswith(start_time[:16]):  # match to the minute
+                    return b
+    except Exception as e:
+        print(f"[CAL] Recovery lookup failed: {e}")
+    return None
 
 
 async def cancel_booking(db: Session, booking_uid: str, reason: str = "Rescheduled") -> bool:
@@ -182,7 +217,7 @@ async def cancel_booking(db: Session, booking_uid: str, reason: str = "Reschedul
 
     async with httpx.AsyncClient() as client:
         try:
-            res = await client.post(f"{CAL_BASE_URL}/bookings/{booking_uid}/cancel", headers=headers, json=body, timeout=15.0)
+            res = await client.post(f"{CAL_BASE_URL}/bookings/{booking_uid}/cancel", headers=headers, json=body, timeout=30.0)
             print(f"[CAL] Cancel status: {res.status_code}")
             return res.status_code in [200, 201]
         except Exception as e:
