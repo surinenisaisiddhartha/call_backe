@@ -39,23 +39,33 @@ engine = create_engine(
     # connection died silently (no clean FIN/RST — common on a remote/public
     # internet path) — the ping just sits waiting on a dead socket exactly
     # like a real query would, so it doesn't fully protect against this.
-    # Keepalives make the OS detect and report a dead connection within
-    # ~30-50s instead of relying on default OS timeouts (often much longer),
-    # so both pre_ping and real queries fail fast instead of hanging.
+    # Keepalives make the OS detect and report a dead connection fast instead
+    # of relying on default OS timeouts (often much longer), so both pre_ping
+    # and real queries fail fast instead of hanging.
+    #
+    # idle=20/interval=10/count=3 (up to ~50s worst case) was still too loose:
+    # confirmed in production that book_appointment hung for exactly 20005ms —
+    # Retell's own tool-call timeout (20000ms) firing on a request stuck
+    # waiting on a dead connection, not a code bug. Tightened so detection
+    # completes in single-digit seconds, comfortably inside that budget.
+    # statement_timeout is a second, independent backstop: bounds a query that
+    # DOES get a live connection but stalls for another reason (e.g. lock
+    # contention), so even that failure mode can't eat the whole 20s budget.
     connect_args={
         "connect_timeout": 3,
         "keepalives": 1,
-        "keepalives_idle": 20,
-        "keepalives_interval": 10,
-        "keepalives_count": 3,
+        "keepalives_idle": 3,
+        "keepalives_interval": 2,
+        "keepalives_count": 2,
+        "options": "-c statement_timeout=8000",
     },
     pool_pre_ping=True,
-    # Lowered from 280s: pool_pre_ping's single lightweight ping isn't fully
-    # catching every stale-connection case (still saw ECONNABORTED timeouts
-    # in production after this was first applied) — likely an intermediate
-    # network hop/NAT dropping idle connections faster than expected.
-    # Recycling more aggressively shrinks the staleness window.
-    pool_recycle=90,
+    # Lowered from 280s -> 90s -> 45s: pool_pre_ping's single lightweight ping
+    # isn't fully catching every stale-connection case (still saw ECONNABORTED
+    # timeouts in production after each prior tightening) — likely an
+    # intermediate network hop/NAT dropping idle connections faster than
+    # expected. Recycling more aggressively shrinks the staleness window.
+    pool_recycle=45,
 )
 with engine.connect():
     pass
