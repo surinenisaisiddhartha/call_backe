@@ -86,6 +86,7 @@ class BookAppointmentRequest(RetellToolBase):
     attendee_name: str = ""   # Optional — backend already knows it from the contact
     attendee_phone: str = ""  # Optional — backend uses the dialed number / call_id
     attendee_email: str = ""  # Optional — collected during call if not pre-filled
+    meeting_type: str = "in_person"  # "in_person" or "virtual" — caller's stated preference
     contact_id: str = None
 
 
@@ -376,15 +377,47 @@ def process_appointment_booking_async(
     smtp_from_email: str,
     readable_time: str,
     purpose: str,
-    stale_calendar_event_id: str = None
+    stale_calendar_event_id: str = None,
+    meeting_type: str = "in_person",
+    stale_calcom_booking_uid: str = None
 ):
+    import asyncio
     from src.db import SessionLocal, Appointment
     from src.services.google_calendar import create_event, cancel_event
     from src.services.email_sender import send_booking_email
+    from src import cal_com
 
     db = SessionLocal()
     gcal_html_link = None
+    virtual_meeting_link = None
     try:
+        if meeting_type == "virtual":
+            if stale_calcom_booking_uid:
+                try:
+                    asyncio.run(cal_com.cancel_booking(db, stale_calcom_booking_uid, reason="Rescheduled"))
+                    print(f"[BACKGROUND] Cancelled stale Cal.com booking: {stale_calcom_booking_uid}", flush=True)
+                except Exception as cancel_err:
+                    print(f"[BACKGROUND] Failed to cancel stale Cal.com booking {stale_calcom_booking_uid}: {cancel_err}", flush=True)
+            try:
+                cal_result = asyncio.run(cal_com.create_booking(
+                    db=db,
+                    contact_name=attendee_name,
+                    contact_email=attendee_email or "guest@example.com",
+                    start_time=start_iso
+                ))
+                if cal_result.get("success"):
+                    virtual_meeting_link = cal_result.get("meeting_url")
+                    appointment = db.query(Appointment).filter(Appointment.id == appointment_id).first()
+                    if appointment:
+                        appointment.calcom_booking_id = cal_result.get("uid")
+                        appointment.virtual_meeting_link = virtual_meeting_link
+                        db.commit()
+                        print(f"[BACKGROUND] Cal.com virtual meeting booked: {virtual_meeting_link}", flush=True)
+                else:
+                    print(f"[BACKGROUND] Cal.com booking failed: {cal_result.get('error')}", flush=True)
+            except Exception as cal_err:
+                print(f"[BACKGROUND] Cal.com booking creation failed: {cal_err}", flush=True)
+
         if credentials_json and calendar_id:
             # Rebooking an existing appointment (see book_appointment) leaves the
             # previous Google Calendar event dangling since it points at a time
@@ -432,7 +465,9 @@ def process_appointment_booking_async(
                     attendee_name=attendee_name,
                     purpose=purpose,
                     scheduled_for_str=readable_time,
-                    gcal_link=gcal_html_link
+                    gcal_link=gcal_html_link,
+                    virtual_meeting_link=virtual_meeting_link,
+                    meeting_type=meeting_type
                 )
             except Exception as email_err:
                 print(f"[BACKGROUND] Email dispatch failed: {email_err}", flush=True)
@@ -491,19 +526,29 @@ def book_appointment(
             Appointment.status == "Booked"
         ).first()
 
+        meeting_type = (request.meeting_type or "in_person").strip().lower()
+        if meeting_type not in ("in_person", "virtual"):
+            meeting_type = "in_person"
+
         stale_calendar_event_id = None
+        stale_calcom_booking_uid = None
         if existing_appointment:
             stale_calendar_event_id = existing_appointment.google_calendar_event_id
+            stale_calcom_booking_uid = existing_appointment.calcom_booking_id
             existing_appointment.scheduled_for = scheduled_for
             existing_appointment.purpose = request.purpose
+            existing_appointment.meeting_type = meeting_type
             existing_appointment.google_calendar_event_id = None
             existing_appointment.google_calendar_html_link = None
+            existing_appointment.calcom_booking_id = None
+            existing_appointment.virtual_meeting_link = None
             appointment = existing_appointment
         else:
             appointment = Appointment(
                 contact_id=contact.id,
                 scheduled_for=scheduled_for,
                 purpose=request.purpose,
+                meeting_type=meeting_type,
                 status="Booked"
             )
             db.add(appointment)
@@ -560,9 +605,13 @@ def book_appointment(
             smtp_from_email=smtp_from_email,
             readable_time=readable_time,
             purpose=request.purpose,
-            stale_calendar_event_id=stale_calendar_event_id
+            stale_calendar_event_id=stale_calendar_event_id,
+            meeting_type=meeting_type,
+            stale_calcom_booking_uid=stale_calcom_booking_uid
         )
 
+        if meeting_type == "virtual":
+            return {"result": f"Your virtual meeting for {request.purpose} has been booked for {readable_time}. You'll receive the meeting link by email shortly. We look forward to speaking with you!"}
         return {"result": f"Your appointment for {request.purpose} has been booked for {readable_time}. You'll receive a confirmation shortly. We look forward to seeing you!"}
         
     except Exception as e:

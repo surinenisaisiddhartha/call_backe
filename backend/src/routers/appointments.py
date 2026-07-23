@@ -54,6 +54,8 @@ def get_appointments(
             "google_calendar_event_id": apt.google_calendar_event_id,
             "google_calendar_html_link": apt.google_calendar_html_link,
             "calcom_booking_id": apt.calcom_booking_id,
+            "meeting_type": apt.meeting_type,
+            "virtual_meeting_link": apt.virtual_meeting_link,
             "status": apt.status,
             "created_at": apt.created_at.isoformat()
         })
@@ -83,6 +85,9 @@ def get_appointment(
         "purpose": appointment.purpose,
         "google_calendar_event_id": appointment.google_calendar_event_id,
         "google_calendar_html_link": appointment.google_calendar_html_link,
+        "calcom_booking_id": appointment.calcom_booking_id,
+        "meeting_type": appointment.meeting_type,
+        "virtual_meeting_link": appointment.virtual_meeting_link,
         "status": appointment.status,
         "created_from_call_attempt_id": appointment.created_from_call_attempt_id,
         "created_at": appointment.created_at.isoformat()

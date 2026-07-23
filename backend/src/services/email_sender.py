@@ -12,7 +12,9 @@ def send_booking_email(
     attendee_name: str,
     purpose: str,
     scheduled_for_str: str,
-    gcal_link: str = None
+    gcal_link: str = None,
+    virtual_meeting_link: str = None,
+    meeting_type: str = "in_person"
 ) -> bool:
     """
     Sends a styled confirmation HTML email to the caller.
@@ -25,8 +27,10 @@ def send_booking_email(
 
     try:
         # Create message container
+        is_virtual = meeting_type == "virtual"
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"Confirmed: Your Campus Visit at The Shri Ram Academy"
+        subject_suffix = "Your Virtual Meeting" if is_virtual else "Your Campus Visit"
+        msg["Subject"] = f"Confirmed: {subject_suffix} at The Shri Ram Academy"
         msg["From"] = f"TSRA Admissions <{from_email}>"
         msg["To"] = to_email
 
@@ -149,8 +153,12 @@ def send_booking_email(
                             <div class="detail-value">{scheduled_for_str}</div>
                         </div>
                         <div class="detail-row">
-                            <div class="detail-label">Location:</div>
-                            <div class="detail-value">TSRA Campus, Gachibowli, Hyderabad, Telangana 500032</div>
+                            <div class="detail-label">{"Meeting Link:" if is_virtual else "Location:"}</div>
+                            <div class="detail-value">{
+                                f'<a href="{virtual_meeting_link}" target="_blank">{virtual_meeting_link}</a>' if (is_virtual and virtual_meeting_link)
+                                else "Our admissions team will share your meeting link shortly." if is_virtual
+                                else "TSRA Campus, Gachibowli, Hyderabad, Telangana 500032"
+                            }</div>
                         </div>
                     </div>
 
@@ -158,13 +166,17 @@ def send_booking_email(
 
                     {f'''
                     <div class="button-container">
+                        <a href="{virtual_meeting_link}" class="btn" target="_blank">Join Virtual Meeting</a>
+                    </div>
+                    ''' if (is_virtual and virtual_meeting_link) else (f'''
+                    <div class="button-container">
                         <a href="{gcal_link}" class="btn" target="_blank">View on Google Calendar</a>
                     </div>
-                    ''' if gcal_link else ''}
-                    
-                    <p style="margin-top: 32px;">If you need to reschedule or have any questions prior to your visit, feel free to reply to this email or call our admissions desk directly at +91 7569891111.</p>
-                    
-                    <p>We look forward to welcoming you to our campus!</p>
+                    ''' if gcal_link else '')}
+
+                    <p style="margin-top: 32px;">If you need to reschedule or have any questions prior to your {"meeting" if is_virtual else "visit"}, feel free to reply to this email or call our admissions desk directly at +91 7569891111.</p>
+
+                    <p>We look forward to {"speaking with you!" if virtual_meeting_link else "welcoming you to our campus!"}</p>
                     
                     <p style="margin-bottom: 0;">Warm regards,<br/><strong>The TSRA Admissions Team</strong></p>
                 </div>

@@ -27,6 +27,8 @@ interface Appointment {
   purpose: string | null;
   google_calendar_event_id: string | null;
   calcom_booking_id: string | null;
+  meeting_type?: 'in_person' | 'virtual' | null;
+  virtual_meeting_link?: string | null;
   status: 'Booked' | 'Cancelled' | 'Completed';
   created_at: string;
 }
@@ -836,7 +838,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                           <th>Contact</th>
                           <th>Purpose</th>
                           <th>Scheduled For</th>
-                          <th>Cal.com</th>
+                          <th>Meeting</th>
                           <th>Status</th>
                           <th style={{ textAlign: 'center' }}>Actions</th>
                         </tr>
@@ -872,12 +874,21 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                               </div>
                             </td>
                             <td>
-                              {apt.calcom_booking_id ? (
-                                <span style={{ color: 'var(--accent-success)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  <CheckCircle size={14} /> #{apt.calcom_booking_id}
-                                </span>
+                              {apt.meeting_type === 'virtual' ? (
+                                apt.virtual_meeting_link ? (
+                                  <a
+                                    href={apt.virtual_meeting_link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: 'var(--accent-success)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
+                                  >
+                                    <CheckCircle size={14} /> Join Virtual Meeting
+                                  </a>
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Virtual — link pending</span>
+                                )
                               ) : (
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Not synced</span>
+                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>In-person (campus)</span>
                               )}
                             </td>
                             <td>

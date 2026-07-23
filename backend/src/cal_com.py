@@ -5,7 +5,13 @@ from sqlalchemy.orm import Session
 from src.db import Settings
 
 CAL_BASE_URL = "https://api.cal.com/v2"
-CAL_API_VERSION = "2024-06-14"
+# Confirmed via direct testing against this account: different endpoints on
+# Cal.com's current server require DIFFERENT cal-api-version values — there
+# isn't one version that works everywhere.
+#   GET  /v2/event-types -> 404 on 2024-08-13/2024-09-04, 200 on 2024-06-14
+#   POST /v2/bookings    -> 400/500 (schema mismatch) on 2024-06-14, 201 on 2024-08-13
+CAL_API_VERSION_EVENT_TYPES = "2024-06-14"
+CAL_API_VERSION_BOOKINGS = "2024-08-13"
 
 def get_cal_client_info(db: Session):
     api_key_setting = db.query(Settings).filter(Settings.key == "cal_com_api_key").first()
@@ -16,10 +22,10 @@ def get_cal_client_info(db: Session):
 
     return api_key, event_link
 
-def get_headers(api_key: str, extra: dict = None) -> dict:
+def get_headers(api_key: str, api_version: str, extra: dict = None) -> dict:
     h = {
         "Authorization": f"Bearer {api_key}",
-        "cal-api-version": CAL_API_VERSION,
+        "cal-api-version": api_version,
         "Content-Type": "application/json"
     }
     if extra:
@@ -32,7 +38,7 @@ async def get_cal_event_type_id(db: Session) -> int:
         print("Cal.com API key is not configured.")
         return None
 
-    headers = get_headers(api_key)
+    headers = get_headers(api_key, CAL_API_VERSION_EVENT_TYPES)
 
     async with httpx.AsyncClient() as client:
         try:
@@ -95,7 +101,7 @@ async def get_available_slots(db: Session, start_time: str = None, end_time: str
     if not end_time:
         end_time = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
 
-    headers = get_headers(api_key)
+    headers = get_headers(api_key, CAL_API_VERSION_EVENT_TYPES)
     params = {
         "eventTypeId": event_type_id,
         "startTime": start_time,
@@ -117,37 +123,32 @@ async def get_available_slots(db: Session, start_time: str = None, end_time: str
             return get_mock_slots()
 
 async def create_booking(db: Session, contact_name: str, contact_email: str, start_time: str):
+    """
+    Creates a Cal.com booking on the account's Cal Video-enabled event type and
+    returns a dict with the unique per-booking meeting link. Each booking gets
+    its own Cal Video room (unlike a single static meeting link), so overlapping
+    appointments never collide.
+
+    Returns: {"success": bool, "uid": str, "meeting_url": str, "error": str|None}
+    """
     api_key, _ = get_cal_client_info(db)
     event_type_id = await get_cal_event_type_id(db)
 
     if not api_key or not event_type_id:
         print("Skipping booking creation because Cal.com is not configured.")
-        return {"mock": True, "success": True, "message": "Simulated booking successful"}
+        return {"success": False, "uid": None, "meeting_url": None, "error": "Cal.com is not configured"}
 
-    headers = get_headers(api_key)
-
-    # ISO formats and end time (assume 30 mins)
-    dt = datetime.fromisoformat(start_time.replace("Z", ""))
-    end_dt = dt + timedelta(minutes=30)
-    end_time_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+    headers = get_headers(api_key, CAL_API_VERSION_BOOKINGS)
 
     body = {
-        "eventTypeId": event_type_id,
         "start": start_time,
-        "end": end_time_str,
-        "responses": {
-            "name": contact_name,
-            "email": contact_email
-        },
         "attendee": {
             "name": contact_name,
             "email": contact_email,
             "timeZone": "Asia/Kolkata",
             "language": "en"
         },
-        "timeZone": "Asia/Kolkata",
-        "language": "en",
-        "metadata": {}
+        "eventTypeId": event_type_id,
     }
 
     async with httpx.AsyncClient() as client:
@@ -155,13 +156,38 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
             res = await client.post(f"{CAL_BASE_URL}/bookings", headers=headers, json=body, timeout=15.0)
             print(f"[CAL] Booking status: {res.status_code}")
             if res.status_code in [200, 201]:
-                return res.json()
+                data = res.json().get("data", {})
+                return {
+                    "success": True,
+                    "uid": data.get("uid"),
+                    "meeting_url": data.get("meetingUrl") or data.get("location"),
+                    "error": None
+                }
             else:
                 print("Failed to create booking on Cal.com:", res.text)
-                return {"error": res.text}
+                return {"success": False, "uid": None, "meeting_url": None, "error": res.text}
         except Exception as e:
             print("Error creating Cal.com booking:", e)
-            return {"error": str(e)}
+            return {"success": False, "uid": None, "meeting_url": None, "error": str(e)}
+
+
+async def cancel_booking(db: Session, booking_uid: str, reason: str = "Rescheduled") -> bool:
+    """Cancels a Cal.com booking by its string uid (NOT the numeric id)."""
+    api_key, _ = get_cal_client_info(db)
+    if not api_key or not booking_uid:
+        return False
+
+    headers = get_headers(api_key, CAL_API_VERSION_BOOKINGS)
+    body = {"cancellationReason": reason}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.post(f"{CAL_BASE_URL}/bookings/{booking_uid}/cancel", headers=headers, json=body, timeout=15.0)
+            print(f"[CAL] Cancel status: {res.status_code}")
+            return res.status_code in [200, 201]
+        except Exception as e:
+            print("Error cancelling Cal.com booking:", e)
+            return False
 
 def get_mock_slots():
     """Return mock slots for next 3 days to allow UI preview when Cal.com is not configured."""

@@ -222,6 +222,11 @@ def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
                     "attendee_name": {"type": "string", "description": "Caller's name (optional — the backend already knows it)."},
                     "attendee_phone": {"type": "string", "description": "Optional — leave blank; the backend uses the number that was dialed. Do NOT ask the caller for their phone number just to book."},
                     "attendee_email": {"type": "string", "description": "The caller's confirmed or collected email ID (for the confirmation email)."},
+                    "meeting_type": {
+                        "type": "string",
+                        "enum": ["in_person", "virtual"],
+                        "description": "Whether the caller wants an in-person campus visit or a virtual online meeting. Ask the caller directly; default to 'in_person' only if they don't specify. For 'virtual', a unique meeting link is generated and emailed automatically — never read it aloud on the call.",
+                    },
                 },
                 "required": ["datetime_iso", "purpose"],
             },

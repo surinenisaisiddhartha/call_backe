@@ -138,7 +138,9 @@ class Appointment(Base):
     purpose = Column(Text, nullable=True)
     google_calendar_event_id = Column(String(255), nullable=True)
     google_calendar_html_link = Column(String(1024), nullable=True)
-    calcom_booking_id = Column(String(255), nullable=True)
+    calcom_booking_id = Column(String(255), nullable=True)  # Cal.com booking uid (needed for cancel/reschedule)
+    meeting_type = Column(String(20), default="in_person")   # in_person, virtual
+    virtual_meeting_link = Column(String(1024), nullable=True)  # Cal Video meeting URL, set when meeting_type == "virtual"
     status = Column(String(50), default="Booked")       # Booked, Cancelled, Completed
     created_from_call_attempt_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -170,6 +172,18 @@ def init_db():
             print("[DB] Self-healing migration: adding dial_attempts to scheduled_callbacks table")
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE scheduled_callbacks ADD COLUMN dial_attempts INTEGER DEFAULT 0;"))
+                conn.commit()
+
+        if 'meeting_type' not in columns:
+            print("[DB] Self-healing migration: adding meeting_type to appointments table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE appointments ADD COLUMN meeting_type VARCHAR(20) DEFAULT 'in_person';"))
+                conn.commit()
+
+        if 'virtual_meeting_link' not in columns:
+            print("[DB] Self-healing migration: adding virtual_meeting_link to appointments table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE appointments ADD COLUMN virtual_meeting_link TEXT;"))
                 conn.commit()
     except Exception as e:
         print(f"[DB] Migration warning: {e}")
