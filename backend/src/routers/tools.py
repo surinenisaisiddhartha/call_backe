@@ -3,6 +3,7 @@ Retell AI Function Call Tools - Webhook endpoints for agent function calls.
 """
 
 import os
+import re
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -152,6 +153,29 @@ def lookup_school_info_get(
             "answer": "I don't have that specific information in my knowledge base. Let me have our admissions team follow up with the exact details.",
             "sources": []
         }
+
+
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def normalize_email(raw: str) -> str:
+    """
+    Speech-to-text on a spelled-out email often inserts stray hyphens between
+    characters (caller says "two-zero-zero-three-A" and the transcript comes
+    back as "2003-A-5201@gmail.com") — Cal.com's own email validator then
+    rejects the local part as malformed even though the intended address is
+    fine. If the raw email fails basic validation, retry once with hyphens
+    stripped from the local part before giving up and returning it as-is.
+    """
+    raw = (raw or "").strip()
+    if not raw or _EMAIL_RE.match(raw):
+        return raw
+    if "@" in raw:
+        local, _, domain = raw.partition("@")
+        cleaned = f"{local.replace('-', '')}@{domain}"
+        if _EMAIL_RE.match(cleaned):
+            return cleaned
+    return raw
 
 
 def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Contact]:
@@ -512,9 +536,12 @@ def book_appointment(
         attendee_name = (request.attendee_name or "").strip() or contact.name or "Guest"
         attendee_phone = (request.attendee_phone or "").strip() or contact.phone_number or ""
 
-        # Save or update contact email
+        # Save or update contact email — normalized to recover from common
+        # speech-to-text artifacts (see normalize_email) before it's used
+        # anywhere downstream (Cal.com, calendar invite, confirmation email).
         if request.attendee_email and request.attendee_email.strip():
-            contact.email = request.attendee_email.strip()
+            request.attendee_email = normalize_email(request.attendee_email)
+            contact.email = request.attendee_email
             contact.updated_at = datetime.utcnow()
 
         # If the caller already has a Booked appointment (e.g. they change their

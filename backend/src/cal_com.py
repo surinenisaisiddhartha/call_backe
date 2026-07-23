@@ -140,16 +140,17 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
 
     headers = get_headers(api_key, CAL_API_VERSION_BOOKINGS)
 
-    body = {
-        "start": start_time,
-        "attendee": {
-            "name": contact_name,
-            "email": contact_email,
-            "timeZone": "Asia/Kolkata",
-            "language": "en"
-        },
-        "eventTypeId": event_type_id,
-    }
+    def build_body(email: str) -> dict:
+        return {
+            "start": start_time,
+            "attendee": {
+                "name": contact_name,
+                "email": email,
+                "timeZone": "Asia/Kolkata",
+                "language": "en"
+            },
+            "eventTypeId": event_type_id,
+        }
 
     async with httpx.AsyncClient() as client:
         try:
@@ -158,8 +159,26 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
             # so the link was never saved even though the booking succeeded.
             # This runs in a background task with no caller waiting on it —
             # there's no latency cost to giving it real headroom.
-            res = await client.post(f"{CAL_BASE_URL}/bookings", headers=headers, json=body, timeout=30.0)
+            res = await client.post(f"{CAL_BASE_URL}/bookings", headers=headers, json=build_body(contact_email), timeout=30.0)
             print(f"[CAL] Booking status: {res.status_code}")
+
+            if res.status_code not in [200, 201] and "email_validation_error" in res.text and "@" in contact_email:
+                # Speech-to-text on a spelled-out email introduces stray
+                # punctuation: hyphens between dictated characters ("two-
+                # zero-zero-three-A" -> "2003-A-5201@..."), and a trailing
+                # dot right before "@" from a mis-placed "dot gmail com"
+                # (confirmed in production: "2003-A-5201.@gmail.com" — a
+                # dot can't legally end a local part). Both look syntactically
+                # plausible so we can't detect them up front — Cal.com's own
+                # stricter validator rejecting it is the real signal. Retry
+                # once with both artifacts cleaned up.
+                local, _, domain = contact_email.partition("@")
+                retry_email = f"{local.rstrip('.-_').replace('-', '')}@{domain}"
+                if retry_email != contact_email:
+                    print(f"[CAL] Email validation failed for '{contact_email}', retrying with '{retry_email}'")
+                    res = await client.post(f"{CAL_BASE_URL}/bookings", headers=headers, json=build_body(retry_email), timeout=30.0)
+                    print(f"[CAL] Retry booking status: {res.status_code}")
+
             if res.status_code in [200, 201]:
                 data = res.json().get("data", {})
                 return {
