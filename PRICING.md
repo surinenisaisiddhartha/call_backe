@@ -11,42 +11,57 @@ quoting, since this rate moves daily.
 ## Part 1 — Monthly Operating Cost
 
 This is what it actually costs to **run** the system as currently built,
-based on real 2026 provider pricing. Assumes a moderate call volume for a
-single school's admissions outreach.
+based on Retell AI's own published rate card (retellai.com/pricing), priced
+exactly for the components this project actually uses — not a generic
+blended estimate.
 
-### Usage-based: Voice calling (Retell AI)
+### Per-minute cost, itemized (this project's exact configuration)
 
-Retell AI's real production cost isn't just its advertised per-minute rate —
-it's four components stacked together: voice infrastructure, text-to-speech,
-the LLM, and telephony.
-
-| Component | Rate |
-|---|---|
-| Retell voice infrastructure (STT + orchestration) | ₹6.7 / min |
-| LLM (this project uses `gpt-4.1`, not a basic model) | ~₹3 – ₹6 / min |
-| Text-to-speech (ElevenLabs `11labs-Monika`) | included in blended rate below |
-| **Blended real-world rate for this exact setup** | **~₹19 – ₹24 / min** |
-
-| Monthly call volume | Estimated minutes | Estimated Retell cost/month |
+| Component | Retell's published rate | Applies here because |
 |---|---|---|
-| Light (50 calls/day, ~2 min avg) | ~3,000 min | **₹57,600 – ₹72,000** |
-| Moderate (150 calls/day, ~2 min avg) | ~9,000 min | **₹1,72,800 – ₹2,16,000** |
-| Heavy (400 calls/day, ~2 min avg) | ~24,000 min | **₹4,60,800 – ₹5,76,000** |
+| Voice infrastructure (STT + orchestration) | $0.055 / min | Always charged |
+| Text-to-speech — **ElevenLabs** | $0.040 / min | Agent uses voice `11labs-Monika` |
+| LLM — **GPT-4.1** | $0.045 / min | Agent runs on `gpt-4.1` |
+| Telephony (US number, Twilio) | $0.015 / min | Standard outbound calling |
+| Knowledge base usage | $0.005 / min | Native Retell KB is attached to this agent |
+| **Total per minute** | **$0.160 / min** | **= ₹15.41 / min** |
 
-Additional Retell line items:
-- Branded Caller ID (if desired): **+₹19,200/month**
-- New accounts get ₹960 in free credit (~67–90 minutes) — not meaningful at production volume.
+Optional add-ons **not currently enabled** (would increase this rate if turned on):
 
-### Fixed infrastructure
+| Add-on | Extra cost | Currently used? |
+|---|---|---|
+| Advanced denoising | +$0.005 / min (~₹0.48) | No |
+| Safety guardrails | +$0.005 / min (~₹0.48) | No |
+| PII removal | +$0.01 / min (~₹0.96) | No |
+| AI quality assurance | first 100 min free, then $0.10/min (~₹9.63) | No |
+
+### Monthly call volume estimate
+
+| Monthly call volume | Estimated minutes | Retell cost/month (₹15.41/min) |
+|---|---|---|
+| Light (50 calls/day, ~2 min avg) | ~3,000 min | **₹46,224** |
+| Moderate (150 calls/day, ~2 min avg) | ~9,000 min | **₹1,38,672** |
+| Heavy (400 calls/day, ~2 min avg) | ~24,000 min | **₹3,69,792** |
+
+### Retell monthly subscription items (separate from per-minute usage)
+
+| Item | Retell's rate | Cost for this project |
+|---|---|---|
+| Phone number (standard) | $2.00/month | **~₹193/month** |
+| Verified phone number (optional upgrade) | $10.00/month + one-time $10 | ~₹963/month + one-time ~₹963 |
+| Concurrency (20 free, then $8/each/month) | Free up to 20 | **₹0** — this project runs at 15 concurrent, within the free tier |
+| Knowledge base (10 free, then $8/each/month) | Free up to 10 | **₹0** — this project uses 1 KB, within the free tier |
+| New-account free credit | $10 one-time (~67–90 min) | Negligible at production volume |
+
+### Fixed infrastructure (non-Retell)
 
 | Item | Typical monthly cost |
 |---|---|
 | AWS EC2 (backend — small instance, e.g. `t3.small`) | ₹1,440 – ₹2,400 |
 | AWS RDS PostgreSQL (small instance, e.g. `db.t3.micro`) | ₹1,440 – ₹2,880 |
 | Domain + SSL (if not already owned) | ~₹100 – ₹200 (amortized) |
-| Retell phone number rental | ~₹200 – ₹960 |
 
-**Fixed infra subtotal: ~₹3,200 – ₹6,400/month**
+**Fixed infra subtotal: ~₹3,000 – ₹5,500/month**
 
 ### Free / near-zero cost
 
@@ -54,18 +69,19 @@ Additional Retell line items:
 |---|---|
 | Google Calendar API (service account) | Free at this volume |
 | Gmail SMTP | Free at this volume (watch Gmail's ~500/day sending limit at high volume — consider AWS SES if exceeded) |
-| Website scraping (knowledge base) | Free (self-hosted) |
+| Website scraping (knowledge base source) | Free (self-hosted) |
 
 ### Total estimated monthly cost
 
-| Volume tier | Retell (calling) | Fixed infra | **Total/month** |
-|---|---|---|---|
-| Light | ₹57,600 – ₹72,000 | ₹3,200 – ₹6,400 | **~₹61,000 – ₹78,000** |
-| Moderate | ₹1,72,800 – ₹2,16,000 | ₹3,200 – ₹6,400 | **~₹1.76L – ₹2.22L** |
-| Heavy | ₹4,60,800 – ₹5,76,000 | ₹3,200 – ₹6,400 | **~₹4.64L – ₹5.82L** |
+| Volume tier | Retell calling | Retell phone number | Fixed infra | **Total/month** |
+|---|---|---|---|---|
+| Light | ₹46,224 | ₹193 | ₹3,000 – ₹5,500 | **~₹49,400 – ₹51,900** |
+| Moderate | ₹1,38,672 | ₹193 | ₹3,000 – ₹5,500 | **~₹1.42L – ₹1.44L** |
+| Heavy | ₹3,69,792 | ₹193 | ₹3,000 – ₹5,500 | **~₹3.73L – ₹3.75L** |
 
-> Calling cost dominates the bill at any real volume — infrastructure is a
-> small, fairly fixed line item by comparison. The single biggest lever for
+> Calling cost (voice + LLM + telephony + knowledge base, all per-minute)
+> dominates the bill at any real volume — infrastructure and subscriptions are
+> small, fixed line items by comparison. The single biggest lever for
 > reducing cost is call volume and average call duration, not the hosting choice.
 
 ---
@@ -110,22 +126,26 @@ determine on your behalf.
 
 ## Assumptions & Caveats
 
+- **The Retell per-minute figures above are pulled directly from Retell's own
+  official pricing page** (retellai.com/pricing), itemized exactly for the
+  components this project actually uses (ElevenLabs voice, GPT-4.1, native
+  knowledge base) — not a rough or blended third-party estimate.
 - Retell pricing is in USD; converted at **₹96.3/USD (22 July 2026)** — a
   materially different exchange rate later should be re-applied to these figures.
 - Retell's own pricing changes over time — reverify current rates at
-  [retellai.com/pricing](https://www.retellai.com) before quoting a client,
-  since AI-voice pricing has moved quickly year over year.
-- The development estimate is a **market-rate reference**, not a fixed quote
-  — you know your own rate, relationship with this client, and margin
-  targets better than any generic estimate can.
+  [retellai.com/pricing](https://www.retellai.com/pricing) before quoting a
+  client, since AI-voice pricing has moved quickly year over year (their rate
+  card has changed noticeably even within 2026).
+- The development estimate in Part 2 is a **market-rate reference**, not a
+  fixed quote — you know your own rate, relationship with this client, and
+  margin targets better than any generic estimate can.
 - Costs above assume moderate English/Hindi/Tamil call volume similar to what
   this project has been tested against; a materially different usage
   pattern (e.g., much longer average calls) should be re-modeled.
 
 ---
 
-*Sources: Retell AI 2026 pricing data gathered via current market research
-([retellai.com/blog](https://www.retellai.com/blog/ai-voice-agent-pricing-full-cost-breakdown-platform-comparison-roi-analysis),
-[cekura.ai](https://www.cekura.ai/blogs/retell-ai-pricing-per-minute)); USD/INR
-rate via live market data (22 July 2026); AWS/Google/SMTP costs based on
-standard published rates for comparable instance sizes.*
+*Sources: Retell AI's official pricing page ([retellai.com/pricing](https://www.retellai.com/pricing)),
+fetched directly on 22 July 2026, for all per-minute and subscription figures;
+USD/INR rate via live market data (22 July 2026); AWS/Google/SMTP costs based
+on standard published rates for comparable instance sizes.*
