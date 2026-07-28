@@ -238,7 +238,19 @@ def process_webhook_payload(payload: dict):
                     print(f"[WEBHOOK] Max retry attempts reached for {contact_id}, marking as Failed")
 
             # ── Smart Callback Detection ──────────────────────────────────
-            if outcome == "Answered" or (summary and has_callback_intent(summary)):
+            # This is a fallback safety net for calls where the caller asked
+            # to be called back but the agent's schedule_callback tool call
+            # didn't go through — NOT meant to run on calls the agent already
+            # resolved definitively. Without this guard, a successful virtual
+            # meeting booking (whose summary/transcript naturally contains
+            # "meeting" — one of CALLBACK_KEYWORDS) got misread as a callback
+            # request, causing an actual outbound phone call to be scheduled
+            # at the same time as the booked meeting (confirmed in production).
+            _no_followup_outcomes = ("appointment_booked", "not_interested", "do_not_call", "wrong_number")
+            _agent_resolved_definitively = mark_outcome_recorded and _existing_attempt and any(
+                f"Agent Outcome: {o}" in _existing_attempt.summary for o in _no_followup_outcomes
+            )
+            if not _agent_resolved_definitively and (outcome == "Answered" or (summary and has_callback_intent(summary))):
                 combined_text = f"{summary}\n{transcript}"
                 if has_callback_intent(combined_text):
                     phrase = extract_callback_phrase(summary, transcript)
