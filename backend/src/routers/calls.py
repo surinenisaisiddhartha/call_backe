@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from src.db import get_db, Contact, Settings, UploadBatch
 from src.routers.auth import get_current_user
+from src.school_agent import get_school_agent_id
 from src.dialer import dialer
 
 router = APIRouter(prefix="/api/calls", tags=["Calling"])
@@ -76,18 +77,23 @@ async def start_campaign(
     batch_id = payload.get("batchId")
     contact_ids = payload.get("contactIds")
 
-    # Determine eligible contacts
+    # Determine eligible contacts (always scoped to the caller's school so a
+    # school can never start a campaign over another tenant's contacts)
+    school_id = current_user.get("school_id")
     if batch_id:
-        contacts_to_call = db.query(Contact).filter(
+        q = db.query(Contact).filter(
             Contact.batch_id == batch_id,
             Contact.status.in_(["Pending", "NeedsReschedule", "Failed"])
-        ).all()
+        )
     elif contact_ids and isinstance(contact_ids, list):
-        contacts_to_call = db.query(Contact).filter(Contact.id.in_(contact_ids)).all()
+        q = db.query(Contact).filter(Contact.id.in_(contact_ids))
     else:
-        contacts_to_call = db.query(Contact).filter(
+        q = db.query(Contact).filter(
             Contact.status.in_(["Pending", "NeedsReschedule", "Failed"])
-        ).all()
+        )
+    if school_id:
+        q = q.filter(Contact.school_id == school_id)
+    contacts_to_call = q.all()
 
     if not contacts_to_call:
         raise HTTPException(status_code=400, detail="No eligible contacts found to call")
@@ -130,6 +136,8 @@ async def get_campaign_status(
     from src.db import UploadBatch
     live = dialer.get_status(batch_id)
     batch = db.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
+    if current_user.get("school_id") and batch and batch.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Campaign not found")
 
     from sqlalchemy import func
     from src.db import Contact
@@ -156,6 +164,8 @@ async def call_now(
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     if contact.status == "Calling":
         raise HTTPException(status_code=409, detail="This contact is already on an active call.")
@@ -170,9 +180,11 @@ async def call_now(
     # permanently stuck showing "Calling" in the dashboard even though no
     # call was ever actually placed — confirmed happening in production.
     try:
-        # Only use local agent with static prompt
+        # Use the contact's own school's dedicated agent (its prompt carries
+        # that school's name/location); fall back to the shared local agent for
+        # contacts with no school (pre-multitenancy rows).
         from src.agent_manager import get_or_create_local_agent
-        agent_id = get_or_create_local_agent()
+        agent_id = get_school_agent_id(db, contact) or get_or_create_local_agent()
 
         from_number = os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
         from datetime import timezone, timedelta

@@ -27,6 +27,9 @@ api.interceptors.response.use((response) => {
   if (error.response && error.response.status === 401) {
     console.warn('[API] Unauthorized access detected, clearing token.');
     localStorage.removeItem('token');
+    // Clear the cached user too — otherwise the next login briefly renders
+    // the previous account's school name and nav from stale localStorage.
+    localStorage.removeItem('user');
     window.location.reload();
   }
   return Promise.reject(error);

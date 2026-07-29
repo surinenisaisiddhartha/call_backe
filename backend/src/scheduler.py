@@ -151,10 +151,10 @@ def _fire_pending_callbacks():
         from_number = _get_setting("retell_phone_number") or os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
         reschedule_link = _get_setting("cal_com_event_link") or ""
 
-        # Try to get agent ID
-        agent_id = get_or_create_local_agent()
-        if agent_id and agent_id.startswith("agent_mock"):
-            agent_id = None
+        # Default (shared) agent — per-contact school agents override this
+        default_agent_id = get_or_create_local_agent()
+        if default_agent_id and default_agent_id.startswith("agent_mock"):
+            default_agent_id = None
 
         is_mock = not api_key or "mock" in api_key or api_key == "YOUR_RETELL_API_KEY"
 
@@ -224,6 +224,9 @@ def _fire_pending_callbacks():
                     "to_number": contact.phone_number,
                     "retell_llm_dynamic_variables": dynamic_vars
                 }
+                # Dial with the contact's own school's agent when it has one
+                from src.school_agent import get_school_agent_id
+                agent_id = get_school_agent_id(db, contact) or default_agent_id
                 if agent_id:
                     task_data["override_agent_id"] = agent_id
 

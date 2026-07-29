@@ -3,12 +3,27 @@ import csv
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback
+from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School
 from src.routers.auth import get_current_user
 import openpyxl
 import phonenumbers
 
 router = APIRouter(prefix="/api/contacts", tags=["Contacts"])
+
+
+def resolve_school_id(db: Session, current_user: dict, requested_school_id: str = None) -> str | None:
+    """
+    Tenant scoping: school users are ALWAYS pinned to their own school —
+    whatever they request. Platform admins may target a specific school, and
+    default to the original single-tenant school so pre-multitenancy behavior
+    is unchanged for them.
+    """
+    if current_user.get("school_id"):
+        return current_user["school_id"]
+    if requested_school_id:
+        return requested_school_id
+    default = db.query(School).filter(School.slug == "shri-ram-academy").first()
+    return default.id if default else None
 
 
 def _normalize_phone(raw_phone) -> str | None:
@@ -153,8 +168,10 @@ async def upload_excel(
         if not contacts:
             raise HTTPException(status_code=400, detail="No valid rows found in file")
 
-        # Insert upload batch record
+        # Insert upload batch record, pinned to the uploader's school
+        school_id = resolve_school_id(db, current_user)
         batch = UploadBatch(
+            school_id=school_id,
             file_name=file.filename,
             total_contacts=len(contacts),
             uploaded_by=current_user.get("email", "admin")
@@ -168,6 +185,7 @@ async def upload_excel(
         for c in contacts:
             try:
                 new_contact = Contact(
+                    school_id=school_id,
                     batch_id=batch.id,
                     name=c["name"],
                     phone_number=c["phone"],
@@ -199,7 +217,10 @@ async def upload_excel(
 @router.get("/batches")
 def get_batches(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     from sqlalchemy import func
-    batches = db.query(UploadBatch).order_by(UploadBatch.uploaded_at.desc()).all()
+    query = db.query(UploadBatch)
+    if current_user.get("school_id"):
+        query = query.filter(UploadBatch.school_id == current_user["school_id"])
+    batches = query.order_by(UploadBatch.uploaded_at.desc()).all()
     result = []
     for b in batches:
         # Per-campaign status counts
@@ -235,6 +256,8 @@ def delete_batch(
     batch = db.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    if current_user.get("school_id") and batch.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Campaign not found")
     
     # Due to cascade='all, delete-orphan' on UploadBatch.contacts, this will delete contacts as well.
     db.delete(batch)
@@ -250,6 +273,8 @@ def get_batch_stats(
     from sqlalchemy import func
     batch = db.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
     if not batch:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if current_user.get("school_id") and batch.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     status_counts = db.query(Contact.status, func.count(Contact.id)).filter(
@@ -282,7 +307,10 @@ def get_batch_history(
     current_user: dict = Depends(get_current_user)
 ):
     """Return all call attempts for contacts in this campaign."""
-    contact_ids = [c.id for c in db.query(Contact.id).filter(Contact.batch_id == batch_id).all()]
+    contact_q = db.query(Contact.id).filter(Contact.batch_id == batch_id)
+    if current_user.get("school_id"):
+        contact_q = contact_q.filter(Contact.school_id == current_user["school_id"])
+    contact_ids = [c.id for c in contact_q.all()]
     if not contact_ids:
         return []
     attempts = db.query(CallAttempt, Contact).join(
@@ -322,6 +350,8 @@ def get_all_call_history(
     query = db.query(CallAttempt, Contact).join(
         Contact, CallAttempt.contact_id == Contact.id
     )
+    if current_user.get("school_id"):
+        query = query.filter(Contact.school_id == current_user["school_id"])
     if status:
         query = query.filter(CallAttempt.outcome == status)
     if batch_id:
@@ -364,6 +394,8 @@ def get_contacts(
     current_user: dict = Depends(get_current_user)
 ):
     query = db.query(Contact)
+    if current_user.get("school_id"):
+        query = query.filter(Contact.school_id == current_user["school_id"])
     if status:
         query = query.filter(Contact.status == status)
     if batchId:
@@ -386,6 +418,8 @@ def get_contact_history(
     contact = db.query(Contact).filter(Contact.id == id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     attempts = db.query(CallAttempt).filter(CallAttempt.contact_id == id).order_by(CallAttempt.started_at.desc()).all()
     schedules = db.query(ScheduledCallback).filter(ScheduledCallback.contact_id == id).order_by(ScheduledCallback.scheduled_for.desc()).all()
@@ -404,6 +438,8 @@ def delete_contact(
 ):
     contact = db.query(Contact).filter(Contact.id == id).first()
     if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Contact not found")
     
     db.delete(contact)

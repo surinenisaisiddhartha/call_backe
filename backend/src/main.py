@@ -16,6 +16,7 @@ from src.routers.agent import router as agent_router
 from src.routers.knowledge import router as knowledge_router
 from src.routers.tools import router as tools_router
 from src.routers.appointments import router as appointments_router
+from src.routers.schools import router as schools_router
 
 app = FastAPI(title="Aegis Calling API", version="1.0.0")
 
@@ -39,6 +40,7 @@ app.include_router(agent_router)
 app.include_router(knowledge_router)
 app.include_router(tools_router)
 app.include_router(appointments_router)
+app.include_router(schools_router)
 
 
 @app.get("/health")

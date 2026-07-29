@@ -198,7 +198,11 @@ class CampaignDialer:
 
             api_key = _get_retell_api_key(db)
             from_number = _get_from_number(db)
-            agent_id = _get_agent_id(db)
+            # Dial with the contact's own school's agent so each school's
+            # calls speak its own name/location; fall back to the shared
+            # default agent for contacts with no school.
+            from src.school_agent import get_school_agent_id
+            agent_id = get_school_agent_id(db, contact) or _get_agent_id(db)
 
             from datetime import timezone, timedelta
             dynamic_vars = {

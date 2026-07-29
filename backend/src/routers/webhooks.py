@@ -486,9 +486,11 @@ def trigger_callback_call(contact_id: str):
         api_key = (ak.value if ak else None) or os.getenv("RETELL_API_KEY", "")
         from_number = (fn.value if fn else None) or os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
 
-        # Only use local agent with static prompt
+        # Dial with the contact's own school's agent when it has one, so the
+        # callback speaks that school's name; else the shared default agent.
         from src.agent_manager import get_or_create_local_agent
-        agent_id = get_or_create_local_agent()
+        from src.school_agent import get_school_agent_id
+        agent_id = get_school_agent_id(db, contact) or get_or_create_local_agent()
 
         from datetime import timezone, timedelta
         dynamic_vars = {

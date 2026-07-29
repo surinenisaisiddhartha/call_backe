@@ -55,6 +55,8 @@ async def schedule_callback(
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Contact not found")
 
     # 1. Create Google Calendar Event
     calendar_event_id = None
@@ -144,6 +146,9 @@ def get_schedules(
 ):
     """Return scheduled callbacks. Defaults to Scheduled + Triggered. Pass ?status=Scheduled to filter."""
     query = db.query(ScheduledCallback)
+    if current_user.get("school_id"):
+        query = query.join(Contact, ScheduledCallback.contact_id == Contact.id).filter(
+            Contact.school_id == current_user["school_id"])
     if status:
         query = query.filter(ScheduledCallback.status == status)
     else:
@@ -190,6 +195,8 @@ async def reschedule_callback(
         raise HTTPException(status_code=404, detail="Scheduled callback not found")
 
     contact = callback.contact
+    if current_user.get("school_id") and (not contact or contact.school_id != current_user["school_id"]):
+        raise HTTPException(status_code=404, detail="Scheduled callback not found")
 
     # Update call type if provided
     if call_type:
@@ -245,6 +252,8 @@ def cancel_callback(
 ):
     callback = db.query(ScheduledCallback).filter(ScheduledCallback.id == id).first()
     if not callback:
+        raise HTTPException(status_code=404, detail="Scheduled callback not found")
+    if current_user.get("school_id") and (not callback.contact or callback.contact.school_id != current_user["school_id"]):
         raise HTTPException(status_code=404, detail="Scheduled callback not found")
 
     # Delete Calendar Event

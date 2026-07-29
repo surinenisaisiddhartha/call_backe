@@ -12,6 +12,16 @@ from src.routers.auth import get_current_user
 router = APIRouter(prefix="/api/appointments", tags=["Appointments"])
 
 
+def _guard_school(db: Session, appointment: Appointment, current_user: dict):
+    """404 for appointments outside the school user's tenant."""
+    sid = current_user.get("school_id")
+    if not sid:
+        return
+    contact = db.query(Contact).filter(Contact.id == appointment.contact_id).first()
+    if not contact or contact.school_id != sid:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+
 class AppointmentCreate(BaseModel):
     contact_id: str
     scheduled_for: str  # ISO datetime
@@ -33,6 +43,9 @@ def get_appointments(
 ):
     """Get all appointments with optional filters."""
     query = db.query(Appointment)
+    if current_user.get("school_id"):
+        query = query.join(Contact, Appointment.contact_id == Contact.id).filter(
+            Contact.school_id == current_user["school_id"])
     
     if status:
         query = query.filter(Appointment.status == status)
@@ -73,6 +86,7 @@ def get_appointment(
     appointment = db.query(Appointment).filter(Appointment.id == id).first()
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
+    _guard_school(db, appointment, current_user)
     
     contact = db.query(Contact).filter(Contact.id == appointment.contact_id).first()
     
@@ -105,9 +119,11 @@ def create_appointment(
     from src.db import Settings
     from src.services.google_calendar import create_event
 
-    # Verify contact exists
+    # Verify contact exists (and belongs to the caller's school)
     contact = db.query(Contact).filter(Contact.id == appointment.contact_id).first()
     if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Contact not found")
     
     # Parse datetime
@@ -196,6 +212,7 @@ def update_appointment(
     appointment = db.query(Appointment).filter(Appointment.id == id).first()
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
+    _guard_school(db, appointment, current_user)
     
     contact = db.query(Contact).filter(Contact.id == appointment.contact_id).first()
     
@@ -292,6 +309,7 @@ def delete_appointment(
     appointment = db.query(Appointment).filter(Appointment.id == id).first()
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
+    _guard_school(db, appointment, current_user)
     
     old_event_id = appointment.google_calendar_event_id
     

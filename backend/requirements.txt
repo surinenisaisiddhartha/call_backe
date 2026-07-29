@@ -17,3 +17,4 @@ dateparser==1.2.0
 retell-sdk==5.53.0
 beautifulsoup4==4.12.3
 phonenumbers==8.13.42
+boto3==1.34.144

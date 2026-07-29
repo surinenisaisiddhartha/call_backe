@@ -79,9 +79,34 @@ class Settings(Base):
     value = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class School(Base):
+    """
+    One row per onboarded school (tenant). All campaign data is scoped to a
+    school via contacts.school_id / upload_batches.school_id — appointments,
+    callbacks, and call attempts inherit their school through contact_id, so
+    they don't need their own column.
+    Each school gets its OWN Retell agent/LLM (provisioned at onboarding from
+    the shared prompt template with the school's name/location substituted);
+    the ids live here, not in the global settings table.
+    """
+    __tablename__ = "schools"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)                 # e.g. "The Shri Ram Academy"
+    slug = Column(String(100), nullable=False, unique=True)    # e.g. "shri-ram-academy"
+    location = Column(String(255), nullable=True)              # e.g. "Gachibowli, Hyderabad"
+    contact_phone = Column(String(50), nullable=True)          # spoken in voicemail/closing lines
+    website = Column(String(500), nullable=True)               # knowledge-base scrape source
+    admin_email = Column(String(255), nullable=True)           # the school's Cognito login email
+    retell_agent_id = Column(String(255), nullable=True)       # this school's dedicated agent
+    retell_llm_id = Column(String(255), nullable=True)
+    knowledge_base_id = Column(String(255), nullable=True)     # optional per-school Retell KB
+    status = Column(String(50), default="active")              # active, suspended
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class UploadBatch(Base):
     __tablename__ = "upload_batches"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
     file_name = Column(String(255), nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     total_contacts = Column(Integer, nullable=False)
@@ -94,6 +119,7 @@ class UploadBatch(Base):
 class Contact(Base):
     __tablename__ = "contacts"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
     batch_id = Column(String(36), ForeignKey("upload_batches.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     phone_number = Column(String(255), nullable=False)
@@ -194,6 +220,54 @@ def init_db():
             print("[DB] Self-healing migration: adding virtual_meeting_link to appointments table")
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE appointments ADD COLUMN virtual_meeting_link TEXT;"))
+                conn.commit()
+
+        # ── Multi-tenancy: school_id on contacts + upload_batches, and a ──
+        # ── default school that adopts all pre-existing (single-tenant) data ──
+        contact_columns = [c['name'] for c in inspector.get_columns('contacts')]
+        if 'school_id' not in contact_columns:
+            print("[DB] Self-healing migration: adding school_id to contacts table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE contacts ADD COLUMN school_id VARCHAR(36);"))
+                conn.commit()
+
+        batch_columns = [c['name'] for c in inspector.get_columns('upload_batches')]
+        if 'school_id' not in batch_columns:
+            print("[DB] Self-healing migration: adding school_id to upload_batches table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE upload_batches ADD COLUMN school_id VARCHAR(36);"))
+                conn.commit()
+
+        # Backfill: every row without a school belongs to the original
+        # single-tenant deployment's school. Create it once (fixed slug) and
+        # adopt orphaned rows into it, carrying over the currently-live
+        # shared Retell agent ids from settings so its calls keep working.
+        with engine.connect() as conn:
+            default_school = conn.execute(text(
+                "SELECT id FROM schools WHERE slug = 'shri-ram-academy'"
+            )).fetchone()
+            if not default_school:
+                orphan_contacts = conn.execute(text(
+                    "SELECT count(*) FROM contacts WHERE school_id IS NULL"
+                )).scalar()
+                if orphan_contacts and orphan_contacts > 0:
+                    default_id = str(uuid.uuid4())
+                    agent_row = conn.execute(text("SELECT value FROM settings WHERE key = 'local_agent_id'")).fetchone()
+                    llm_row = conn.execute(text("SELECT value FROM settings WHERE key = 'retell_llm_id'")).fetchone()
+                    conn.execute(text(
+                        "INSERT INTO schools (id, name, slug, location, contact_phone, status, retell_agent_id, retell_llm_id, created_at) "
+                        "VALUES (:id, 'The Shri Ram Academy', 'shri-ram-academy', 'Gachibowli, Hyderabad', '+91 7569891111', 'active', :agent, :llm, :now)"
+                    ), {"id": default_id, "agent": agent_row[0] if agent_row else None,
+                        "llm": llm_row[0] if llm_row else None, "now": datetime.utcnow()})
+                    conn.execute(text("UPDATE contacts SET school_id = :sid WHERE school_id IS NULL"), {"sid": default_id})
+                    conn.execute(text("UPDATE upload_batches SET school_id = :sid WHERE school_id IS NULL"), {"sid": default_id})
+                    conn.commit()
+                    print(f"[DB] Migration: created default school 'The Shri Ram Academy' ({default_id}) and adopted {orphan_contacts} existing contacts")
+            else:
+                # School exists — still adopt any strays (e.g. rows created
+                # by an old app instance mid-deploy).
+                conn.execute(text("UPDATE contacts SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
+                conn.execute(text("UPDATE upload_batches SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
                 conn.commit()
     except Exception as e:
         print(f"[DB] Migration warning: {e}")
