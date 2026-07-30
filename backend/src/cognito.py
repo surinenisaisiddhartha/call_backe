@@ -160,9 +160,11 @@ def generate_temp_password(length: int = 12) -> str:
 def create_school_user(email: str, school_id: str) -> str:
     """
     Creates the school's Cognito login bound to its tenant via
-    custom:school_id. Returns the temporary password (shown once to the
-    platform admin — Cognito never sends it anywhere itself because
-    MessageAction=SUPPRESS).
+    custom:school_id. Cognito emails the temporary password directly to the
+    school (its default "invitation" email — no MessageAction=SUPPRESS), so
+    the caller doesn't need to relay it manually. The password is still
+    returned so the admin UI can show it too, as a fallback in case the
+    email doesn't land (spam filters, Cognito's own send-rate limits, etc).
     """
     client = _client()
     temp_password = generate_temp_password()
@@ -170,7 +172,6 @@ def create_school_user(email: str, school_id: str) -> str:
         UserPoolId=COGNITO_USER_POOL_ID,
         Username=email,
         TemporaryPassword=temp_password,
-        MessageAction="SUPPRESS",
         UserAttributes=[
             {"Name": "email", "Value": email},
             {"Name": "email_verified", "Value": "true"},
