@@ -1,9 +1,11 @@
 # AWS Cognito Setup — Multi-School Logins
 
-The app runs **without** Cognito (the existing `ADMIN_EMAIL` / `ADMIN_PASSWORD`
-login keeps working as the platform-admin account). Cognito only becomes active
-once the four env vars at the bottom of this page are set — that's what gives
-each onboarded school its own login.
+**Cognito is the only login path.** The old hardcoded `ADMIN_EMAIL`/
+`ADMIN_PASSWORD` fallback has been removed — every login, including the
+platform admin's, is a real Cognito account now. Until the env vars at the
+bottom of this page are set, **login is unavailable entirely** (the API
+returns 503), so this setup is required before the app can be used, not
+optional.
 
 ---
 
@@ -24,9 +26,9 @@ AWS Console → **Cognito** → **User pools** → *Create user pool*
 
 | Setting | Value |
 |---|---|
-| App type | **Public client** |
+| App type | **Public client** (SPA) or **Confidential client** (Traditional web app) — both work |
 | App client name | `call-manager-backend` |
-| Client secret | **Don't generate a client secret** ← important, the backend calls Cognito without one |
+| Client secret | Public client: none generated, none needed. Confidential client: Cognito generates one — copy it into `COGNITO_CLIENT_SECRET` below (the backend computes the required `SECRET_HASH` automatically). |
 
 Create the pool.
 
@@ -69,14 +71,32 @@ Then let the app write it: **App clients** → `call-manager-backend` →
 *Attribute read and write permissions* → ensure `custom:school_id` is
 **readable** (write permission isn't needed; the backend sets it via the admin API).
 
-## 4. (Optional) Platform-admin group
-
-Only if you want additional platform admins managed in Cognito rather than the
-env-var account.
+## 4. Platform-admin group (required — this is the only way to get admin access)
 
 User pool → **Groups** → *Create group* → name it exactly **`platform-admin`**.
 Any user in this group gets full cross-school access; everyone else is scoped
 to their `custom:school_id`.
+
+Create at least one platform admin now, or the dashboard has no way in:
+
+```bash
+aws cognito-idp admin-create-user \
+  --user-pool-id ap-south-2_Amkiyam5r \
+  --username your-real-admin@yourcompany.com \
+  --user-attributes Name=email,Value=your-real-admin@yourcompany.com Name=email_verified,Value=true \
+  --message-action SUPPRESS \
+  --temporary-password "SomeTempPass1!"
+
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id ap-south-2_Amkiyam5r \
+  --username your-real-admin@yourcompany.com \
+  --group-name platform-admin
+```
+
+(Or via console: **Users → Create user**, then open that user → **Group
+memberships → Add to group** → `platform-admin`.) The IAM identity running
+these needs `cognito-idp:AdminCreateUser` and `cognito-idp:AdminAddUserToGroup`
+on the pool — see the policy below, which already includes both.
 
 ## 5. IAM credentials for the backend
 
@@ -92,12 +112,19 @@ replace the ARN with your pool's:
     "Action": [
       "cognito-idp:AdminCreateUser",
       "cognito-idp:AdminDeleteUser",
-      "cognito-idp:AdminGetUser"
+      "cognito-idp:AdminGetUser",
+      "cognito-idp:CreateGroup",
+      "cognito-idp:AdminAddUserToGroup",
+      "cognito-idp:AdminListGroupsForUser"
     ],
     "Resource": "arn:aws:cognito-idp:<region>:<account-id>:userpool/<pool-id>"
   }]
 }
 ```
+
+The `CreateGroup`/`AdminAddUserToGroup`/`AdminListGroupsForUser` actions are
+only needed once, to set up the `platform-admin` group above — the app itself
+never calls them at runtime.
 
 `InitiateAuth` and `RespondToAuthChallenge` (the login calls) are public API
 actions and need no IAM permission.
@@ -111,14 +138,21 @@ then redeploy:
 COGNITO_REGION=ap-south-1
 COGNITO_USER_POOL_ID=ap-south-1_xxxxxxxxx
 COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+COGNITO_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
 ```
 
 - **Pool ID**: User pool → *Overview* → "User pool ID"
 - **Client ID**: User pool → *App clients* → "Client ID"
+- **Client secret**: only if you created a confidential client — App client
+  page → "Show client secret". Leave `COGNITO_CLIENT_SECRET` unset entirely
+  for a public client.
 - Skip the two `AWS_*` vars if the host already has an instance role with the
   policy above.
+
+Login is fully unavailable (503) until `COGNITO_REGION`, `COGNITO_USER_POOL_ID`
+and `COGNITO_CLIENT_ID` are all set — there's no fallback anymore.
 
 Until all three `COGNITO_*` vars are present, the app logs no error — it simply
 reports "Cognito is not configured" when you try to onboard a school with a

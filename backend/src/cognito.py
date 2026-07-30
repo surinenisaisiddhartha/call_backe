@@ -24,6 +24,10 @@ import urllib.request
 COGNITO_REGION = os.getenv("COGNITO_REGION", "")
 COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "")
 COGNITO_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
+# Only set when the app client is a CONFIDENTIAL client (Cognito's "Traditional
+# web application" type). Cognito then requires a SECRET_HASH on the auth calls.
+# Left empty for a public client (SPA type) — both are supported.
+COGNITO_CLIENT_SECRET = os.getenv("COGNITO_CLIENT_SECRET", "")
 
 _jwks_cache = {"keys": None, "fetched_at": 0}
 JWKS_TTL_SECONDS = 3600
@@ -36,6 +40,24 @@ def cognito_enabled() -> bool:
 def _client():
     import boto3
     return boto3.client("cognito-idp", region_name=COGNITO_REGION)
+
+
+def _secret_hash(username: str) -> str | None:
+    """
+    Cognito's SECRET_HASH for a confidential app client:
+    Base64(HMAC-SHA256(username + client_id, key=client_secret)).
+    Returns None for a public client (no secret configured), in which case the
+    parameter must be omitted entirely rather than sent empty.
+    """
+    if not COGNITO_CLIENT_SECRET:
+        return None
+    import base64, hashlib, hmac
+    digest = hmac.new(
+        COGNITO_CLIENT_SECRET.encode("utf-8"),
+        (username + COGNITO_CLIENT_ID).encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.b64encode(digest).decode()
 
 
 def _issuer() -> str:
@@ -90,10 +112,14 @@ def login(email: str, password: str) -> dict:
     Raises botocore ClientError (NotAuthorizedException etc.) on bad creds.
     """
     client = _client()
+    auth_params = {"USERNAME": email, "PASSWORD": password}
+    sh = _secret_hash(email)
+    if sh:
+        auth_params["SECRET_HASH"] = sh
     resp = client.initiate_auth(
         ClientId=COGNITO_CLIENT_ID,
         AuthFlow="USER_PASSWORD_AUTH",
-        AuthParameters={"USERNAME": email, "PASSWORD": password},
+        AuthParameters=auth_params,
     )
     if resp.get("ChallengeName") == "NEW_PASSWORD_REQUIRED":
         return {"challenge": "NEW_PASSWORD_REQUIRED", "session": resp["Session"]}
@@ -104,11 +130,15 @@ def login(email: str, password: str) -> dict:
 def respond_new_password(email: str, new_password: str, session: str) -> dict:
     """Completes the NEW_PASSWORD_REQUIRED challenge from a first login."""
     client = _client()
+    challenge_responses = {"USERNAME": email, "NEW_PASSWORD": new_password}
+    sh = _secret_hash(email)
+    if sh:
+        challenge_responses["SECRET_HASH"] = sh
     resp = client.respond_to_auth_challenge(
         ClientId=COGNITO_CLIENT_ID,
         ChallengeName="NEW_PASSWORD_REQUIRED",
         Session=session,
-        ChallengeResponses={"USERNAME": email, "NEW_PASSWORD": new_password},
+        ChallengeResponses=challenge_responses,
     )
     id_token = resp["AuthenticationResult"]["IdToken"]
     return {"id_token": id_token, "claims": verify_id_token(id_token)}

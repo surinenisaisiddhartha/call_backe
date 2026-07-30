@@ -16,18 +16,8 @@ JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_DEMO_JWT_SECRET)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
 
-# Demo credentials are used as fallbacks so the app keeps working out of the
-# box, but should be overridden via env vars (or Settings, once wired up)
-# for any real deployment. Same applies to JWT_SECRET above.
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@callingagent.com")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "password123")
-STAFF_EMAIL = os.getenv("STAFF_EMAIL", "staff@callingagent.com")
-STAFF_PASSWORD = os.getenv("STAFF_PASSWORD", "password123")
-
 if JWT_SECRET == DEFAULT_DEMO_JWT_SECRET:
-    print("[AUTH] WARNING: JWT_SECRET is still the default demo value. Set a real random JWT_SECRET before exposing this app publicly.")
-if ADMIN_PASSWORD == "password123" or STAFF_PASSWORD == "password123":
-    print("[AUTH] WARNING: using default demo login credentials. Set ADMIN_EMAIL/ADMIN_PASSWORD and STAFF_EMAIL/STAFF_PASSWORD env vars before exposing this app publicly.")
+    print("[AUTH] WARNING: JWT_SECRET is still the default demo value. Set a real random JWT_SECRET — it still signs the short-lived 'view as school' impersonation tokens minted from the Schools admin page.")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
 
@@ -43,10 +33,13 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
     """
-    Accepts EITHER a legacy local JWT (demo/env-var admin+staff logins) OR a
-    Cognito ID token (school users / platform admins), so both auth systems
-    coexist: Cognito activates purely via env vars, and nothing breaks for
-    deployments that haven't configured it yet.
+    All real logins are Cognito ID tokens now — school users and platform
+    admins (via the 'platform-admin' Cognito group) alike. The only thing
+    still locally signed with JWT_SECRET is the short-lived 'view as school'
+    token an already-authenticated admin mints from the Schools page
+    (src/routers/schools.py::view_as_school) to preview a tenant's dashboard;
+    nothing mints a local admin token anymore, so decoding one here can never
+    grant admin access on its own.
     Returns {"email", "role": "admin"|"school"|"staff", "school_id"|None}.
     """
     if not token:
@@ -55,15 +48,20 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
             detail="Access token missing",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # 1) Legacy local JWT
+    # 1) Local JWT — only ever a "view as school" impersonation token
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
         email: str = payload.get("email")
         if email:
-            return {"email": email, "role": payload.get("role", "admin"), "school_id": None}
+            return {
+                "email": email,
+                "role": payload.get("role", "school"),
+                "school_id": payload.get("school_id"),
+                "impersonated": payload.get("impersonated", False),
+            }
     except JWTError:
         pass
-    # 2) Cognito ID token
+    # 2) Cognito ID token — the real login path
     from src import cognito
     if cognito.cognito_enabled():
         try:
@@ -101,27 +99,15 @@ def login(payload: dict, db: Session = Depends(get_db)):
     email = payload.get("email")
     password = payload.get("password")
 
-    # Legacy env-var/demo logins always work (platform admin fallback), so a
-    # deployment without Cognito configured — or with Cognito down — is never
-    # locked out of its own dashboard.
-    if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": email, "email": email, "role": "admin"},
-            expires_delta=access_token_expires
-        )
-        return {"token": access_token, "user": {"email": email, "role": "admin", "school_id": None, "school_name": None}}
-    elif email == STAFF_EMAIL and password == STAFF_PASSWORD:
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": email, "email": email, "role": "staff"},
-            expires_delta=access_token_expires
-        )
-        return {"token": access_token, "user": {"email": email, "role": "staff", "school_id": None, "school_name": None}}
-
-    # Cognito login for onboarded school users (and Cognito-managed admins)
+    # Cognito is the only login path — school users and platform admins
+    # (via the 'platform-admin' Cognito group) both authenticate here.
     from src import cognito
-    if cognito.cognito_enabled() and email and password:
+    if not cognito.cognito_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Login is unavailable: Cognito is not configured (COGNITO_* env vars missing).",
+        )
+    if email and password:
         try:
             result = cognito.login(email, password)
             if result.get("challenge") == "NEW_PASSWORD_REQUIRED":

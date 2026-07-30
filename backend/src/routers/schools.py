@@ -149,6 +149,43 @@ def reset_school_password(school_id: str, db: Session = Depends(get_db), _admin:
     return {"temp_password": temp_password}
 
 
+@router.post("/{school_id}/view-as")
+def view_as_school(school_id: str, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):
+    """
+    Mints a short-lived token scoped to this school so the platform admin can
+    see exactly what that school's dashboard shows — useful for support, and
+    the only way to preview a school's view before Cognito logins exist.
+    The token is marked `impersonated` so the UI can badge it and offer an exit.
+    """
+    from datetime import timedelta
+    from src.routers.auth import create_access_token
+
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    token = create_access_token(
+        data={
+            "sub": admin.get("email"),
+            "email": admin.get("email"),
+            "role": "school",
+            "school_id": school.id,
+            "impersonated": True,
+        },
+        expires_delta=timedelta(hours=2),
+    )
+    return {
+        "token": token,
+        "user": {
+            "email": admin.get("email"),
+            "role": "school",
+            "school_id": school.id,
+            "school_name": school.name,
+            "impersonated": True,
+        },
+    }
+
+
 @router.patch("/{school_id}")
 def update_school(school_id: str, payload: dict, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
     school = db.query(School).filter(School.id == school_id).first()
