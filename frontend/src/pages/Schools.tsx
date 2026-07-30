@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import api from '../api';
 import {
   School as SchoolIcon, Plus, X, RefreshCw, Copy, Check,
-  MapPin, Phone, Mail, Users, Bot, AlertTriangle, Trash2, KeyRound
+  MapPin, Phone, Mail, Users, Bot, AlertTriangle, Trash2, KeyRound, Settings2, Save
 } from 'lucide-react';
 
 interface School {
@@ -39,6 +39,14 @@ export default function Schools({ showToast }: SchoolsProps) {
   // admin must copy them before dismissing this panel.
   const [credentials, setCredentials] = useState<{ email: string; password: string; school: string } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Per-school settings modal (calendar / Cal.com / SMTP / caller ID) — each
+  // field falls back to the shared platform config when left blank, so this
+  // only needs to hold what's actually been overridden for this school.
+  const [settingsSchool, setSettingsSchool] = useState<School | null>(null);
+  const [settingsForm, setSettingsForm] = useState<Record<string, string>>({});
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const loadSchools = async () => {
     setLoading(true);
@@ -119,6 +127,48 @@ export default function Schools({ showToast }: SchoolsProps) {
       loadSchools();
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Could not remove this school', 'error');
+    }
+  };
+
+  const SETTINGS_MASK = '••••••••••••••••';
+
+  const openSettings = async (school: School) => {
+    setSettingsSchool(school);
+    setSettingsLoading(true);
+    try {
+      const res = await api.get(`/schools/${school.id}/settings`);
+      const raw = res.data || {};
+      const form: Record<string, string> = {};
+      Object.keys(raw).forEach(k => { form[k] = raw[k] == null ? '' : String(raw[k]); });
+      setSettingsForm(form);
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Failed to load settings', 'error');
+      setSettingsSchool(null);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const closeSettings = () => {
+    setSettingsSchool(null);
+    setSettingsForm({});
+  };
+
+  const handleSettingsField = (field: string, value: string) => {
+    setSettingsForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const saveSettings = async () => {
+    if (!settingsSchool) return;
+    setSettingsSaving(true);
+    try {
+      await api.patch(`/schools/${settingsSchool.id}/settings`, settingsForm);
+      showToast(`Settings saved for ${settingsSchool.name}`, 'success');
+      closeSettings();
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Failed to save settings', 'error');
+    } finally {
+      setSettingsSaving(false);
     }
   };
 
@@ -277,6 +327,10 @@ export default function Schools({ showToast }: SchoolsProps) {
                   onClick={() => handleReprovision(s)} title="Re-create/refresh this school's voice agent">
                   <RefreshCw size={14} /> Agent
                 </button>
+                <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+                  onClick={() => openSettings(s)} title="Configure this school's own calendar, Cal.com, email and caller ID">
+                  <Settings2 size={14} /> Settings
+                </button>
                 {s.admin_email && (
                   <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
                     onClick={() => handleResetPassword(s)} title="Issue a new temporary password">
@@ -290,6 +344,90 @@ export default function Schools({ showToast }: SchoolsProps) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Per-school settings modal */}
+      {settingsSchool && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+        }} onClick={(e) => { if (e.target === e.currentTarget) closeSettings(); }}>
+          <div className="glass-panel" style={{ maxWidth: '560px', width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Settings2 size={20} /> {settingsSchool.name}
+                </h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
+                  Leave any field blank to use the shared platform default instead.
+                </p>
+              </div>
+              <button className="btn btn-secondary" onClick={closeSettings}><X size={16} /></button>
+            </div>
+
+            {settingsLoading ? (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <RefreshCw size={24} style={{ animation: 'spin 2s linear infinite' }} />
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', marginTop: '18px' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Outbound Caller ID</div>
+                  <input className="form-input" style={{ width: '100%' }} placeholder="+91 9876543210 (default: platform number)"
+                    value={settingsForm.retell_phone_number || ''} onChange={e => handleSettingsField('retell_phone_number', e.target.value)} />
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Google Calendar</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <textarea className="form-input" style={{ width: '100%', minHeight: '70px', fontFamily: 'monospace', fontSize: '0.78rem' }}
+                      placeholder="Service account credentials JSON (default: platform calendar)"
+                      value={settingsForm.google_calendar_credentials_json || ''}
+                      onChange={e => handleSettingsField('google_calendar_credentials_json', e.target.value)} />
+                    <input className="form-input" style={{ width: '100%' }} placeholder="Calendar ID, e.g. admissions@school.edu.in"
+                      value={settingsForm.google_calendar_id || ''} onChange={e => handleSettingsField('google_calendar_id', e.target.value)} />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Cal.com (virtual meetings)</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com API key (default: platform account)"
+                      value={settingsForm.cal_com_api_key || ''} onChange={e => handleSettingsField('cal_com_api_key', e.target.value)} />
+                    <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com event link"
+                      value={settingsForm.cal_com_event_link || ''} onChange={e => handleSettingsField('cal_com_event_link', e.target.value)} />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Confirmation Email (SMTP)</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: '8px' }}>
+                      <input className="form-input" placeholder="SMTP server, e.g. smtp.gmail.com"
+                        value={settingsForm.smtp_server || ''} onChange={e => handleSettingsField('smtp_server', e.target.value)} />
+                      <input className="form-input" placeholder="Port" value={settingsForm.smtp_port || ''}
+                        onChange={e => handleSettingsField('smtp_port', e.target.value)} />
+                    </div>
+                    <input className="form-input" style={{ width: '100%' }} placeholder="SMTP username"
+                      value={settingsForm.smtp_username || ''} onChange={e => handleSettingsField('smtp_username', e.target.value)} />
+                    <input className="form-input" style={{ width: '100%' }} type="password" placeholder="SMTP password"
+                      value={settingsForm.smtp_password || ''} onChange={e => handleSettingsField('smtp_password', e.target.value)} />
+                    <input className="form-input" style={{ width: '100%' }} placeholder="From email, e.g. admissions@school.edu.in"
+                      value={settingsForm.smtp_from_email || ''} onChange={e => handleSettingsField('smtp_from_email', e.target.value)} />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '4px' }}>
+                  <button className="btn btn-secondary" onClick={closeSettings}>Cancel</button>
+                  <button className="btn btn-primary" onClick={saveSettings} disabled={settingsSaving}>
+                    {settingsSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <Save size={16} />}
+                    {settingsSaving ? 'Saving…' : 'Save Settings'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
