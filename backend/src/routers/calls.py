@@ -180,13 +180,14 @@ async def call_now(
     # permanently stuck showing "Calling" in the dashboard even though no
     # call was ever actually placed — confirmed happening in production.
     try:
-        # Use the contact's own school's dedicated agent (its prompt carries
-        # that school's name/location); fall back to the shared local agent for
-        # contacts with no school (pre-multitenancy rows).
+        # Use the contact's own school's dedicated agent + caller ID (its
+        # prompt carries that school's name/location); fall back to the
+        # shared defaults for contacts with no school (pre-multitenancy rows).
         from src.agent_manager import get_or_create_local_agent
+        from src.school_settings import get_school_for_contact, get_retell_phone_number
+        school = get_school_for_contact(db, contact)
         agent_id = get_school_agent_id(db, contact) or get_or_create_local_agent()
-
-        from_number = os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
+        from_number = get_retell_phone_number(db, school)
         from datetime import timezone, timedelta
         dynamic_vars = {
             "contact_id": contact_id,

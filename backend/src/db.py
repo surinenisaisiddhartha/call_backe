@@ -103,6 +103,23 @@ class School(Base):
     status = Column(String(50), default="active")              # active, suspended
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # ── Per-school overrides ──────────────────────────────────────────
+    # All nullable: a school with none of these set falls back to the
+    # platform's global Settings/env values (src/school_settings.py), so
+    # existing schools keep working unchanged until an admin configures
+    # them individually. retell_api_key is deliberately NOT here — one
+    # Retell account serves every school's (separate) agent.
+    retell_phone_number = Column(String(50), nullable=True)         # this school's outbound caller ID
+    google_calendar_credentials_json = Column(Text, nullable=True)  # this school's own service account
+    google_calendar_id = Column(String(255), nullable=True)
+    cal_com_api_key = Column(String(255), nullable=True)            # this school's own Cal.com account
+    cal_com_event_link = Column(String(500), nullable=True)
+    smtp_server = Column(String(255), nullable=True)                # this school's own confirmation-email sender
+    smtp_port = Column(Integer, nullable=True)
+    smtp_username = Column(String(255), nullable=True)
+    smtp_password = Column(String(255), nullable=True)
+    smtp_from_email = Column(String(255), nullable=True)
+
 class UploadBatch(Base):
     __tablename__ = "upload_batches"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -269,6 +286,29 @@ def init_db():
                 conn.execute(text("UPDATE contacts SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
                 conn.execute(text("UPDATE upload_batches SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
                 conn.commit()
+
+        # Per-school setting overrides (calendar/Cal.com/SMTP/phone) — all
+        # nullable, added independently of whether the schools table already
+        # existed above.
+        school_columns = [c['name'] for c in inspector.get_columns('schools')]
+        school_override_columns = {
+            "retell_phone_number": "VARCHAR(50)",
+            "google_calendar_credentials_json": "TEXT",
+            "google_calendar_id": "VARCHAR(255)",
+            "cal_com_api_key": "VARCHAR(255)",
+            "cal_com_event_link": "VARCHAR(500)",
+            "smtp_server": "VARCHAR(255)",
+            "smtp_port": "INTEGER",
+            "smtp_username": "VARCHAR(255)",
+            "smtp_password": "VARCHAR(255)",
+            "smtp_from_email": "VARCHAR(255)",
+        }
+        for col_name, col_type in school_override_columns.items():
+            if col_name not in school_columns:
+                print(f"[DB] Self-healing migration: adding {col_name} to schools table")
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE schools ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
     except Exception as e:
         print(f"[DB] Migration warning: {e}")
 

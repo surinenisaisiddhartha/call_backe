@@ -260,19 +260,20 @@ def process_webhook_payload(payload: dict):
                         if scheduled_utc:
                             # Attempt to create Google Calendar event
                             from src.services.google_calendar import create_event
+                            from src.school_settings import get_school_for_contact, get_google_calendar_config
                             c_event_id = None
                             try:
-                                settings_list = db.query(Settings).all()
-                                settings_map = {s.key: s.value for s in settings_list}
-                                credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-                                calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
+                                school = get_school_for_contact(db, contact) if contact else None
+                                gcal_config = get_google_calendar_config(db, school)
+                                credentials_json = gcal_config["credentials_json"]
+                                calendar_id = gcal_config["calendar_id"]
 
                                 if credentials_json and calendar_id and contact:
                                     result = create_event(
                                         credentials_json=credentials_json,
                                         calendar_id=calendar_id,
                                         start_iso=scheduled_utc.isoformat() + "+00:00",
-                                        summary=f"TSRA Callback — {contact.name}",
+                                        summary=f"{school.name if school else 'TSRA'} Callback — {contact.name}",
                                         description=f"Automated retry callback scheduled. Raw phrase: {phrase}",
                                         attendee_name=contact.name,
                                         attendee_phone=contact.phone_number,
@@ -479,12 +480,13 @@ def trigger_callback_call(contact_id: str):
                     print(f"[SCHEDULER] Could not re-register deferred callback job: {resched_err}")
             return
 
-        # Get settings
+        # Get settings — retell_api_key is account-level (global); phone
+        # number and agent are resolved per the contact's own school.
+        from src.school_settings import get_school_for_contact, get_retell_phone_number
         ak = db.query(Settings).filter(Settings.key == "retell_api_key").first()
-        fn = db.query(Settings).filter(Settings.key == "retell_phone_number").first()
-
         api_key = (ak.value if ak else None) or os.getenv("RETELL_API_KEY", "")
-        from_number = (fn.value if fn else None) or os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
+        school = get_school_for_contact(db, contact)
+        from_number = get_retell_phone_number(db, school)
 
         # Dial with the contact's own school's agent when it has one, so the
         # callback speaks that school's name; else the shared default agent.

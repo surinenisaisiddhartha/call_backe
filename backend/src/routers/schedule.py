@@ -58,23 +58,25 @@ async def schedule_callback(
     if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Contact not found")
 
+    from src.school_settings import get_school_for_contact, get_google_calendar_config, get_retell_phone_number
+    school = get_school_for_contact(db, contact)
+    school_name = school.name if school else "TSRA"
+
     # 1. Create Google Calendar Event
     calendar_event_id = None
     try:
-        from src.db import Settings
         from src.services.google_calendar import create_event
-        
-        settings_list = db.query(Settings).all()
-        settings_map = {s.key: s.value for s in settings_list}
-        credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-        calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
-        
+
+        gcal_config = get_google_calendar_config(db, school)
+        credentials_json = gcal_config["credentials_json"]
+        calendar_id = gcal_config["calendar_id"]
+
         if credentials_json and calendar_id:
             result = create_event(
                 credentials_json=credentials_json,
                 calendar_id=calendar_id,
                 start_iso=scheduled_for.isoformat() + "+00:00",
-                summary=f"TSRA Callback — {contact.name}",
+                summary=f"{school_name} Callback — {contact.name}",
                 description=f"Callback scheduled manually. Type: {call_type}",
                 attendee_name=contact.name,
                 attendee_phone=contact.phone_number,
@@ -85,7 +87,7 @@ async def schedule_callback(
         print("Google Calendar callback insert error:", e)
 
     # 2. Call Retell Batch API with trigger_timestamp
-    from_number = os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
+    from_number = get_retell_phone_number(db, school)
     trigger_timestamp = int(scheduled_for.timestamp() * 1000)
 
     retell_res = await make_retell_request("/create-batch-call", "POST", {
@@ -205,7 +207,8 @@ async def reschedule_callback(
     # 1. Update Cal.com Booking (Not handled automatically here, webhook takes care of it usually if done via cal.com directly)
 
     # 2. Call Retell Batch API with new trigger_timestamp
-    from_number = os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
+    from src.school_settings import get_school_for_contact, get_retell_phone_number
+    from_number = get_retell_phone_number(db, get_school_for_contact(db, contact))
     trigger_timestamp = int(scheduled_for.timestamp() * 1000)
 
     retell_res = await make_retell_request("/create-batch-call", "POST", {

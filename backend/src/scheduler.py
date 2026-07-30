@@ -224,9 +224,13 @@ def _fire_pending_callbacks():
                     "to_number": contact.phone_number,
                     "retell_llm_dynamic_variables": dynamic_vars
                 }
-                # Dial with the contact's own school's agent when it has one
+                # Dial with the contact's own school's agent + caller ID when
+                # it has one; else the shared defaults resolved above.
                 from src.school_agent import get_school_agent_id
+                from src.school_settings import get_school_for_contact, get_retell_phone_number
+                school = get_school_for_contact(db, contact)
                 agent_id = get_school_agent_id(db, contact) or default_agent_id
+                contact_from_number = get_retell_phone_number(db, school) if school else from_number
                 if agent_id:
                     task_data["override_agent_id"] = agent_id
 
@@ -239,7 +243,7 @@ def _fire_pending_callbacks():
                     continue
 
                 safe_name = f"Callback-{contact.id[:8]}"
-                body = {"from_number": from_number, "name": safe_name, "tasks": [task_data]}
+                body = {"from_number": contact_from_number, "name": safe_name, "tasks": [task_data]}
 
                 r = httpx.post(
                     "https://api.retellai.com/create-batch-call",

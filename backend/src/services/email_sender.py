@@ -14,7 +14,10 @@ def send_booking_email(
     scheduled_for_str: str,
     gcal_link: str = None,
     virtual_meeting_link: str = None,
-    meeting_type: str = "in_person"
+    meeting_type: str = "in_person",
+    school_name: str = "The Shri Ram Academy",
+    school_location: str = "Gachibowli, Hyderabad, Telangana 500032",
+    school_phone: str = "+91 7569891111"
 ) -> bool:
     """
     Sends a styled confirmation HTML email to the caller.
@@ -30,8 +33,8 @@ def send_booking_email(
         is_virtual = meeting_type == "virtual"
         msg = MIMEMultipart("alternative")
         subject_suffix = "Your Virtual Meeting" if is_virtual else "Your Campus Visit"
-        msg["Subject"] = f"Confirmed: {subject_suffix} at The Shri Ram Academy"
-        msg["From"] = f"TSRA Admissions <{from_email}>"
+        msg["Subject"] = f"Confirmed: {subject_suffix} at {school_name}"
+        msg["From"] = f"{school_name} Admissions <{from_email}>"
         msg["To"] = to_email
 
         # Premium HTML Template
@@ -136,7 +139,7 @@ def send_booking_email(
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>The Shri Ram Academy</h1>
+                    <h1>{school_name}</h1>
                     <p>Admissions & Campus Tours Outreach</p>
                 </div>
                 <div class="content">
@@ -157,7 +160,7 @@ def send_booking_email(
                             <div class="detail-value">{
                                 f'<a href="{virtual_meeting_link}" target="_blank">{virtual_meeting_link}</a>' if (is_virtual and virtual_meeting_link)
                                 else "Our admissions team will share your meeting link shortly." if is_virtual
-                                else "TSRA Campus, Gachibowli, Hyderabad, Telangana 500032"
+                                else f"{school_name} Campus, {school_location}"
                             }</div>
                         </div>
                     </div>
@@ -174,15 +177,15 @@ def send_booking_email(
                     </div>
                     ''' if gcal_link else '')}
 
-                    <p style="margin-top: 32px;">If you need to reschedule or have any questions prior to your {"meeting" if is_virtual else "visit"}, feel free to reply to this email or call our admissions desk directly at +91 7569891111.</p>
+                    <p style="margin-top: 32px;">If you need to reschedule or have any questions prior to your {"meeting" if is_virtual else "visit"}, feel free to reply to this email or call our admissions desk directly at {school_phone}.</p>
 
                     <p>We look forward to {"speaking with you!" if virtual_meeting_link else "welcoming you to our campus!"}</p>
-                    
-                    <p style="margin-bottom: 0;">Warm regards,<br/><strong>The TSRA Admissions Team</strong></p>
+
+                    <p style="margin-bottom: 0;">Warm regards,<br/><strong>The {school_name} Admissions Team</strong></p>
                 </div>
                 <div class="footer">
-                    <p>&copy; 2026 The Shri Ram Academy. All rights reserved.</p>
-                    <p>Gachibowli, Hyderabad, TS, India</p>
+                    <p>&copy; 2026 {school_name}. All rights reserved.</p>
+                    <p>{school_location}</p>
                 </div>
             </div>
         </body>

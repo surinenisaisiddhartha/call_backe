@@ -164,19 +164,21 @@ def create_appointment(
     # Update contact status
     contact.status = "Completed"
     
-    # Sync with Google Calendar
+    # Sync with Google Calendar (the contact's own school's calendar if it
+    # has one configured, else the shared platform calendar)
     try:
-        settings_list = db.query(Settings).all()
-        settings_map = {s.key: s.value for s in settings_list}
-        credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-        calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
-        
+        from src.school_settings import get_school_for_contact, get_google_calendar_config
+        school = get_school_for_contact(db, contact)
+        gcal_config = get_google_calendar_config(db, school)
+        credentials_json = gcal_config["credentials_json"]
+        calendar_id = gcal_config["calendar_id"]
+
         if credentials_json and calendar_id:
             result = create_event(
                 credentials_json=credentials_json,
                 calendar_id=calendar_id,
                 start_iso=dt.isoformat(),
-                summary=f"TSRA {appointment.purpose} — {contact.name}",
+                summary=f"{school.name if school else 'TSRA'} {appointment.purpose} — {contact.name}",
                 description=f"Booked manually via Aegis Dashboard. Purpose: {appointment.purpose}",
                 attendee_name=contact.name,
                 attendee_phone=contact.phone_number,
@@ -252,13 +254,15 @@ def update_appointment(
         
     db.commit()
     
-    # Sync updates with Google Calendar
+    # Sync updates with Google Calendar (the contact's own school's calendar
+    # if configured, else the shared platform calendar)
     try:
-        settings_list = db.query(Settings).all()
-        settings_map = {s.key: s.value for s in settings_list}
-        credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-        calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
-        
+        from src.school_settings import get_school_for_contact, get_google_calendar_config
+        school = get_school_for_contact(db, contact) if contact else None
+        gcal_config = get_google_calendar_config(db, school)
+        credentials_json = gcal_config["credentials_json"]
+        calendar_id = gcal_config["calendar_id"]
+
         if credentials_json and calendar_id:
             # 1. If cancelled, delete the calendar event
             if appointment.status == "Cancelled" and old_event_id:
@@ -271,13 +275,13 @@ def update_appointment(
                     cancel_event(credentials_json, calendar_id, old_event_id)
                 except Exception as ex:
                     print(f"[GOOGLE CALENDAR] Cancel old event failed: {ex}")
-                
+
                 dt_iso = dt.isoformat() if dt else appointment.scheduled_for.isoformat() + "+00:00"
                 result = create_event(
                     credentials_json=credentials_json,
                     calendar_id=calendar_id,
                     start_iso=dt_iso,
-                    summary=f"TSRA {appointment.purpose} — {contact.name if contact else 'Unknown'}",
+                    summary=f"{school.name if school else 'TSRA'} {appointment.purpose} — {contact.name if contact else 'Unknown'}",
                     description=f"Rescheduled manually via Aegis Dashboard. Purpose: {appointment.purpose}",
                     attendee_name=contact.name if contact else "Unknown",
                     attendee_phone=contact.phone_number if contact else "Unknown",
@@ -302,27 +306,28 @@ def delete_appointment(
     current_user: dict = Depends(get_current_user)
 ):
     """Delete an appointment."""
-    import os
-    from src.db import Settings
     from src.services.google_calendar import cancel_event
+    from src.school_settings import get_school_for_contact, get_google_calendar_config
 
     appointment = db.query(Appointment).filter(Appointment.id == id).first()
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
     _guard_school(db, appointment, current_user)
-    
+
     old_event_id = appointment.google_calendar_event_id
-    
+    contact = db.query(Contact).filter(Contact.id == appointment.contact_id).first()
+    school = get_school_for_contact(db, contact) if contact else None
+
     db.delete(appointment)
     db.commit()
-    
-    # Sync deletion with Google Calendar
+
+    # Sync deletion with Google Calendar (this contact's school's calendar
+    # if it has one, else the shared platform calendar)
     try:
-        settings_list = db.query(Settings).all()
-        settings_map = {s.key: s.value for s in settings_list}
-        credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-        calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
-        
+        gcal_config = get_google_calendar_config(db, school)
+        credentials_json = gcal_config["credentials_json"]
+        calendar_id = gcal_config["calendar_id"]
+
         if credentials_json and calendar_id and old_event_id:
             cancel_event(credentials_json, calendar_id, old_event_id)
     except Exception as e:

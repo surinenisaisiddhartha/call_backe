@@ -229,3 +229,66 @@ def delete_school(school_id: str, db: Session = Depends(get_db), _admin: dict = 
     db.delete(school)
     db.commit()
     return {"success": True}
+
+
+# ── Per-school settings (calendar, Cal.com, SMTP, phone number) ──────────
+# All optional: a school without these configured falls back to the shared
+# platform config (src/school_settings.py) — this only lets an admin give a
+# specific school its OWN calendar/Cal.com account/email sender/caller ID.
+
+_SCHOOL_SETTING_FIELDS = [
+    "retell_phone_number",
+    "google_calendar_credentials_json",
+    "google_calendar_id",
+    "cal_com_api_key",
+    "cal_com_event_link",
+    "smtp_server",
+    "smtp_port",
+    "smtp_username",
+    "smtp_password",
+    "smtp_from_email",
+]
+
+_SECRET_FIELDS = {"google_calendar_credentials_json", "cal_com_api_key", "smtp_password"}
+
+_SECRET_MASK = "••••••••••••••••"
+
+
+@router.get("/{school_id}/settings")
+def get_school_settings(school_id: str, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    result = {}
+    for field in _SCHOOL_SETTING_FIELDS:
+        value = getattr(school, field)
+        if value and field in _SECRET_FIELDS:
+            result[field] = _SECRET_MASK
+        else:
+            result[field] = value
+    return result
+
+
+@router.patch("/{school_id}/settings")
+def update_school_settings(school_id: str, updates: dict, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    for field, value in updates.items():
+        if field not in _SCHOOL_SETTING_FIELDS:
+            continue
+        if value == _SECRET_MASK:
+            continue  # Unchanged secret — the frontend echoes the mask back
+        if value == "":
+            value = None
+        if field == "smtp_port" and value is not None:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="smtp_port must be a number")
+        setattr(school, field, value)
+
+    db.commit()
+    return {"success": True}

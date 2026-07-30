@@ -28,11 +28,6 @@ def _get_retell_api_key(db) -> str:
     return (s.value if s else None) or os.getenv("RETELL_API_KEY", "")
 
 
-def _get_from_number(db) -> str:
-    s = db.query(Settings).filter(Settings.key == "retell_phone_number").first()
-    return (s.value if s else None) or os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
-
-
 def _get_agent_id(db) -> Optional[str]:
     # Only use local agent with static prompt
     from src.agent_manager import get_or_create_local_agent
@@ -197,11 +192,14 @@ class CampaignDialer:
                 return
 
             api_key = _get_retell_api_key(db)
-            from_number = _get_from_number(db)
-            # Dial with the contact's own school's agent so each school's
-            # calls speak its own name/location; fall back to the shared
-            # default agent for contacts with no school.
+            # Dial with the contact's own school's agent + caller ID so each
+            # school's calls speak its own name/location and show its own
+            # number; fall back to the shared defaults for contacts with no
+            # school (pre-multitenancy rows).
             from src.school_agent import get_school_agent_id
+            from src.school_settings import get_school_for_contact, get_retell_phone_number
+            school = get_school_for_contact(db, contact)
+            from_number = get_retell_phone_number(db, school)
             agent_id = get_school_agent_id(db, contact) or _get_agent_id(db)
 
             from datetime import timezone, timedelta

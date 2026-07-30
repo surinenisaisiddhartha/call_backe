@@ -2,7 +2,7 @@ import os
 import httpx
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from src.db import Settings
+from src.db import Settings, School
 
 CAL_BASE_URL = "https://api.cal.com/v2"
 # Confirmed via direct testing against this account: different endpoints on
@@ -13,14 +13,13 @@ CAL_BASE_URL = "https://api.cal.com/v2"
 CAL_API_VERSION_EVENT_TYPES = "2024-06-14"
 CAL_API_VERSION_BOOKINGS = "2024-08-13"
 
-def get_cal_client_info(db: Session):
-    api_key_setting = db.query(Settings).filter(Settings.key == "cal_com_api_key").first()
-    event_link_setting = db.query(Settings).filter(Settings.key == "cal_com_event_link").first()
-
-    api_key = api_key_setting.value if api_key_setting else os.getenv("CAL_COM_API_KEY", "cal_live_9872522039be685a1f90ad606ed57e60")
-    event_link = event_link_setting.value if event_link_setting else os.getenv("CAL_COM_EVENT_LINK", "https://cal.com/sai-siddhartha-surineni-ai62cd")
-
-    return api_key, event_link
+def get_cal_client_info(db: Session, school: School = None):
+    """school=None uses the platform's global Cal.com account (unchanged
+    default behavior); pass a School row to use its own Cal.com account if
+    it has one configured, falling back to the global account otherwise."""
+    from src.school_settings import get_cal_com_config
+    config = get_cal_com_config(db, school)
+    return config["api_key"], config["event_link"]
 
 def get_headers(api_key: str, api_version: str, extra: dict = None) -> dict:
     h = {
@@ -32,8 +31,8 @@ def get_headers(api_key: str, api_version: str, extra: dict = None) -> dict:
         h.update(extra)
     return h
 
-async def get_cal_event_type_id(db: Session) -> int:
-    api_key, event_link = get_cal_client_info(db)
+async def get_cal_event_type_id(db: Session, school: School = None) -> int:
+    api_key, event_link = get_cal_client_info(db, school)
     if not api_key:
         print("Cal.com API key is not configured.")
         return None
@@ -85,12 +84,12 @@ async def get_cal_event_type_id(db: Session) -> int:
 
     return None
 
-async def get_available_slots(db: Session, start_time: str = None, end_time: str = None):
-    api_key, event_link = get_cal_client_info(db)
+async def get_available_slots(db: Session, start_time: str = None, end_time: str = None, school: School = None):
+    api_key, event_link = get_cal_client_info(db, school)
     if not api_key:
         return get_mock_slots()
 
-    event_type_id = await get_cal_event_type_id(db)
+    event_type_id = await get_cal_event_type_id(db, school)
     if not event_type_id:
         print("No active event type found, returning fallback slots for UI testing.")
         return get_mock_slots()
@@ -122,7 +121,7 @@ async def get_available_slots(db: Session, start_time: str = None, end_time: str
             print("Error querying Cal.com slots:", e)
             return get_mock_slots()
 
-async def create_booking(db: Session, contact_name: str, contact_email: str, start_time: str):
+async def create_booking(db: Session, contact_name: str, contact_email: str, start_time: str, school: School = None):
     """
     Creates a Cal.com booking on the account's Cal Video-enabled event type and
     returns a dict with the unique per-booking meeting link. Each booking gets
@@ -131,8 +130,8 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
 
     Returns: {"success": bool, "uid": str, "meeting_url": str, "error": str|None}
     """
-    api_key, _ = get_cal_client_info(db)
-    event_type_id = await get_cal_event_type_id(db)
+    api_key, _ = get_cal_client_info(db, school)
+    event_type_id = await get_cal_event_type_id(db, school)
 
     if not api_key or not event_type_id:
         print("Skipping booking creation because Cal.com is not configured.")
@@ -225,9 +224,9 @@ async def _find_recent_booking(client: httpx.AsyncClient, headers: dict, event_t
     return None
 
 
-async def cancel_booking(db: Session, booking_uid: str, reason: str = "Rescheduled") -> bool:
+async def cancel_booking(db: Session, booking_uid: str, reason: str = "Rescheduled", school: School = None) -> bool:
     """Cancels a Cal.com booking by its string uid (NOT the numeric id)."""
-    api_key, _ = get_cal_client_info(db)
+    api_key, _ = get_cal_client_info(db, school)
     if not api_key or not booking_uid:
         return False
 

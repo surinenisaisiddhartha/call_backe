@@ -403,10 +403,11 @@ def process_appointment_booking_async(
     purpose: str,
     stale_calendar_event_id: str = None,
     meeting_type: str = "in_person",
-    stale_calcom_booking_uid: str = None
+    stale_calcom_booking_uid: str = None,
+    school_id: str = None
 ):
     import asyncio
-    from src.db import SessionLocal, Appointment
+    from src.db import SessionLocal, Appointment, School
     from src.services.google_calendar import create_event, cancel_event
     from src.services.email_sender import send_booking_email
     from src import cal_com
@@ -415,10 +416,11 @@ def process_appointment_booking_async(
     gcal_html_link = None
     virtual_meeting_link = None
     try:
+        school = db.query(School).filter(School.id == school_id).first() if school_id else None
         if meeting_type == "virtual":
             if stale_calcom_booking_uid:
                 try:
-                    asyncio.run(cal_com.cancel_booking(db, stale_calcom_booking_uid, reason="Rescheduled"))
+                    asyncio.run(cal_com.cancel_booking(db, stale_calcom_booking_uid, reason="Rescheduled", school=school))
                     print(f"[BACKGROUND] Cancelled stale Cal.com booking: {stale_calcom_booking_uid}", flush=True)
                 except Exception as cancel_err:
                     print(f"[BACKGROUND] Failed to cancel stale Cal.com booking {stale_calcom_booking_uid}: {cancel_err}", flush=True)
@@ -427,7 +429,8 @@ def process_appointment_booking_async(
                     db=db,
                     contact_name=attendee_name,
                     contact_email=attendee_email or "guest@example.com",
-                    start_time=start_iso
+                    start_time=start_iso,
+                    school=school
                 ))
                 if cal_result.get("success"):
                     virtual_meeting_link = cal_result.get("meeting_url")
@@ -479,6 +482,13 @@ def process_appointment_booking_async(
         # Dispatch booking confirmation email in the background
         if attendee_email and attendee_email.strip():
             try:
+                email_kwargs = {}
+                if school:
+                    email_kwargs["school_name"] = school.name
+                    if school.location:
+                        email_kwargs["school_location"] = school.location
+                    if school.contact_phone:
+                        email_kwargs["school_phone"] = school.contact_phone
                 send_booking_email(
                     smtp_server=smtp_server,
                     smtp_port=smtp_port_val,
@@ -491,7 +501,8 @@ def process_appointment_booking_async(
                     scheduled_for_str=readable_time,
                     gcal_link=gcal_html_link,
                     virtual_meeting_link=virtual_meeting_link,
-                    meeting_type=meeting_type
+                    meeting_type=meeting_type,
+                    **email_kwargs
                 )
             except Exception as email_err:
                 print(f"[BACKGROUND] Email dispatch failed: {email_err}", flush=True)
@@ -584,57 +595,40 @@ def book_appointment(
         contact.status = "Completed"
         db.commit()
 
-        import os
-        from src.db import Settings
+        # Resolve this contact's school (None for pre-multitenancy contacts)
+        # so calendar/Cal.com/SMTP use that school's OWN configuration if
+        # it has one, falling back to the shared platform config otherwise.
+        from src.school_settings import get_school_for_contact, get_google_calendar_config, get_smtp_config
+        school = get_school_for_contact(db, contact)
+        school_name = school.name if school else "TSRA"
 
-        # Load credentials and configuration settings
-        smtp_server = None
-        smtp_port_val = 587
-        smtp_username = None
-        smtp_password = None
-        smtp_from_email = None
-        credentials_json = None
-        calendar_id = None
-
-        try:
-            settings_list = db.query(Settings).all()
-            settings_map = {s.key: s.value for s in settings_list}
-            credentials_json = settings_map.get("google_calendar_credentials_json") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-            calendar_id = settings_map.get("google_calendar_id") or os.getenv("GOOGLE_CALENDAR_ID")
-            
-            # Load SMTP settings for the background task
-            smtp_server = settings_map.get("smtp_server") or os.getenv("SMTP_SERVER")
-            smtp_port = settings_map.get("smtp_port") or os.getenv("SMTP_PORT")
-            smtp_port_val = int(smtp_port) if smtp_port else 587
-            smtp_username = settings_map.get("smtp_username") or os.getenv("SMTP_USERNAME")
-            smtp_password = settings_map.get("smtp_password") or os.getenv("SMTP_PASSWORD")
-            smtp_from_email = settings_map.get("smtp_from_email") or os.getenv("SMTP_FROM_EMAIL")
-        except Exception as conf_err:
-            print(f"[TOOLS] Failed to load background task settings: {conf_err}")
+        gcal_config = get_google_calendar_config(db, school)
+        smtp_config = get_smtp_config(db, school)
 
         # Enqueue both Google Calendar event creation and email confirmation to run in the background
         # This completely eliminates any lag/latency during the live phone call.
         background_tasks.add_task(
             process_appointment_booking_async,
             appointment_id=appointment.id,
-            credentials_json=credentials_json,
-            calendar_id=calendar_id,
+            credentials_json=gcal_config["credentials_json"],
+            calendar_id=gcal_config["calendar_id"],
             start_iso=dt.isoformat(),
-            summary=f"TSRA {request.purpose} — {attendee_name}",
+            summary=f"{school_name} {request.purpose} — {attendee_name}",
             description=f"Booked via Aegis voice calling agent. Purpose: {request.purpose}",
             attendee_name=attendee_name,
             attendee_phone=attendee_phone,
             attendee_email=(request.attendee_email or "").strip() or (contact.email or ""),
-            smtp_server=smtp_server,
-            smtp_port_val=smtp_port_val,
-            smtp_username=smtp_username,
-            smtp_password=smtp_password,
-            smtp_from_email=smtp_from_email,
+            smtp_server=smtp_config["server"],
+            smtp_port_val=smtp_config["port"],
+            smtp_username=smtp_config["username"],
+            smtp_password=smtp_config["password"],
+            smtp_from_email=smtp_config["from_email"],
             readable_time=readable_time,
             purpose=request.purpose,
             stale_calendar_event_id=stale_calendar_event_id,
             meeting_type=meeting_type,
-            stale_calcom_booking_uid=stale_calcom_booking_uid
+            stale_calcom_booking_uid=stale_calcom_booking_uid,
+            school_id=school.id if school else None
         )
 
         if meeting_type == "virtual":
