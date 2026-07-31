@@ -177,6 +177,10 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
             </button>
           </form>
         )}
+
+        <div style={{ marginTop: '32px', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+          Product Delivered by <strong>Response Informatics</strong>
+        </div>
       </div>
     </div>
   );

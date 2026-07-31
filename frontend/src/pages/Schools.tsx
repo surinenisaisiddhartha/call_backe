@@ -13,6 +13,7 @@ interface School {
   location: string | null;
   contact_phone: string | null;
   website: string | null;
+  logo_url: string | null;
   admin_email: string | null;
   retell_agent_id: string | null;
   status: string;
@@ -41,6 +42,7 @@ export default function Schools({ showToast }: SchoolsProps) {
   const [contactPhone, setContactPhone] = useState('');
   const [website, setWebsite] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
 
   // Credentials are returned exactly once by the API and never stored — the
   // admin must copy them before dismissing this panel.
@@ -63,6 +65,7 @@ export default function Schools({ showToast }: SchoolsProps) {
   // Edit a school's own identity fields (name/location/phone/website/status).
   const [editSchool, setEditSchool] = useState<School | null>(null);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editLogoFile, setEditLogoFile] = useState<File | null>(null);
   const [editSaving, setEditSaving] = useState(false);
 
   // Move a school's login to a different email address.
@@ -85,7 +88,23 @@ export default function Schools({ showToast }: SchoolsProps) {
   useEffect(() => { loadSchools(); }, []);
 
   const resetForm = () => {
-    setName(''); setLocation(''); setContactPhone(''); setWebsite(''); setAdminEmail('');
+    setName(''); setLocation(''); setContactPhone(''); setWebsite(''); setAdminEmail(''); setLogoFile(null);
+  };
+
+  const handleLogoUpload = async (schoolId: string, file: File) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await api.post(`/schools/${schoolId}/logo`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      if (res.data.success) {
+        setSchools(schools.map(s => s.id === schoolId ? { ...s, logo_url: res.data.logo_url } : s));
+        showToast('Logo updated successfully', 'success');
+      }
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Failed to upload logo', 'error');
+    }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -119,6 +138,11 @@ export default function Schools({ showToast }: SchoolsProps) {
       if (temp_password) {
         setCredentials({ email: school.admin_email, password: temp_password, school: school.name });
       }
+
+      if (logoFile) {
+        await handleLogoUpload(school.id, logoFile);
+      }
+
       resetForm();
       setShowForm(false);
       loadSchools();
@@ -220,6 +244,7 @@ export default function Schools({ showToast }: SchoolsProps) {
 
   const openEdit = (school: School) => {
     setEditSchool(school);
+    setEditLogoFile(null);
     setEditForm({
       name: school.name || '',
       location: school.location || '',
@@ -234,6 +259,9 @@ export default function Schools({ showToast }: SchoolsProps) {
     setEditSaving(true);
     try {
       const res = await api.patch(`/schools/${editSchool.id}`, editForm);
+      if (editLogoFile) {
+        await handleLogoUpload(editSchool.id, editLogoFile);
+      }
       showToast(`${editForm.name || editSchool.name} updated`, 'success');
       if (res.data?.agent_error) {
         showToast(`Details saved, but the voice agent could not be updated: ${res.data.agent_error}`, 'error');
@@ -355,7 +383,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       {/* Onboarding form */}
       {showForm && (
         <div className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
-          <form onSubmit={handleCreate} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '18px' }}>
+          <form onSubmit={handleCreate} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: '18px' }}>
             <div className="form-group">
               <label className="form-label">School Name *</label>
               <input className="form-input" style={{ width: '100%' }} value={name}
@@ -375,6 +403,15 @@ export default function Schools({ showToast }: SchoolsProps) {
               <label className="form-label">Website</label>
               <input className="form-input" style={{ width: '100%' }} value={website}
                 onChange={e => setWebsite(e.target.value)} placeholder="https://school.edu.in" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">School Logo (Optional)</label>
+              <input type="file" className="form-input" style={{ width: '100%' }} accept="image/*"
+                onChange={e => {
+                  if (e.target.files && e.target.files[0]) {
+                    setLogoFile(e.target.files[0]);
+                  }
+                }} />
             </div>
             <div className="form-group">
               <label className="form-label">Login Email *</label>
@@ -412,17 +449,33 @@ export default function Schools({ showToast }: SchoolsProps) {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: '16px' }}>
           {schools.map(s => (
             <div key={s.id} className="glass-panel" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                  <div style={{
-                    width: '40px', height: '40px', borderRadius: '10px', flexShrink: 0,
-                    background: 'rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center'
-                  }}>
-                    <SchoolIcon size={20} style={{ color: 'var(--accent-primary)' }} />
-                  </div>
+                  <label style={{ cursor: 'pointer' }} title="Upload School Logo">
+                    <input type="file" style={{ display: 'none' }} accept="image/*" onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleLogoUpload(s.id, e.target.files[0]);
+                      }
+                    }} />
+                    <div style={{
+                      width: '40px', height: '40px', borderRadius: '10px', flexShrink: 0,
+                      background: 'rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      overflow: 'hidden', border: '1px solid var(--border-color)', position: 'relative'
+                    }}>
+                      {s.logo_url ? (
+                        <img src={s.logo_url.startsWith('http') ? s.logo_url : `http://localhost:5000${s.logo_url}`} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                      ) : (
+                        <SchoolIcon size={20} style={{ color: 'var(--accent-primary)' }} />
+                      )}
+                      <div className="upload-overlay" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'none', alignItems: 'center', justifyContent: 'center' }}>
+                        <Plus size={16} color="#fff" />
+                      </div>
+                    </div>
+                  </label>
+                  <style dangerouslySetInnerHTML={{ __html: `label:hover .upload-overlay { display: flex !important; }` }} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{s.slug}</div>
@@ -675,6 +728,18 @@ export default function Schools({ showToast }: SchoolsProps) {
                   <option value="active">active</option>
                   <option value="suspended">suspended</option>
                 </select>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>School Logo</div>
+                <input type="file" className="form-input" style={{ width: '100%' }} accept="image/*"
+                  onChange={e => {
+                    if (e.target.files && e.target.files[0]) {
+                      setEditLogoFile(e.target.files[0]);
+                    }
+                  }} />
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Select an image to change the logo.
+                </div>
               </div>
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '4px' }}>
                 <button className="btn btn-secondary" onClick={() => setEditSchool(null)}>Cancel</button>

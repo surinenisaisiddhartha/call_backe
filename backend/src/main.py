@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from src.db import init_db, SessionLocal, Contact, UploadBatch
 from src.scheduler import init_scheduler
 
@@ -41,6 +42,10 @@ app.include_router(knowledge_router)
 app.include_router(tools_router)
 app.include_router(appointments_router)
 app.include_router(schools_router)
+
+# Mount static files for uploads (like logos)
+os.makedirs("uploads/logos", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/health")

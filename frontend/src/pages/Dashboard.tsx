@@ -86,6 +86,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   const [history, setHistory] = useState<CallRecord[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [callbacks, setCallbacks] = useState<Callback[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchAll = async () => {
     try {
@@ -143,7 +144,9 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
     { label: 'Callbacks Pending', value: pendingCallbacks.length, color: 'var(--accent-warning)', icon: Clock },
   ];
 
-  const recentCalls = history.slice(0, 8);
+  const itemsPerPage = 12;
+  const totalPages = Math.ceil(history.length / itemsPerPage);
+  const recentCalls = history.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const upcoming = [
     ...bookedAppointments
@@ -178,7 +181,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
       </div>
 
       {/* KPI stat tiles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 190px), 1fr))', gap: '16px', marginBottom: '28px' }}>
         {stats.map(s => (
           <div key={s.label} className="glass-panel" style={{ padding: '18px', display: 'flex', alignItems: 'center', gap: '14px' }}>
             <div className="icon-badge" style={{ background: `${s.color}18`, color: s.color }}>
@@ -193,7 +196,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
       </div>
 
       {/* Two-column: recent activity + upcoming */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px', alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: '20px', alignItems: 'start' }}>
 
         {/* Recent Call Activity */}
         <div className="glass-panel" style={{ padding: '20px 0' }}>
@@ -202,42 +205,68 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', fontWeight: 700 }}>Recent Call Activity</h3>
           </div>
 
-          {recentCalls.length === 0 ? (
-            <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              No calls yet. Start a campaign to see activity here.
-            </div>
-          ) : recentCalls.map(rec => {
-            const color = OUTCOME_COLORS[rec.outcome || ''] || '#6366f1';
-            const label = rec.outcome ? (OUTCOME_LABELS[rec.outcome] || rec.outcome) : 'In Progress';
-            return (
-              <div
-                key={rec.id}
-                onClick={() => onViewContact?.(rec.contact_id)}
-                title="View this lead's full history, transcript & recording"
-                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px', cursor: onViewContact ? 'pointer' : 'default', borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.2s' }}
-                {...rowHover}
-              >
-                <div className="avatar-circle">{initials(rec.contact_name)}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {rec.contact_name}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {rec.summary?.includes('appointment_booked') ? 'Booked an appointment'
-                      : rec.summary?.includes('interested_followup_scheduled') ? 'Asked for a callback'
-                      : rec.summary?.includes('do_not_call') ? 'Asked not to be called'
-                      : rec.campaign_name || rec.contact_phone}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
-                  <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 600, background: `${color}18`, color }}>
-                    {label}
-                  </span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{timeAgo(rec.started_at)}</span>
-                </div>
+          <div style={{ maxHeight: 'calc(100vh - 380px)', minHeight: '380px', overflowY: 'auto' }}>
+            {recentCalls.length === 0 ? (
+              <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                No calls yet. Start a campaign to see activity here.
               </div>
-            );
-          })}
+            ) : recentCalls.map(rec => {
+              const color = OUTCOME_COLORS[rec.outcome || ''] || '#6366f1';
+              const label = rec.outcome ? (OUTCOME_LABELS[rec.outcome] || rec.outcome) : 'In Progress';
+              return (
+                <div
+                  key={rec.id}
+                  onClick={() => onViewContact?.(rec.contact_id)}
+                  title="View this lead's full history, transcript & recording"
+                  style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px', cursor: onViewContact ? 'pointer' : 'default', borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.2s' }}
+                  {...rowHover}
+                >
+                  <div className="avatar-circle">{initials(rec.contact_name)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {rec.contact_name}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {rec.summary?.includes('appointment_booked') ? 'Booked an appointment'
+                        : rec.summary?.includes('interested_followup_scheduled') ? 'Asked for a callback'
+                        : rec.summary?.includes('do_not_call') ? 'Asked not to be called'
+                        : rec.campaign_name || rec.contact_phone}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
+                    <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 600, background: `${color}18`, color }}>
+                      {label}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{timeAgo(rec.started_at)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '15px', padding: '12px 20px', borderTop: '1px solid var(--border-color)' }}>
+              <button 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="btn btn-secondary"
+                style={{ padding: '4px 12px', fontSize: '0.8rem', minWidth: '80px', justifyContent: 'center' }}
+              >
+                Previous
+              </button>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Page {currentPage} of {totalPages}
+              </span>
+              <button 
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="btn btn-secondary"
+                style={{ padding: '4px 12px', fontSize: '0.8rem', minWidth: '80px', justifyContent: 'center' }}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Upcoming */}

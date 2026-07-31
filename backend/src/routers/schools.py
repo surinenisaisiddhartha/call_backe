@@ -40,6 +40,7 @@ def _serialize(db: Session, school: School) -> dict:
         "location": school.location,
         "contact_phone": school.contact_phone,
         "website": school.website,
+        "logo_url": school.logo_url,
         "admin_email": school.admin_email,
         "retell_agent_id": school.retell_agent_id,
         "status": school.status,
@@ -163,6 +164,55 @@ def reset_school_password(school_id: str, db: Session = Depends(get_db), _admin:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not recreate the login: {e}")
     return {"temp_password": temp_password}
+
+
+from fastapi import UploadFile, File
+import boto3
+import os
+
+@router.post("/{school_id}/logo")
+def upload_school_logo(
+    school_id: str, 
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db), 
+    _admin: dict = Depends(require_admin)
+):
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+        
+    ext = file.filename.split(".")[-1]
+    filename = f"{school_id}.{ext}"
+    
+    s3_bucket = os.getenv("S3_BUCKET_NAME")
+    aws_region = os.getenv("AWS_REGION")
+    if not s3_bucket or not aws_region:
+        raise HTTPException(status_code=500, detail="AWS S3 configuration is missing on the server.")
+        
+    try:
+        s3_client = boto3.client(
+            "s3",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            region_name=aws_region
+        )
+        
+        # Upload the file stream directly to S3
+        s3_client.upload_fileobj(
+            file.file,
+            s3_bucket,
+            f"logos/{filename}",
+            ExtraArgs={"ContentType": file.content_type}
+        )
+    except Exception as e:
+        print(f"[SCHOOLS] Failed to upload logo to S3: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to upload logo to S3: {str(e)}")
+        
+    logo_url = f"https://{s3_bucket}.s3.{aws_region}.amazonaws.com/logos/{filename}"
+    school.logo_url = logo_url
+    db.commit()
+    
+    return {"success": True, "logo_url": logo_url}
 
 
 @router.post("/{school_id}/change-email")

@@ -96,6 +96,7 @@ class School(Base):
     location = Column(String(255), nullable=True)              # e.g. "Gachibowli, Hyderabad"
     contact_phone = Column(String(50), nullable=True)          # spoken in voicemail/closing lines
     website = Column(String(500), nullable=True)               # knowledge-base scrape source
+    logo_url = Column(String(500), nullable=True)              # url to the uploaded school logo
     admin_email = Column(String(255), nullable=True)           # the school's Cognito login email
     retell_agent_id = Column(String(255), nullable=True)       # this school's dedicated agent
     retell_llm_id = Column(String(255), nullable=True)

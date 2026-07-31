@@ -196,7 +196,41 @@ body {
 /* Layout container */
 .app-container {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
+}
+
+.main-layout {
+  display: flex;
+  flex-grow: 1;
+}
+
+/* Top Header */
+.top-header {
+  height: 64px;
+  background: var(--sidebar-bg);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+.top-header .left-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.top-header .right-section {
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 
 /* Sidebar Styling */
@@ -208,8 +242,9 @@ body {
   padding: 30px 20px;
   display: flex;
   flex-direction: column;
-  position: fixed;
-  height: 100vh;
+  position: sticky;
+  top: 64px;
+  height: calc(100vh - 64px);
   z-index: 100;
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s, border-color 0.3s;
 }
@@ -304,17 +339,16 @@ body {
 }
 
 .main-content {
-  margin-left: var(--sidebar-width);
-  width: calc(100% - var(--sidebar-width));
   flex-grow: 1;
+  width: auto;
+  min-width: 0;
   padding: 40px;
-  min-height: 100vh;
-  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  min-height: calc(100vh - 64px);
+  transition: padding 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .main-content.expanded {
-  margin-left: 76px;
-  width: calc(100% - 76px);
+  /* margin and width overrides are no longer needed as sidebar is in flow */
 }
 
 /* Form controls */
@@ -540,4 +574,139 @@ body {
 
 .animate-spin {
   animation: spin 1s linear infinite !important;
+}
+
+
+/* Responsive Layout */
+@media (max-width: 992px) {
+  .sidebar {
+    width: 76px !important;
+    padding: 30px 12px;
+  }
+  .sidebar .logo-text,
+  .sidebar .sidebar-brand-label,
+  .sidebar .nav-label {
+    display: none !important;
+  }
+  .sidebar .logo-container {
+    justify-content: center;
+  }
+  .sidebar .nav-link {
+    justify-content: center;
+    padding: 12px;
+  }
+  .sidebar .nav-link:hover,
+  .sidebar .nav-link.active {
+    border-left: none;
+  }
+  .sidebar-toggle {
+    display: none;
+  }
+  .main-content {
+    margin-left: 76px !important;
+    width: calc(100% - 76px) !important;
+    padding: 24px;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100% !important;
+    height: auto !important;
+    position: sticky;
+    top: 64px;
+    padding: 12px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--sidebar-bg);
+    z-index: 1000;
+  }
+  .logo-container {
+    margin-bottom: 12px;
+    width: 100%;
+    justify-content: center;
+  }
+  .logo-text {
+    display: block !important;
+  }
+  .sidebar > nav {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-links {
+    flex-direction: row;
+    justify-content: space-around;
+    min-width: max-content;
+    padding: 0 5px 10px 5px;
+    gap: 8px;
+  }
+  .nav-link {
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.75rem;
+    padding: 8px 16px;
+    border-radius: 8px;
+  }
+  .nav-link .nav-label {
+    display: block !important;
+    font-size: 0.7rem;
+  }
+  .nav-link.active {
+    background: transparent;
+    border-bottom: 3px solid var(--accent-primary);
+    color: var(--accent-primary);
+    border-left: none !important;
+    border-radius: 0;
+  }
+  .sidebar-bottom-actions {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    flex-direction: row !important;
+    margin-top: 0 !important;
+    gap: 8px !important;
+  }
+  .sidebar-bottom-actions .btn {
+    padding: 6px 10px;
+  }
+  .sidebar-bottom-actions .nav-label {
+    display: none !important;
+  }
+  .sidebar-footer-text {
+    display: none !important;
+  }
+  .main-content {
+    margin-left: 0 !important;
+    width: 100% !important;
+    padding: 16px !important;
+  }
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  .glass-panel {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 600px) {
+  .top-header {
+    padding: 0 12px;
+  }
+  .top-header .right-section {
+    display: none; /* Hide 'Product Delivered by...' on tiny screens */
+  }
+  .header-brand-label {
+    display: none !important; /* Hide 'Signed in as' on tiny screens to make room for logo */
+  }
 }

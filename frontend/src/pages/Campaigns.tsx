@@ -81,6 +81,12 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
   const [loadingHistory, setLoadingHistory] = useState<string | null>(null);
   const [callingId, setCallingId] = useState<string | null>(null);
   const [expandedTranscript, setExpandedTranscript] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [historyPages, setHistoryPages] = useState<Record<string, number>>({});
+
+  const setHistoryPage = (campaignId: string, page: number) => {
+    setHistoryPages(prev => ({ ...prev, [campaignId]: page }));
+  };
 
   // Overall stats and concurrency states
   const [contacts, setContacts] = useState<any[]>([]);
@@ -242,6 +248,10 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
     scheduled: contacts.filter(c => c.status === 'Scheduled').length,
   };
 
+  const itemsPerPage = 8;
+  const totalPages = Math.ceil(campaigns.length / itemsPerPage);
+  const currentCampaigns = campaigns.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
   return (
     <div>
       {/* Header */}
@@ -265,13 +275,10 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       </div>
 
       {/* Premium Slim Stats Header Strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: '16px', marginBottom: '28px' }}>
         {[
-          { label: 'Total Leads', value: stats.total, color: 'var(--accent-primary)', icon: Users },
-          { label: 'Completed', value: stats.completed, color: 'var(--accent-success)', icon: CheckCircle },
           { label: 'Currently Dialing', value: stats.calling, color: 'var(--accent-secondary)', icon: Phone },
           { label: 'Needs Reschedule', value: stats.needsReschedule, color: 'var(--accent-warning)', icon: AlertCircle },
-          { label: 'Scheduled Callbacks', value: stats.scheduled, color: '#8b5cf6', icon: Calendar },
           { label: 'Active Concurrency', value: `${concurrency.current} / ${concurrency.limit}`, color: 'var(--accent-primary)', icon: BarChart2 },
         ].map(s => (
           <div key={s.label} className="glass-panel" style={{ padding: '18px', display: 'flex', alignItems: 'center', gap: '14px' }}>
@@ -292,18 +299,24 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
           <p style={{ color: 'var(--text-secondary)' }}>No campaigns yet. Click <strong>New Campaign</strong> to import a CSV/Excel file.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {campaigns.map(campaign => {
+        <div className="glass-panel" style={{ padding: '0', overflow: 'hidden' }}>
+          {currentCampaigns.map((campaign, index) => {
             const total = campaign.total_contacts || 1;
             const s = campaign.stats;
             const completionPct = Math.round((s.completed / total) * 100);
             const isExpanded = expandedId === campaign.id;
             const history = historyMap[campaign.id] || [];
+
+            const HISTORY_PER_PAGE = 20;
+            const historyPage = historyPages[campaign.id] || 1;
+            const totalHistoryPages = Math.ceil(history.length / HISTORY_PER_PAGE);
+            const currentHistory = history.slice((historyPage - 1) * HISTORY_PER_PAGE, historyPage * HISTORY_PER_PAGE);
+
             const isRunning = campaign.status === 'running' || callingId === campaign.id;
             const eligible = s.pending + s.needs_reschedule + s.failed;
 
             return (
-              <div key={campaign.id} className="glass-panel" style={{ padding: '0', overflow: 'hidden' }}>
+              <div key={campaign.id} style={{ borderBottom: index < currentCampaigns.length - 1 ? '1px solid var(--border-color)' : 'none' }}>
                 {/* Campaign Header Row */}
                 <div
                   style={{ padding: '20px 24px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '16px' }}
@@ -389,7 +402,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                 {isExpanded && (
                   <div style={{ padding: '20px 24px', borderTop: '1px solid var(--border-color)' }}>
                     {/* Stats row */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 100px), 1fr))', gap: '12px', marginBottom: '20px' }}>
                       {[
                         { icon: Users, label: 'Total Leads', val: campaign.total_contacts, color: 'var(--accent-primary)' },
                         { icon: CheckCircle, label: 'Completed', val: s.completed, color: 'var(--accent-success)' },
@@ -420,17 +433,18 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                         No calls recorded yet for this campaign.
                       </div>
                     ) : (
-                      <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                          <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                              {['Contact', 'Phone', 'Outcome', 'Duration', 'Date/Time', 'Recording', ''].map(h => (
-                                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {history.map(rec => (
+                      <div>
+                        <div style={{ overflowX: 'auto', maxHeight: '400px', overflowY: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                {['Contact', 'Phone', 'Outcome', 'Duration', 'Date/Time', 'Recording', ''].map(h => (
+                                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase', position: 'sticky', top: 0, background: 'var(--bg-primary)', zIndex: 1 }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {currentHistory.map(rec => (
                               <React.Fragment key={rec.id}>
                                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.2s' }}
                                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
@@ -501,12 +515,61 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                           </tbody>
                         </table>
                       </div>
-                    )}
+
+                      {totalHistoryPages > 1 && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '15px', padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.01)' }}>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setHistoryPage(campaign.id, Math.max(1, historyPage - 1)); }}
+                            disabled={historyPage === 1}
+                            className="btn btn-secondary"
+                            style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                          >
+                            Prev
+                          </button>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            Page {historyPage} of {totalHistoryPages}
+                          </span>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setHistoryPage(campaign.id, Math.min(totalHistoryPages, historyPage + 1)); }}
+                            disabled={historyPage === totalHistoryPages}
+                            className="btn btn-secondary"
+                            style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                          >
+                            Next
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   </div>
                 )}
               </div>
             );
           })}
+
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '15px', padding: '16px 20px', borderTop: '1px solid var(--border-color)' }}>
+              <button 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="btn btn-secondary"
+                style={{ padding: '6px 16px', fontSize: '0.85rem' }}
+              >
+                Previous
+              </button>
+              <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                Page {currentPage} of {totalPages}
+              </span>
+              <button 
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="btn btn-secondary"
+                style={{ padding: '6px 16px', fontSize: '0.85rem' }}
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -109,11 +109,13 @@ def _user_with_school_name(user: dict, db: Session) -> dict:
     """Attach school_name for the frontend header/branding."""
     out = dict(user)
     out["school_name"] = None
+    out["school_logo"] = None
     if user.get("school_id"):
         from src.db import School
         school = db.query(School).filter(School.id == user["school_id"]).first()
         if school:
             out["school_name"] = school.name
+            out["school_logo"] = school.logo_url
     return out
 
 

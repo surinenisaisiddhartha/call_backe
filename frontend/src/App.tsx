@@ -62,6 +62,7 @@ export default function App() {
 
   const userRole = user?.role || 'user';
   const schoolName = user?.school_name || null;
+  const schoolLogo = user?.school_logo || null;
 
   const getInitialTab = (): Tab => {
     const hash = window.location.hash.slice(1) as Tab;
@@ -138,10 +139,10 @@ export default function App() {
   }
 
   const navItems: { tab: Tab; icon: React.ReactNode; label: string }[] = [
-    { tab: 'dashboard',    icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
-    { tab: 'campaigns',    icon: <BarChart2 size={20} />,       label: 'Campaigns' },
-    { tab: 'contacts',     icon: <Users size={20} />,           label: 'Leads Directory' },
-    { tab: 'scheduling',   icon: <CalendarCheck size={20} />,   label: 'Scheduling' },
+    { tab: 'dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
+    { tab: 'campaigns', icon: <BarChart2 size={20} />, label: 'Campaigns' },
+    { tab: 'contacts', icon: <Users size={20} />, label: 'Leads Directory' },
+    { tab: 'scheduling', icon: <CalendarCheck size={20} />, label: 'Scheduling' },
   ];
 
   if (userRole === 'admin') {
@@ -151,86 +152,112 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* Sidebar Navigation */}
-      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
-        <button
-          className="sidebar-toggle"
-          onClick={toggleSidebar}
-          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-        </button>
-
-        <div className="logo-container">
-          <MessageSquare style={{ color: 'var(--accent-primary)', flexShrink: 0 }} size={28} />
-          <span className="logo-text">Call Manager</span>
-        </div>
-
-        {/* Which tenant this dashboard is showing */}
-        {!sidebarCollapsed && (
-          <div className="nav-label" style={{
-            padding: '10px 12px', margin: '0 0 14px 0', borderRadius: '10px',
-            background: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.20)',
-          }}>
-            <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: '2px' }}>
-              {schoolName ? 'School' : 'Signed in as'}
+      {/* Global Top Header */}
+      <header className="top-header" style={{
+        height: '74px',
+        background: 'var(--bg-primary)',
+        borderBottom: '1px solid var(--border-color)',
+        padding: '0 30px'
+      }}>
+        <div className="left-section" style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+          <div className="logo-container" style={{ margin: 0, paddingRight: '24px', borderRight: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', padding: '8px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.25)' }}>
+              <MessageSquare style={{ color: '#fff', flexShrink: 0 }} size={22} />
             </div>
-            <div style={{ fontWeight: 700, fontSize: '0.92rem', lineHeight: 1.3 }}>
-              {schoolName || (userRole === 'admin' ? 'Platform Admin' : user?.email || '—')}
+            <span className="logo-text" style={{ fontSize: '1.4rem', fontWeight: 800, letterSpacing: '-0.02em' }}>Call Manager</span>
+          </div>
+
+          <div className="header-brand-label" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', overflow: 'hidden' }}>
+              {schoolLogo ? (
+                <img src={schoolLogo.startsWith('http') ? schoolLogo : `http://localhost:5000${schoolLogo}`} alt="School Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              ) : !schoolName && userRole === 'admin' ? (
+                <img src="https://ui-avatars.com/api/?name=RI&background=4f46e5&color=fff&rounded=true&bold=true" alt="Response Informatics Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              ) : (
+                <SchoolIcon size={20} />
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '2px', fontWeight: 600 }}>
+                {schoolName ? 'School Workspace' : 'Platform Access'}
+              </div>
+              <div style={{ fontWeight: 600, fontSize: '1.1rem', color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
+                {schoolName || (userRole === 'admin' ? 'Admin Console' : user?.email || '—')}
+              </div>
             </div>
           </div>
-        )}
-
-        <nav style={{ flexGrow: 1 }}>
-          <ul className="nav-links">
-            {navItems.map(({ tab, icon, label }) => (
-              <li key={tab}>
-                <a
-                  href={`#${tab}`}
-                  className={`nav-link ${activeTab === tab ? 'active' : ''}`}
-                  onClick={() => setActiveTab(tab)}
-                  title={sidebarCollapsed ? label : undefined}
-                >
-                  {icon}
-                  <span className="nav-label">{label}</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
-
-        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <button
-            onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
-            className="btn btn-secondary"
-            style={{ width: '100%', justifyContent: 'center' }}
-            title={sidebarCollapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : undefined}
-          >
-            {theme === 'dark' ? <Sun size={18} style={{ flexShrink: 0 }} /> : <Moon size={18} style={{ flexShrink: 0 }} />}
-            <span className="nav-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
-          </button>
-
-          <button
-            onClick={handleLogout}
-            className="btn btn-secondary"
-            style={{ width: '100%', justifyContent: 'center' }}
-            title={sidebarCollapsed ? 'Sign Out' : undefined}
-          >
-            <LogOut size={18} style={{ flexShrink: 0 }} />
-            <span className="nav-label">Sign Out</span>
-          </button>
         </div>
-      </aside>
 
-      {/* Main Content Area */}
-      <main className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
-        {activeTab === 'dashboard'    && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
-        {activeTab === 'campaigns'    && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
-        {activeTab === 'contacts'     && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} />}
-        {activeTab === 'scheduling'   && <Scheduling showToast={showToast} />}
-        {activeTab === 'schools'      && userRole === 'admin' && <Schools showToast={showToast} />}
-        {activeTab === 'settings'     && userRole === 'admin' && <Settings showToast={showToast} />}
-      </main>
+        <div className="right-section" style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.4, paddingLeft: '24px', borderLeft: '1px solid var(--border-color)' }}>
+            Delivered by <br /><span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.85rem' }}>Response Informatics</span>
+          </div>
+        </div>
+      </header>
+
+      <div className="main-layout">
+        {/* Sidebar Navigation */}
+        <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+          <button
+            className="sidebar-toggle"
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+
+          <nav style={{ flexGrow: 1 }}>
+            <ul className="nav-links">
+              {navItems.map(({ tab, icon, label }) => (
+                <li key={tab}>
+                  <a
+                    href={`#${tab}`}
+                    className={`nav-link ${activeTab === tab ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab)}
+                    title={sidebarCollapsed ? label : undefined}
+                  >
+                    {icon}
+                    <span className="nav-label">{label}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+
+          <div className="sidebar-bottom-actions" style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <button
+              onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+              className="btn btn-secondary"
+              style={{ width: '100%', justifyContent: 'center' }}
+              title={sidebarCollapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : undefined}
+            >
+              {theme === 'dark' ? <Sun size={18} style={{ flexShrink: 0 }} /> : <Moon size={18} style={{ flexShrink: 0 }} />}
+              <span className="nav-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="btn btn-secondary"
+              style={{ width: '100%', justifyContent: 'center' }}
+              title={sidebarCollapsed ? 'Sign Out' : undefined}
+            >
+              <LogOut size={18} style={{ flexShrink: 0 }} />
+              <span className="nav-label">Sign Out</span>
+            </button>
+          </div>
+
+        </aside>
+
+        {/* Main Content Area */}
+        <main className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
+          {activeTab === 'dashboard' && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+          {activeTab === 'campaigns' && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+          {activeTab === 'contacts' && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} />}
+          {activeTab === 'scheduling' && <Scheduling showToast={showToast} />}
+          {activeTab === 'schools' && userRole === 'admin' && <Schools showToast={showToast} />}
+          {activeTab === 'settings' && userRole === 'admin' && <Settings showToast={showToast} />}
+        </main>
+      </div>
 
       {/* Toast Alert System */}
       <div style={{ position: 'fixed', bottom: '24px', right: '24px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
