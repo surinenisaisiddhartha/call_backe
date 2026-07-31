@@ -63,21 +63,54 @@ export default function App() {
   const userRole = user?.role || 'user';
   const schoolName = user?.school_name || null;
 
-  const getInitialTab = (): Tab => {
-    const hash = window.location.hash.slice(1) as Tab;
-    const allowedTabs: Tab[] = ['dashboard', 'campaigns', 'contacts', 'scheduling'];
-    if (userRole === 'admin') {
-      allowedTabs.push('settings', 'schools');
-    }
-    return allowedTabs.includes(hash) ? hash : 'dashboard';
+  // The URL carries which school's dashboard you're looking at:
+  //   #shri-ram-academy/contacts
+  // A platform admin isn't scoped to one school, so they get 'platform'.
+  // This is the school's slug rather than its display name because a name
+  // like "The Shri Ram Academy" would have to be percent-encoded in a URL.
+  const schoolSlug = user?.school_slug || (userRole === 'admin' ? 'platform' : null);
+
+  const allowedTabsFor = (role: string): Tab[] => {
+    const tabs: Tab[] = ['dashboard', 'campaigns', 'contacts', 'scheduling'];
+    if (role === 'admin') tabs.push('settings', 'schools');
+    return tabs;
   };
+
+  /**
+   * Reads the tab out of the hash, accepting both the current
+   * "#<slug>/<tab>" form and the older bare "#<tab>" form — old bookmarks and
+   * any link shared before this change must keep working.
+   */
+  const tabFromHash = (): Tab | null => {
+    const raw = window.location.hash.replace(/^#\/?/, '');
+    if (!raw) return null;
+    const segments = raw.split('/').filter(Boolean);
+    const candidate = (segments.length > 1 ? segments[1] : segments[0]) as Tab;
+    return allowedTabsFor(userRole).includes(candidate) ? candidate : null;
+  };
+
+  const getInitialTab = (): Tab => tabFromHash() || 'dashboard';
   const [activeTab, setActiveTab] = useState<Tab>(getInitialTab());
+
+  const hashFor = (tab: Tab) => (schoolSlug ? `#${schoolSlug}/${tab}` : `#${tab}`);
+
+  // Keep the address bar canonical: once we know which school the signed-in
+  // user belongs to, rewrite "#contacts" to "#shri-ram-academy/contacts".
+  // Guarded on inequality so this never ping-pongs with the hashchange
+  // listener below.
+  React.useEffect(() => {
+    if (!token || !user) return;
+    const desired = hashFor(activeTab);
+    if (window.location.hash !== desired) {
+      window.location.replace(desired);
+    }
+  }, [token, user, activeTab, schoolSlug]);
   const [jumpToContactId, setJumpToContactId] = useState<string | null>(null);
 
   const viewContactFromElsewhere = (contactId: string) => {
     setJumpToContactId(contactId);
     setActiveTab('contacts');
-    window.location.hash = 'contacts';
+    window.location.hash = hashFor('contacts');
   };
 
   React.useEffect(() => {
@@ -87,14 +120,8 @@ export default function App() {
 
   React.useEffect(() => {
     const handleHashChange = () => {
-      const hash = window.location.hash.slice(1) as Tab;
-      const allowedTabs: Tab[] = ['dashboard', 'campaigns', 'contacts', 'scheduling'];
-      if (userRole === 'admin') {
-        allowedTabs.push('settings', 'schools');
-      }
-      if (allowedTabs.includes(hash)) {
-        setActiveTab(hash);
-      }
+      const tab = tabFromHash();
+      if (tab) setActiveTab(tab);
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -163,7 +190,7 @@ export default function App() {
 
         <div className="logo-container">
           <MessageSquare style={{ color: 'var(--accent-primary)', flexShrink: 0 }} size={28} />
-          <span className="logo-text">Call Manager</span>
+          <span className="logo-text">EnquiryCall</span>
         </div>
 
         {/* Which tenant this dashboard is showing */}
@@ -186,7 +213,7 @@ export default function App() {
             {navItems.map(({ tab, icon, label }) => (
               <li key={tab}>
                 <a
-                  href={`#${tab}`}
+                  href={hashFor(tab)}
                   className={`nav-link ${activeTab === tab ? 'active' : ''}`}
                   onClick={() => setActiveTab(tab)}
                   title={sidebarCollapsed ? label : undefined}

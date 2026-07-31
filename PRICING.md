@@ -1,4 +1,4 @@
-# Call Manager (Aegis Calling) — Pricing
+# EnquiryCall — Pricing
 
 **Document version:** 1.1 (INR)
 **Covers:** (1) monthly operating cost to run the system, (2) a project

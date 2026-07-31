@@ -1,8 +1,8 @@
-# Call Manager — Project Documentation
+# EnquiryCall — Project Documentation
 
 ## 1. Executive Summary
 
-Call Manager is an AI-powered outbound calling platform built for **The Shri Ram Academy (TSRA)**, an IB day-boarding school in Gachibowli, Hyderabad. It automates admissions outreach: an AI voice agent ("Arjun") calls prospective families, answers questions about the school using live-scraped website content, books campus visit appointments, schedules callbacks for people who can't talk right now, and syncs everything to Google Calendar and email — all without a human dialer.
+EnquiryCall is an AI-powered outbound calling platform built for **The Shri Ram Academy (TSRA)**, an IB day-boarding school in Gachibowli, Hyderabad. It automates admissions outreach: an AI voice agent ("Arjun") calls prospective families, answers questions about the school using live-scraped website content, books campus visit appointments, schedules callbacks for people who can't talk right now, and syncs everything to Google Calendar and email — all without a human dialer.
 
 **Live deployment:**
 - Frontend: `https://f1zc6ndiau3myh45t5o2e088.datalabscorp.ai`

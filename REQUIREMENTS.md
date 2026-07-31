@@ -1,4 +1,4 @@
-# Call Manager (Aegis Calling) — Requirements Specification
+# EnquiryCall — Requirements Specification
 
 **Project:** AI-powered outbound admissions calling platform
 **Client:** The Shri Ram Academy (TSRA), Gachibowli, Hyderabad

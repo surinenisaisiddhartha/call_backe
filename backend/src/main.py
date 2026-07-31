@@ -18,7 +18,7 @@ from src.routers.tools import router as tools_router
 from src.routers.appointments import router as appointments_router
 from src.routers.schools import router as schools_router
 
-app = FastAPI(title="Aegis Calling API", version="1.0.0")
+app = FastAPI(title="EnquiryCall API", version="1.0.0")
 
 # CORS middleware config
 app.add_middleware(
@@ -132,7 +132,7 @@ def startup_event():
             print(f"[STARTUP] Retell agent auto-configuration failed (non-fatal): {e}")
 
     threading.Thread(target=_configure_retell_agent, daemon=True).start()
-    print("Aegis Calling API is ready.")
+    print("EnquiryCall API is ready.")
 
 if __name__ == "__main__":
     import uvicorn

@@ -106,15 +106,111 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
 
 
 def _user_with_school_name(user: dict, db: Session) -> dict:
-    """Attach school_name for the frontend header/branding."""
+    """
+    Attach school_name for the header/branding, and school_slug — which the
+    frontend puts in the URL (#<slug>/<tab>) so a link says which school's
+    dashboard it points at.
+    """
     out = dict(user)
     out["school_name"] = None
+    out["school_slug"] = None
     if user.get("school_id"):
         from src.db import School
         school = db.query(School).filter(School.id == user["school_id"]).first()
         if school:
             out["school_name"] = school.name
+            out["school_slug"] = school.slug
     return out
+
+
+# Public email domains can never identify a tenant: if a school's own login
+# happens to be an @gmail.com address, domain-matching on it would map EVERY
+# gmail user in the world to that school. Domain resolution is therefore only
+# ever done against a school's registered website host, and never against
+# these.
+_PUBLIC_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "yahoo.com", "yahoo.co.in", "yahoo.co.uk", "icloud.com", "me.com",
+    "aol.com", "proton.me", "protonmail.com", "pm.me", "zoho.com",
+    "rediffmail.com", "mail.com", "yandex.com", "gmx.com", "fastmail.com",
+}
+
+
+def _website_host(website: str) -> str:
+    """The bare hostname of a school's website, lowercased, without 'www.'."""
+    from urllib.parse import urlparse
+    raw = (website or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    host = (urlparse(raw).netloc or "").lower().split(":")[0]
+    return host[4:] if host.startswith("www.") else host
+
+
+def resolve_school_for_email(db: Session, email: str):
+    """
+    Which school an email belongs to, for the email-first login step.
+
+    Two ways, in order:
+      1. it is a school's registered login address (exact, case-insensitive)
+      2. its domain matches a school's own website host — so anyone at
+         @theirschool.edu lands on that school, not just the one admin address
+
+    Returns the School row, or None. Never raises: an unrecognised email is a
+    normal outcome, not an error.
+    """
+    from src.db import School
+    from sqlalchemy import func
+
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return None
+
+    school = db.query(School).filter(func.lower(School.admin_email) == email).first()
+    if school:
+        return school
+
+    domain = email.rpartition("@")[2]
+    if not domain or domain in _PUBLIC_EMAIL_DOMAINS:
+        return None
+    for candidate in db.query(School).filter(School.website.isnot(None)).all():
+        if _website_host(candidate.website) == domain:
+            return candidate
+    return None
+
+
+@router.post("/identify")
+def identify(payload: dict, db: Session = Depends(get_db)):
+    """
+    Step 1 of login: given just an email, say which school it belongs to so the
+    password step can be branded with it.
+
+    This endpoint is deliberately non-committal about whether an account
+    exists. It ALWAYS reports that the caller should continue to the password
+    step, and an unrecognised address is indistinguishable from a recognised
+    one that simply has no school (a platform admin). Otherwise this would be
+    a free account-enumeration oracle: it is unauthenticated, so anyone could
+    probe addresses and learn which are registered.
+
+    Knowing an address belongs to a school is still information — that is
+    inherent to the feature being asked for — but "this address exists" is not
+    leaked, and a wrong password fails identically either way.
+    """
+    email = (payload.get("email") or "").strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+
+    school = resolve_school_for_email(db, email)
+    return {
+        "email": email,
+        "school_name": school.name if school else None,
+        "school_slug": school.slug if school else None,
+        "school_location": school.location if school else None,
+        # Always true — see the docstring. The client uses this to advance to
+        # the password step regardless of whether a school was matched.
+        "next": "password",
+    }
 
 
 @router.post("/login")
