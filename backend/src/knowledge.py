@@ -1,5 +1,12 @@
 """
-Knowledge Base System - Website scraper, chunking, and search for TSRA information.
+Knowledge Base System — website scraper, chunking, and search.
+
+Per-school: every tenant's knowledge base is built from ITS OWN website
+(schools.website) and stored against its school_id, and the agent's
+lookup_school_info tool only ever searches the calling school's chunks. The
+original single-tenant school ('shri-ram-academy') keeps its hand-curated URL
+list and static fact chunks below; every other school gets its pages
+discovered by crawling its own site.
 """
 
 import httpx
@@ -7,7 +14,11 @@ from bs4 import BeautifulSoup
 import hashlib
 from datetime import datetime
 from typing import List, Optional
-from src.db import SessionLocal, KnowledgeChunk
+from src.db import SessionLocal, KnowledgeChunk, School
+
+# The original single-tenant school — the only one with a hand-maintained URL
+# list and curated static chunks, both of which are specific to its site.
+DEFAULT_SCHOOL_SLUG = "shri-ram-academy"
 
 # TSRA website URLs to scrape
 TSRA_URLS = [
@@ -148,29 +159,136 @@ def chunk_text(text: str, chunk_size: int = 500) -> List[str]:
     return chunks
 
 
-def refresh_knowledge_base():
+# Page paths worth crawling on an unknown school site, most useful first. A
+# generic school website has no predictable sitemap, so we rank discovered
+# same-domain links by whether they look like the pages a parent would ask
+# about on an admissions call.
+_INTERESTING_LINK_KEYWORDS = [
+    "admission", "admissions", "apply", "enrol", "enroll", "fee", "fees",
+    "about", "curriculum", "academic", "programme", "program", "contact",
+    "facilit", "campus", "faculty", "team", "school", "overview", "why",
+    "infrastructure", "sport", "transport", "event",
+]
+
+
+def discover_school_urls(website: str, max_pages: int = 12) -> List[str]:
     """
-    Scrape all TSRA URLs and update knowledge chunks in database.
+    Build a crawl list for a school we know nothing about beyond its homepage:
+    fetch the homepage, keep the same-domain links, and rank the ones whose
+    path looks like an admissions-relevant page ahead of the rest. Returns the
+    homepage plus up to max_pages-1 discovered pages.
+    """
+    from urllib.parse import urljoin, urlparse
+
+    website = (website or "").strip()
+    if not website:
+        return []
+    if not website.startswith(("http://", "https://")):
+        website = f"https://{website}"
+
+    urls = [website]
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = httpx.get(website, headers=headers, timeout=30.0, follow_redirects=True)
+        if response.status_code != 200:
+            print(f"[SCRAPER] Could not fetch homepage {website}: {response.status_code}")
+            return urls
+
+        home_host = urlparse(str(response.url)).netloc.lower()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        ranked, others = [], []
+        seen = {website.rstrip("/")}
+        for a in soup.find_all("a", href=True):
+            href = a["href"].split("#")[0].strip()
+            if not href or href.startswith(("mailto:", "tel:", "javascript:")):
+                continue
+            absolute = urljoin(str(response.url), href)
+            parsed = urlparse(absolute)
+            if parsed.scheme not in ("http", "https") or parsed.netloc.lower() != home_host:
+                continue
+            # Skip asset/media links — they carry no answerable prose.
+            if parsed.path.lower().endswith((".pdf", ".jpg", ".jpeg", ".png", ".gif",
+                                             ".svg", ".zip", ".mp4", ".webp", ".ico")):
+                continue
+            normalized = absolute.rstrip("/")
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            path = parsed.path.lower()
+            (ranked if any(k in path for k in _INTERESTING_LINK_KEYWORDS) else others).append(absolute)
+
+        urls.extend((ranked + others)[: max_pages - 1])
+        print(f"[SCRAPER] Discovered {len(urls)} page(s) to scrape for {website}")
+    except Exception as e:
+        print(f"[SCRAPER] URL discovery failed for {website}: {e}")
+
+    return urls
+
+
+def _resolve_school(db, school_id: Optional[str]) -> Optional[School]:
+    """The school to build a knowledge base for. school_id=None means the
+    original single-tenant school, preserving pre-multitenancy call sites."""
+    if school_id:
+        return db.query(School).filter(School.id == school_id).first()
+    return db.query(School).filter(School.slug == DEFAULT_SCHOOL_SLUG).first()
+
+
+def get_urls_for_school(school: Optional[School]) -> List[str]:
+    """
+    The pages to scrape for a school. The original school keeps its curated,
+    hand-verified URL list; any other school's pages are discovered from its
+    own configured website.
+    """
+    if school is None or school.slug == DEFAULT_SCHOOL_SLUG:
+        return list(TSRA_URLS)
+    return discover_school_urls(school.website)
+
+
+def refresh_knowledge_base(school_id: str = None):
+    """
+    Rebuild one school's knowledge base from its own website.
+
+    school_id=None targets the original single-tenant school so existing
+    callers (startup seed, the legacy nightly job) behave exactly as before.
+    Returns the number of chunks written.
     """
     db = SessionLocal()
     try:
+        school = _resolve_school(db, school_id)
+        resolved_school_id = school.id if school else None
+        is_default_school = school is None or school.slug == DEFAULT_SCHOOL_SLUG
+        label = school.name if school else "default school"
+
+        urls = get_urls_for_school(school)
+        if not urls:
+            print(f"[SCRAPER] '{label}' has no website configured — nothing to scrape. "
+                  "Set the school's website on the Schools page, then refresh again.")
+            return 0
+
         total_chunks = 0
-        for url in TSRA_URLS:
+        for url in urls:
             print(f"[SCRAPER] Processing {url}")
             result = scrape_url(url)
             if not result:
                 continue
-            
+
             title, content = result
             chunks = chunk_text(content, chunk_size=500)
-            
-            # Delete existing chunks for this URL
-            db.query(KnowledgeChunk).filter(KnowledgeChunk.source_url == url).delete()
-            
+
+            # Delete this school's existing chunks for this URL. Scoped by
+            # school_id as well as URL so two schools that happen to share a
+            # source page (or a NULL-school legacy row) can't wipe each other.
+            db.query(KnowledgeChunk).filter(
+                KnowledgeChunk.source_url == url,
+                KnowledgeChunk.school_id == resolved_school_id,
+            ).delete()
+
             # Insert new chunks
             for chunk in chunks:
                 content_hash = hashlib.sha256(chunk.encode()).hexdigest()
                 knowledge_chunk = KnowledgeChunk(
+                    school_id=resolved_school_id,
                     source_url=url,
                     page_title=title,
                     content=chunk,
@@ -180,28 +298,33 @@ def refresh_knowledge_base():
                 db.add(knowledge_chunk)
                 total_chunks += 1
 
-        # Inject static curated chunks (admission status, Merak, school overview)
-        print(f"[SCRAPER] Injecting {len(STATIC_KNOWLEDGE_CHUNKS)} static knowledge chunks...")
-        for sc in STATIC_KNOWLEDGE_CHUNKS:
-            content_hash = hashlib.sha256(sc["content"].encode()).hexdigest()
-            # Only insert if not already present (idempotent by content hash)
-            existing = db.query(KnowledgeChunk).filter(
-                KnowledgeChunk.content_hash == content_hash
-            ).first()
-            if not existing:
-                db.add(KnowledgeChunk(
-                    source_url=sc["source_url"],
-                    page_title=sc["page_title"],
-                    content=sc["content"],
-                    content_hash=content_hash,
-                    scraped_at=datetime.utcnow()
-                ))
-                total_chunks += 1
+        # Inject static curated chunks (admission status, Merak, school
+        # overview). These are hand-written facts about the ORIGINAL school
+        # only — asserting them about a different school would be fabrication.
+        if is_default_school:
+            print(f"[SCRAPER] Injecting {len(STATIC_KNOWLEDGE_CHUNKS)} static knowledge chunks...")
+            for sc in STATIC_KNOWLEDGE_CHUNKS:
+                content_hash = hashlib.sha256(sc["content"].encode()).hexdigest()
+                # Only insert if not already present (idempotent by content hash)
+                existing = db.query(KnowledgeChunk).filter(
+                    KnowledgeChunk.content_hash == content_hash,
+                    KnowledgeChunk.school_id == resolved_school_id,
+                ).first()
+                if not existing:
+                    db.add(KnowledgeChunk(
+                        school_id=resolved_school_id,
+                        source_url=sc["source_url"],
+                        page_title=sc["page_title"],
+                        content=sc["content"],
+                        content_hash=content_hash,
+                        scraped_at=datetime.utcnow()
+                    ))
+                    total_chunks += 1
 
         db.commit()
-        print(f"[SCRAPER] Knowledge base refreshed: {total_chunks} chunks")
+        print(f"[SCRAPER] Knowledge base refreshed for '{label}': {total_chunks} chunks")
         return total_chunks
-        
+
     except Exception as e:
         print(f"[SCRAPER] Error refreshing knowledge base: {e}")
         db.rollback()
@@ -210,14 +333,48 @@ def refresh_knowledge_base():
         db.close()
 
 
-def search_knowledge(query: str, limit: int = 3) -> List[dict]:
+def refresh_all_school_knowledge_bases() -> dict:
     """
-    Search knowledge base for relevant chunks.
+    Refresh every active school's knowledge base — used by the nightly job so
+    a newly onboarded school's content stays current without anyone clicking
+    'Refresh Now'. Returns {school_name: chunk_count}.
+    """
+    db = SessionLocal()
+    try:
+        schools = db.query(School).filter(School.status == "active").all()
+        targets = [(s.id, s.name, s.slug, s.website) for s in schools]
+    finally:
+        db.close()
+
+    results = {}
+    if not targets:
+        # No schools row yet (fresh single-tenant deployment) — refresh the
+        # original school's list exactly as the old job did.
+        results["default school"] = refresh_knowledge_base()
+        return results
+
+    for school_id, name, slug, website in targets:
+        if slug != DEFAULT_SCHOOL_SLUG and not (website or "").strip():
+            print(f"[SCRAPER] Skipping '{name}' — no website configured")
+            continue
+        results[name] = refresh_knowledge_base(school_id)
+    return results
+
+
+def search_knowledge(query: str, limit: int = 3, school_id: str = None) -> List[dict]:
+    """
+    Search a knowledge base for relevant chunks.
     Simple robust keyword-based search.
-    
+
     Args:
         query: Search query
-    
+        limit: Max chunks to return
+        school_id: Restrict to this school's chunks. Passing it is what keeps
+            one school's agent from answering with another school's facts —
+            callers that know the tenant (the lookup_school_info tool, the
+            dashboard test-search) must always pass it. None searches every
+            chunk, which is only correct for a single-tenant deployment.
+
     Returns:
         List of dicts with source_url, page_title, content
     """
@@ -268,7 +425,10 @@ def search_knowledge(query: str, limit: int = 3) -> List[dict]:
         if not query_words:
             return []
             
-        chunks = db.query(KnowledgeChunk).all()
+        chunk_query = db.query(KnowledgeChunk)
+        if school_id:
+            chunk_query = chunk_query.filter(KnowledgeChunk.school_id == school_id)
+        chunks = chunk_query.all()
         for chunk in chunks:
             clean_content = re.sub(r'[^\w\s]', ' ', chunk.content.lower())
             content_words = set(clean_content.split())
@@ -324,21 +484,30 @@ def smart_truncate(text: str, limit: int) -> str:
     return window.strip() + "..."
 
 
-def get_knowledge_status() -> dict:
+def get_knowledge_status(school_id: str = None) -> dict:
     """
-    Get status of knowledge base.
+    Get status of a school's knowledge base. school_id=None reports across
+    every school (the platform-admin view).
     """
     db = SessionLocal()
     try:
-        total_chunks = db.query(KnowledgeChunk).count()
-        last_scraped = db.query(KnowledgeChunk).order_by(
-            KnowledgeChunk.scraped_at.desc()
-        ).first()
-        
+        chunk_query = db.query(KnowledgeChunk)
+        if school_id:
+            chunk_query = chunk_query.filter(KnowledgeChunk.school_id == school_id)
+
+        total_chunks = chunk_query.count()
+        last_scraped = chunk_query.order_by(KnowledgeChunk.scraped_at.desc()).first()
+
+        # How many distinct pages this knowledge base was actually built from,
+        # rather than the length of the original school's hardcoded URL list —
+        # that number was meaningless for any other school.
+        urls_monitored = len({c.source_url for c in chunk_query.all()})
+
         return {
             "total_chunks": total_chunks,
             "last_scraped": last_scraped.scraped_at.isoformat() if last_scraped else None,
-            "urls_monitored": len(TSRA_URLS)
+            "urls_monitored": urls_monitored,
+            "school_id": school_id,
         }
     finally:
         db.close()

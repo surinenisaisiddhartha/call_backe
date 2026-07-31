@@ -114,6 +114,12 @@ class School(Base):
     google_calendar_id = Column(String(255), nullable=True)
     cal_com_api_key = Column(String(255), nullable=True)            # this school's own Cal.com account
     cal_com_event_link = Column(String(500), nullable=True)
+    # Which Cal.com event type to book for each meeting kind. Resolved by slug
+    # rather than by "first event type in the account" — once an account has
+    # both a video and an in-person event type, guessing sends a campus visitor
+    # a video link (or a virtual attendee a street address).
+    cal_com_virtual_event_slug = Column(String(255), nullable=True)
+    cal_com_in_person_event_slug = Column(String(255), nullable=True)
     smtp_server = Column(String(255), nullable=True)                # this school's own confirmation-email sender
     smtp_port = Column(Integer, nullable=True)
     smtp_username = Column(String(255), nullable=True)
@@ -199,8 +205,17 @@ class Appointment(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class KnowledgeChunk(Base):
+    """
+    Scraped website content the voice agent answers factual questions from.
+    Scoped per school: each tenant's chunks come from ITS OWN website
+    (schools.website), and lookup_school_info only ever searches the calling
+    school's chunks — otherwise every school's agent would answer questions
+    using the original single-tenant school's facts.
+    school_id is nullable only so the migration can adopt pre-existing rows.
+    """
     __tablename__ = "knowledge_chunks"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
     source_url = Column(String(500), nullable=False)
     page_title = Column(String(500), nullable=True)
     content = Column(Text, nullable=False)              # ~300-500 token chunk
@@ -255,6 +270,13 @@ def init_db():
                 conn.execute(text("ALTER TABLE upload_batches ADD COLUMN school_id VARCHAR(36);"))
                 conn.commit()
 
+        kc_columns = [c['name'] for c in inspector.get_columns('knowledge_chunks')]
+        if 'school_id' not in kc_columns:
+            print("[DB] Self-healing migration: adding school_id to knowledge_chunks table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE knowledge_chunks ADD COLUMN school_id VARCHAR(36);"))
+                conn.commit()
+
         # Backfill: every row without a school belongs to the original
         # single-tenant deployment's school. Create it once (fixed slug) and
         # adopt orphaned rows into it, carrying over the currently-live
@@ -266,25 +288,39 @@ def init_db():
             if not default_school:
                 orphan_contacts = conn.execute(text(
                     "SELECT count(*) FROM contacts WHERE school_id IS NULL"
-                )).scalar()
-                if orphan_contacts and orphan_contacts > 0:
+                )).scalar() or 0
+                # Knowledge chunks count too: a deployment can have a seeded
+                # knowledge base before its first lead is uploaded, and those
+                # chunks are the original school's website content — they need
+                # the same adoption or per-school lookup finds nothing.
+                orphan_chunks = conn.execute(text(
+                    "SELECT count(*) FROM knowledge_chunks WHERE school_id IS NULL"
+                )).scalar() or 0
+                if orphan_contacts > 0 or orphan_chunks > 0:
                     default_id = str(uuid.uuid4())
                     agent_row = conn.execute(text("SELECT value FROM settings WHERE key = 'local_agent_id'")).fetchone()
                     llm_row = conn.execute(text("SELECT value FROM settings WHERE key = 'retell_llm_id'")).fetchone()
                     conn.execute(text(
-                        "INSERT INTO schools (id, name, slug, location, contact_phone, status, retell_agent_id, retell_llm_id, created_at) "
-                        "VALUES (:id, 'The Shri Ram Academy', 'shri-ram-academy', 'Gachibowli, Hyderabad', '+91 7569891111', 'active', :agent, :llm, :now)"
+                        "INSERT INTO schools (id, name, slug, location, contact_phone, website, status, retell_agent_id, retell_llm_id, created_at) "
+                        "VALUES (:id, 'The Shri Ram Academy', 'shri-ram-academy', 'Gachibowli, Hyderabad', '+91 7569891111', "
+                        "'https://tsrahyderabad.com/', 'active', :agent, :llm, :now)"
                     ), {"id": default_id, "agent": agent_row[0] if agent_row else None,
                         "llm": llm_row[0] if llm_row else None, "now": datetime.utcnow()})
                     conn.execute(text("UPDATE contacts SET school_id = :sid WHERE school_id IS NULL"), {"sid": default_id})
                     conn.execute(text("UPDATE upload_batches SET school_id = :sid WHERE school_id IS NULL"), {"sid": default_id})
+                    conn.execute(text("UPDATE knowledge_chunks SET school_id = :sid WHERE school_id IS NULL"), {"sid": default_id})
                     conn.commit()
-                    print(f"[DB] Migration: created default school 'The Shri Ram Academy' ({default_id}) and adopted {orphan_contacts} existing contacts")
+                    print(f"[DB] Migration: created default school 'The Shri Ram Academy' ({default_id}) and adopted {orphan_contacts} existing contacts, {orphan_chunks} knowledge chunks")
             else:
                 # School exists — still adopt any strays (e.g. rows created
                 # by an old app instance mid-deploy).
                 conn.execute(text("UPDATE contacts SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
                 conn.execute(text("UPDATE upload_batches SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
+                conn.execute(text("UPDATE knowledge_chunks SET school_id = (SELECT id FROM schools WHERE slug='shri-ram-academy') WHERE school_id IS NULL"))
+                conn.execute(text(
+                    "UPDATE schools SET website = 'https://tsrahyderabad.com/' "
+                    "WHERE slug = 'shri-ram-academy' AND (website IS NULL OR website = '')"
+                ))
                 conn.commit()
 
         # Per-school setting overrides (calendar/Cal.com/SMTP/phone) — all
@@ -297,6 +333,8 @@ def init_db():
             "google_calendar_id": "VARCHAR(255)",
             "cal_com_api_key": "VARCHAR(255)",
             "cal_com_event_link": "VARCHAR(500)",
+            "cal_com_virtual_event_slug": "VARCHAR(255)",
+            "cal_com_in_person_event_slug": "VARCHAR(255)",
             "smtp_server": "VARCHAR(255)",
             "smtp_port": "INTEGER",
             "smtp_username": "VARCHAR(255)",

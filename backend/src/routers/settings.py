@@ -22,6 +22,14 @@ def get_settings(db: Session = Depends(get_db), current_user: dict = Depends(get
         "google_calendar_credentials_json",
         "google_calendar_id",
         "ngrok_auth_token",
+        "cal_com_api_key",
+        "cal_com_event_link",
+        # Which Cal.com event type each meeting kind books. Cal.com is the
+        # primary path for booking + calendar event + confirmation email, so
+        # these decide whether an attendee is emailed a video link or a campus
+        # address. Resolved by slug — never by "first event type in the account".
+        "cal_com_virtual_event_slug",
+        "cal_com_in_person_event_slug",
         "ngrok_url",
         "aegis_tools_secret",
         "cal_com_webhook_secret",

@@ -273,12 +273,18 @@ def _fire_pending_callbacks():
 
 
 def _refresh_knowledge_base():
-    """Nightly job to refresh the knowledge base by scraping TSRA website."""
-    from src.knowledge import refresh_knowledge_base
-    
+    """
+    Nightly job: refresh EVERY active school's knowledge base from its own
+    website, so a newly onboarded school's content stays current without
+    anyone clicking 'Refresh Now'.
+    """
+    from src.knowledge import refresh_all_school_knowledge_bases
+
     try:
         print("[SCHEDULER] Starting nightly knowledge base refresh...")
-        chunk_count = refresh_knowledge_base()
-        print(f"[SCHEDULER] Knowledge base refresh completed: {chunk_count} chunks")
+        results = refresh_all_school_knowledge_bases()
+        for name, count in results.items():
+            print(f"[SCHEDULER]   {name}: {count} chunks")
+        print(f"[SCHEDULER] Knowledge base refresh completed for {len(results)} school(s)")
     except Exception as e:
         print(f"[SCHEDULER] Knowledge base refresh failed: {e}")

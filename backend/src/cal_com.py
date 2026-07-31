@@ -10,8 +10,11 @@ CAL_BASE_URL = "https://api.cal.com/v2"
 # isn't one version that works everywhere.
 #   GET  /v2/event-types -> 404 on 2024-08-13/2024-09-04, 200 on 2024-06-14
 #   POST /v2/bookings    -> 400/500 (schema mismatch) on 2024-06-14, 201 on 2024-08-13
+#   GET  /v2/slots        -> 404 on 2024-06-14/2024-08-13, 200 on 2024-09-04,
+#                            and it takes start/end (dates), NOT startTime/endTime
 CAL_API_VERSION_EVENT_TYPES = "2024-06-14"
 CAL_API_VERSION_BOOKINGS = "2024-08-13"
+CAL_API_VERSION_SLOTS = "2024-09-04"
 
 def get_cal_client_info(db: Session, school: School = None):
     """school=None uses the platform's global Cal.com account (unchanged
@@ -19,7 +22,41 @@ def get_cal_client_info(db: Session, school: School = None):
     it has one configured, falling back to the global account otherwise."""
     from src.school_settings import get_cal_com_config
     config = get_cal_com_config(db, school)
-    return config["api_key"], config["event_link"]
+    # Both may legitimately be unconfigured now that there is no hardcoded
+    # fallback credential — normalize to "" so callers can do plain string
+    # work (e.g. event_link.strip("/")) without a None check everywhere.
+    return (config["api_key"] or ""), (config["event_link"] or "")
+
+
+def _configured_slug(db: Session, school: School, meeting_type: str) -> str:
+    """The event-type slug configured for this meeting kind, if any."""
+    from src.school_settings import get_cal_com_config
+    config = get_cal_com_config(db, school)
+    key = "in_person_event_slug" if meeting_type == "in_person" else "virtual_event_slug"
+    return (config.get(key) or "").strip()
+
+
+def _fetch_event_types(api_key: str) -> list:
+    """Flattened list of the account's event types, or [] on failure."""
+    headers = get_headers(api_key, CAL_API_VERSION_EVENT_TYPES)
+    try:
+        res = httpx.get(f"{CAL_BASE_URL}/event-types", headers=headers, timeout=30.0)
+        print(f"[CAL] Event types status: {res.status_code}")
+        if res.status_code != 200:
+            print("Failed to fetch Cal.com event types:", res.text)
+            return []
+        # v2 returns {"data":{"eventTypeGroups":[{"eventTypes":[...]}]}}
+        # OR {"data":[...]}
+        raw_data = res.json().get("data", {})
+        if isinstance(raw_data, list):
+            return raw_data
+        event_types = []
+        for group in raw_data.get("eventTypeGroups", []):
+            event_types.extend(group.get("eventTypes", []))
+        return event_types
+    except Exception as e:
+        print("Cal.com event type retrieval failed:", e)
+        return []
 
 def get_headers(api_key: str, api_version: str, extra: dict = None) -> dict:
     h = {
@@ -31,80 +68,87 @@ def get_headers(api_key: str, api_version: str, extra: dict = None) -> dict:
         h.update(extra)
     return h
 
-async def get_cal_event_type_id(db: Session, school: School = None) -> int:
+async def get_cal_event_type_id(db: Session, school: School = None, meeting_type: str = "virtual") -> int:
+    """
+    The Cal.com event type to book for this meeting kind.
+
+    Resolution order:
+      1. the slug explicitly configured for this meeting kind
+      2. (virtual only) a slug embedded in cal_com_event_link, for back-compat
+         with deployments that configured just a link
+      3. the account's single event type, if it has exactly one
+
+    Deliberately NO "just use the first event type" fallback: an account with
+    both a Cal Video type and an in-person type would silently mail a campus
+    visitor a video link, or hand a virtual attendee a street address. Better
+    to book nothing and say so than to confirm the wrong kind of meeting.
+    """
     api_key, event_link = get_cal_client_info(db, school)
     if not api_key:
         print("Cal.com API key is not configured.")
         return None
 
-    headers = get_headers(api_key, CAL_API_VERSION_EVENT_TYPES)
+    event_types = _fetch_event_types(api_key)
+    if not event_types:
+        print("[CAL] No event types found in account.")
+        return None
 
-    async with httpx.AsyncClient() as client:
-        try:
-            res = await client.get(f"{CAL_BASE_URL}/event-types", headers=headers, timeout=30.0)
-            print(f"[CAL] Event types status: {res.status_code}")
-            if res.status_code == 200:
-                data = res.json()
-                # v2 returns {"status":"success","data":{"eventTypeGroups":[{"eventTypes":[...]}]}}
-                # OR {"status":"success","data":[...]}
-                raw_data = data.get("data", {})
+    wanted = _configured_slug(db, school, meeting_type)
+    if not wanted and meeting_type != "in_person":
+        # e.g. https://cal.com/username/30min -> slug "30min"
+        link_parts = event_link.strip("/").split("/")
+        if len(link_parts) >= 5:
+            wanted = link_parts[-1]
 
-                # Flatten event types from both possible shapes
-                event_types = []
-                if isinstance(raw_data, list):
-                    event_types = raw_data
-                elif isinstance(raw_data, dict):
-                    for group in raw_data.get("eventTypeGroups", []):
-                        event_types.extend(group.get("eventTypes", []))
+    if wanted:
+        for et in event_types:
+            if et.get("slug") == wanted:
+                print(f"[CAL] Matched {meeting_type} event type by slug '{wanted}': id={et.get('id')}")
+                return et.get("id")
+        print(f"[CAL] No event type with slug '{wanted}' for meeting_type={meeting_type} "
+              f"(account has: {[et.get('slug') for et in event_types]})")
+        return None
 
-                if event_types:
-                    # Try to match slug from event link
-                    # e.g. https://cal.com/username/30min -> slug "30min"
-                    slug = None
-                    link_parts = event_link.strip("/").split("/")
-                    if len(link_parts) >= 5:
-                        slug = link_parts[-1]
+    if len(event_types) == 1:
+        only = event_types[0]
+        print(f"[CAL] Account has a single event type '{only.get('slug')}' — using it for {meeting_type}")
+        return only.get("id")
 
-                    if slug:
-                        for et in event_types:
-                            if et.get("slug") == slug:
-                                print(f"[CAL] Matched event type by slug '{slug}': id={et.get('id')}")
-                                return et.get("id")
-
-                    # Fallback: first event type
-                    first_id = event_types[0].get("id")
-                    print(f"[CAL] Using first event type: id={first_id}")
-                    return first_id
-                else:
-                    print("[CAL] No event types found in account.")
-            else:
-                print("Failed to fetch Cal.com event types:", res.text)
-        except Exception as e:
-            print("Cal.com event type retrieval failed:", e)
-
+    print(f"[CAL] {len(event_types)} event types exist but no slug is configured for "
+          f"meeting_type={meeting_type} — refusing to guess. Set the "
+          f"{'in-person' if meeting_type == 'in_person' else 'virtual'} event slug in this school's settings.")
     return None
 
-async def get_available_slots(db: Session, start_time: str = None, end_time: str = None, school: School = None):
+async def get_available_slots(db: Session, start_time: str = None, end_time: str = None,
+                              school: School = None, meeting_type: str = "virtual"):
+    """
+    Real availability for the event type behind this meeting kind.
+
+    Note the API contract quirks, both of which previously made this silently
+    return get_mock_slots() on every call: /v2/slots needs its own
+    cal-api-version (2024-09-04), and it takes `start`/`end` as plain dates —
+    the old startTime/endTime params 404'd.
+    """
     api_key, event_link = get_cal_client_info(db, school)
     if not api_key:
         return get_mock_slots()
 
-    event_type_id = await get_cal_event_type_id(db, school)
+    event_type_id = await get_cal_event_type_id(db, school, meeting_type)
     if not event_type_id:
         print("No active event type found, returning fallback slots for UI testing.")
         return get_mock_slots()
 
     # Default range: next 7 days
     if not start_time:
-        start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        start_time = datetime.utcnow().strftime("%Y-%m-%d")
     if not end_time:
-        end_time = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        end_time = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    headers = get_headers(api_key, CAL_API_VERSION_EVENT_TYPES)
+    headers = get_headers(api_key, CAL_API_VERSION_SLOTS)
     params = {
         "eventTypeId": event_type_id,
-        "startTime": start_time,
-        "endTime": end_time,
+        "start": start_time,
+        "end": end_time,
         "timeZone": "Asia/Kolkata"
     }
 
@@ -121,23 +165,51 @@ async def get_available_slots(db: Session, start_time: str = None, end_time: str
             print("Error querying Cal.com slots:", e)
             return get_mock_slots()
 
-async def create_booking(db: Session, contact_name: str, contact_email: str, start_time: str, school: School = None):
+async def create_booking(
+    db: Session,
+    contact_name: str,
+    contact_email: str,
+    start_time: str,
+    school: School = None,
+    meeting_type: str = "virtual",
+    purpose: str = None,
+    contact_phone: str = None,
+):
     """
-    Creates a Cal.com booking on the account's Cal Video-enabled event type and
-    returns a dict with the unique per-booking meeting link. Each booking gets
-    its own Cal Video room (unlike a single static meeting link), so overlapping
-    appointments never collide.
+    Creates the Cal.com booking for an appointment. Cal.com is the primary path
+    for the whole confirmation flow: it books the slot, writes the event to the
+    calendar connected to the Cal.com account, and emails the attendee — so no
+    separate Google Calendar insert or SMTP send is needed when this succeeds.
+
+    meeting_type="virtual" books the Cal Video event type (each booking gets its
+    own room, so overlapping appointments never collide); "in_person" books the
+    address-located event type so the attendee is emailed the campus address
+    rather than a video link.
 
     Returns: {"success": bool, "uid": str, "meeting_url": str, "error": str|None}
     """
     api_key, _ = get_cal_client_info(db, school)
-    event_type_id = await get_cal_event_type_id(db, school)
+    event_type_id = await get_cal_event_type_id(db, school, meeting_type)
 
     if not api_key or not event_type_id:
         print("Skipping booking creation because Cal.com is not configured.")
-        return {"success": False, "uid": None, "meeting_url": None, "error": "Cal.com is not configured"}
+        return {"success": False, "uid": None, "meeting_url": None, "location": None,
+                "error": "Cal.com is not configured"}
 
     headers = get_headers(api_key, CAL_API_VERSION_BOOKINGS)
+
+    # Carried into the Cal.com booking so the confirmation email and the
+    # calendar event say WHY the meeting exists, instead of just the event type
+    # name. The app's own styled email used to carry this.
+    notes_bits = []
+    if purpose:
+        notes_bits.append(f"Purpose: {purpose}")
+    if contact_phone:
+        notes_bits.append(f"Phone: {contact_phone}")
+    if school is not None and getattr(school, "name", None):
+        notes_bits.append(f"School: {school.name}")
+    notes_bits.append("Booked by the admissions voice assistant.")
+    notes = " | ".join(notes_bits)
 
     def build_body(email: str) -> dict:
         return {
@@ -146,9 +218,15 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
                 "name": contact_name,
                 "email": email,
                 "timeZone": "Asia/Kolkata",
-                "language": "en"
+                "language": "en",
+                **({"phoneNumber": contact_phone} if contact_phone else {}),
             },
             "eventTypeId": event_type_id,
+            "bookingFieldsResponses": {"notes": notes},
+            "metadata": {
+                "source": "aegis-voice-agent",
+                "meeting_type": meeting_type,
+            },
         }
 
     async with httpx.AsyncClient() as client:
@@ -183,7 +261,12 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
                 return {
                     "success": True,
                     "uid": data.get("uid"),
-                    "meeting_url": data.get("meetingUrl") or data.get("location"),
+                    # Only a virtual booking has a join URL. For in_person,
+                    # Cal.com returns the street address in `location` — storing
+                    # that as a "meeting link" would show an address where the
+                    # dashboard renders a clickable join link.
+                    "meeting_url": data.get("meetingUrl") if meeting_type == "virtual" else None,
+                    "location": data.get("location"),
                     "error": None
                 }
             else:
@@ -197,11 +280,17 @@ async def create_booking(db: Session, contact_name: str, contact_email: str, sta
             recovered = await _find_recent_booking(client, headers, event_type_id, contact_email, start_time)
             if recovered:
                 print(f"[CAL] Recovered booking after timeout: uid={recovered.get('uid')}")
-                return {"success": True, "uid": recovered.get("uid"), "meeting_url": recovered.get("meetingUrl") or recovered.get("location"), "error": None}
-            return {"success": False, "uid": None, "meeting_url": None, "error": str(e)}
+                return {
+                    "success": True,
+                    "uid": recovered.get("uid"),
+                    "meeting_url": recovered.get("meetingUrl") if meeting_type == "virtual" else None,
+                    "location": recovered.get("location"),
+                    "error": None,
+                }
+            return {"success": False, "uid": None, "meeting_url": None, "location": None, "error": str(e)}
         except Exception as e:
             print("Error creating Cal.com booking:", e)
-            return {"success": False, "uid": None, "meeting_url": None, "error": str(e)}
+            return {"success": False, "uid": None, "meeting_url": None, "location": None, "error": str(e)}
 
 
 async def _find_recent_booking(client: httpx.AsyncClient, headers: dict, event_type_id: int, attendee_email: str, start_time: str):

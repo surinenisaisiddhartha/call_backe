@@ -40,6 +40,11 @@ def verify_tools_secret(req: Request, db: Session = Depends(get_db)) -> None:
 class RetellToolBase(BaseModel):
     call_id: Optional[str] = None
     to_number: Optional[str] = None
+    # The Retell agent that placed this call. Every school has its OWN agent
+    # (see school_agent.py), so this is what identifies the tenant a tool call
+    # belongs to — used by resolve_contact/resolve_school to keep one school's
+    # phone/email lookups from ever matching another school's lead.
+    agent_id: Optional[str] = None
 
     @model_validator(mode='before')
     @classmethod
@@ -57,6 +62,8 @@ class RetellToolBase(BaseModel):
                 merged["call_id"] = call.get("call_id")
             if not merged.get("to_number"):
                 merged["to_number"] = call.get("to_number")
+            if not merged.get("agent_id"):
+                merged["agent_id"] = call.get("agent_id")
         # Also honour a call_id sent via retell_llm_dynamic_variables, if present.
         dv = data.get("retell_llm_dynamic_variables") or (call.get("retell_llm_dynamic_variables") if isinstance(call, dict) else None)
         if isinstance(dv, dict):
@@ -100,19 +107,24 @@ class MarkOutcomeRequest(RetellToolBase):
 @router.post("/lookup")
 def lookup_school_info(
     request: LookupRequest,
+    req: Request,
     db: Session = Depends(get_db),
     _secret: None = Depends(verify_tools_secret)
 ):
     """
     Tool: lookup_school_info(query)
-    Returns short grounded answer from TSRA knowledge base.
-    Retell expects: {"result": "..."}  
+    Returns a short grounded answer from the CALLING school's knowledge base.
+    Retell expects: {"result": "..."}
     """
     if not request.query or len(request.query.strip()) < 3:
         return {"result": "I couldn't process that query. Please try asking about a specific topic like fees, curriculum, or admissions."}
-    
-    results = search_knowledge(request.query, limit=3)
-    
+
+    # Scope the lookup to the school whose agent is on this call. Without this,
+    # every school's agent answered from the original school's website content
+    # — i.e. confidently stating another school's fees and admission status.
+    school_id = resolve_calling_school_id(db, req, request)
+    results = search_knowledge(request.query, limit=3, school_id=school_id)
+
     if results:
         combined_content = " ".join([r["content"] for r in results])
         answer = smart_truncate(combined_content, 600)
@@ -124,20 +136,25 @@ def lookup_school_info(
 @router.get("/lookup")
 def lookup_school_info_get(
     query: str,
-    db: Session = Depends(get_db)
+    school_id: str = None,
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
 ):
     """
-    Tool: lookup_school_info(query) - GET version for testing
-    Returns short grounded answer from TSRA knowledge base.
+    Tool: lookup_school_info(query) — GET version, for manually testing what
+    the agent would find. Nothing in the app calls this (Retell is wired to the
+    POST route), but it is publicly reachable, so it takes the same shared
+    secret as the real tool routes and requires an explicit school_id rather
+    than searching every tenant's knowledge base at once.
     """
     if not query or len(query.strip()) < 3:
         return {
             "success": False,
             "error": "Query must be at least 3 characters"
         }
-    
-    results = search_knowledge(query, limit=3)
-    
+
+    results = search_knowledge(query, limit=3, school_id=school_id)
+
     if results:
         # Synthesize answer from top results
         combined_content = " ".join([r["content"] for r in results])
@@ -178,8 +195,44 @@ def normalize_email(raw: str) -> str:
     return raw
 
 
+def resolve_calling_school_id(db: Session, req: Request, request_data: Any) -> Optional[str]:
+    """
+    Which tenant this tool call belongs to, derived from the Retell agent that
+    placed the call — each school has its own dedicated agent, so the agent id
+    is an authoritative tenant identifier that the caller can't influence.
+
+    Returns None when the agent can't be mapped to a school (the shared
+    pre-multitenancy agent, or an agent provisioned outside this database), in
+    which case lookups stay unscoped exactly as they were before.
+    """
+    from src.db import School
+
+    agent_id = getattr(request_data, "agent_id", None)
+    if not agent_id and req:
+        agent_id = req.headers.get("x-retell-agent-id")
+    if not agent_id:
+        return None
+
+    school = db.query(School).filter(School.retell_agent_id == agent_id).first()
+    return school.id if school else None
+
+
 def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Contact]:
-    # 1. Try resolving via Retell call ID from JSON body / request data
+    # Which school's agent is on this call. Every lookup below that searches by
+    # something a caller can SAY (their phone number, their email) or that
+    # guesses from recent activity is restricted to this school — otherwise two
+    # schools sharing a lead's phone number could have a booking attached to
+    # the wrong tenant's record entirely.
+    school_id = resolve_calling_school_id(db, req, request_data)
+
+    def _scoped(query):
+        return query.filter(Contact.school_id == school_id) if school_id else query
+
+    # 1. Try resolving via Retell call ID from JSON body / request data.
+    #    This path is already tenant-safe: the CallAttempt row was created by
+    #    whichever dial placed THIS call, so it can only point at that call's
+    #    own contact. No scoping needed (and none applied, so a call placed
+    #    before the contact had a school still resolves).
     call_id = getattr(request_data, "call_id", None)
     if not call_id and req:
         # Fallback to headers
@@ -195,9 +248,9 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
     contact_id = getattr(request_data, "contact_id", None)
     if not contact_id and req:
         contact_id = req.query_params.get("contact_id")
-    
+
     if contact_id and not (contact_id.startswith("{{") or contact_id.endswith("}}")):
-        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        contact = _scoped(db.query(Contact).filter(Contact.id == contact_id)).first()
         if contact:
             print(f"[TOOLS] Resolved contact {contact.id} from contact_id parameter")
             return contact
@@ -215,9 +268,9 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
         digits = re.sub(r"\D", "", phone)
         last10 = digits[-10:] if len(digits) >= 10 else digits
         if last10:
-            contact = db.query(Contact).filter(Contact.phone_number == phone).first()
+            contact = _scoped(db.query(Contact).filter(Contact.phone_number == phone)).first()
             if not contact:
-                for cand in db.query(Contact).filter(Contact.phone_number.like(f"%{last10}")).all():
+                for cand in _scoped(db.query(Contact).filter(Contact.phone_number.like(f"%{last10}"))).all():
                     if re.sub(r"\D", "", cand.phone_number or "")[-10:] == last10:
                         contact = cand
                         break
@@ -230,9 +283,9 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
     email = getattr(request_data, "attendee_email", None)
     if email and email.strip():
         from sqlalchemy import func
-        contact = db.query(Contact).filter(
+        contact = _scoped(db.query(Contact).filter(
             func.lower(Contact.email) == email.strip().lower()
-        ).first()
+        )).first()
         if contact:
             print(f"[TOOLS] Resolved contact {contact.id} from attendee_email: {email}")
             return contact
@@ -243,12 +296,14 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
     #    attaching a booking/callback/outcome to the wrong lead. If it's
     #    ambiguous, refuse to guess and let the caller-facing tool respond
     #    gracefully instead of silently corrupting someone else's record.
+    #    Scoped to the calling school too: another tenant's concurrent call
+    #    must not make this one "ambiguous", nor ever be the single guess.
     from datetime import timedelta
     calling_cutoff = datetime.utcnow() - timedelta(minutes=10)
-    calling_candidates = db.query(Contact).filter(
+    calling_candidates = _scoped(db.query(Contact).filter(
         Contact.status == "Calling",
         Contact.updated_at >= calling_cutoff
-    ).all()
+    )).all()
 
     if len(calling_candidates) == 1:
         contact = calling_candidates[0]
@@ -264,10 +319,10 @@ def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Co
     # earlier in the same turn. Only guess if there's one unambiguous, very
     # recent (last 2 minutes) status change.
     recent_cutoff = datetime.utcnow() - timedelta(minutes=2)
-    recent_candidates = db.query(Contact).filter(
+    recent_candidates = _scoped(db.query(Contact).filter(
         Contact.status.in_(["Scheduled", "Completed"]),
         Contact.updated_at >= recent_cutoff
-    ).order_by(Contact.updated_at.desc()).all()
+    )).order_by(Contact.updated_at.desc()).all()
 
     if len(recent_candidates) == 1:
         contact = recent_candidates[0]
@@ -410,6 +465,7 @@ def process_appointment_booking_async(
     from src.db import SessionLocal, Appointment, School
     from src.services.google_calendar import create_event, cancel_event
     from src.services.email_sender import send_booking_email
+    from src.school_settings import cal_com_is_configured
     from src import cal_com
 
     db = SessionLocal()
@@ -417,7 +473,19 @@ def process_appointment_booking_async(
     virtual_meeting_link = None
     try:
         school = db.query(School).filter(School.id == school_id).first() if school_id else None
-        if meeting_type == "virtual":
+
+        # ── Cal.com is the primary path for EVERY appointment ───────────────
+        # It books the slot, writes the event to the calendar connected to the
+        # Cal.com account, and emails the attendee — all three in one call. So
+        # when it succeeds there is nothing left for the Google Calendar insert
+        # or the SMTP send below to do, and running them anyway would put a
+        # duplicate event on a second calendar and send the attendee a second,
+        # differently-worded confirmation for the same appointment.
+        # Google Calendar + SMTP remain as the fallback for a school that has
+        # no Cal.com credentials, so such a school still gets an event and an
+        # email rather than silently nothing.
+        cal_com_handled = False
+        if cal_com_is_configured(db, school):
             if stale_calcom_booking_uid:
                 try:
                     asyncio.run(cal_com.cancel_booking(db, stale_calcom_booking_uid, reason="Rescheduled", school=school))
@@ -430,31 +498,42 @@ def process_appointment_booking_async(
                     contact_name=attendee_name,
                     contact_email=attendee_email or "guest@example.com",
                     start_time=start_iso,
-                    school=school
+                    school=school,
+                    meeting_type=meeting_type,
+                    purpose=purpose,
+                    contact_phone=attendee_phone,
                 ))
                 if cal_result.get("success"):
+                    cal_com_handled = True
                     virtual_meeting_link = cal_result.get("meeting_url")
                     appointment = db.query(Appointment).filter(Appointment.id == appointment_id).first()
                     if appointment:
                         appointment.calcom_booking_id = cal_result.get("uid")
                         appointment.virtual_meeting_link = virtual_meeting_link
                         db.commit()
-                        print(f"[BACKGROUND] Cal.com virtual meeting booked: {virtual_meeting_link}", flush=True)
+                    print(f"[BACKGROUND] Cal.com {meeting_type} booking created: uid={cal_result.get('uid')} "
+                          f"link={virtual_meeting_link or cal_result.get('location')}", flush=True)
                 else:
-                    print(f"[BACKGROUND] Cal.com booking failed: {cal_result.get('error')}", flush=True)
+                    print(f"[BACKGROUND] Cal.com booking failed ({cal_result.get('error')}) — "
+                          f"falling back to Google Calendar + SMTP", flush=True)
             except Exception as cal_err:
-                print(f"[BACKGROUND] Cal.com booking creation failed: {cal_err}", flush=True)
+                print(f"[BACKGROUND] Cal.com booking creation failed: {cal_err} — "
+                      f"falling back to Google Calendar + SMTP", flush=True)
 
-        if credentials_json and calendar_id:
-            # Rebooking an existing appointment (see book_appointment) leaves the
-            # previous Google Calendar event dangling since it points at a time
-            # that's no longer valid — cancel it before creating the new one.
-            if stale_calendar_event_id:
-                try:
-                    cancel_event(credentials_json, calendar_id, stale_calendar_event_id)
-                    print(f"[BACKGROUND] Cancelled stale Google Calendar event: {stale_calendar_event_id}", flush=True)
-                except Exception as cancel_err:
-                    print(f"[BACKGROUND] Failed to cancel stale Google Calendar event {stale_calendar_event_id}: {cancel_err}", flush=True)
+        # Rebooking an existing appointment (see book_appointment) leaves the
+        # previous Google Calendar event dangling since it points at a time
+        # that's no longer valid — cancel it. This runs even when Cal.com
+        # handled the new booking: an appointment first booked under the old
+        # Google Calendar flow and later rebooked under Cal.com would otherwise
+        # leave the original event sitting on the calendar at the old time.
+        if stale_calendar_event_id and credentials_json and calendar_id:
+            try:
+                cancel_event(credentials_json, calendar_id, stale_calendar_event_id)
+                print(f"[BACKGROUND] Cancelled stale Google Calendar event: {stale_calendar_event_id}", flush=True)
+            except Exception as cancel_err:
+                print(f"[BACKGROUND] Failed to cancel stale Google Calendar event {stale_calendar_event_id}: {cancel_err}", flush=True)
+
+        if not cal_com_handled and credentials_json and calendar_id:
             try:
                 result = create_event(
                     credentials_json=credentials_json,
@@ -479,8 +558,12 @@ def process_appointment_booking_async(
             except Exception as gcal_err:
                 print(f"[BACKGROUND] Google Calendar event creation failed: {gcal_err}", flush=True)
 
-        # Dispatch booking confirmation email in the background
-        if attendee_email and attendee_email.strip():
+        # Dispatch booking confirmation email — ONLY when Cal.com didn't already
+        # send one. Cal.com emails the attendee itself as part of creating the
+        # booking, so sending this too would mean two confirmations per booking.
+        if cal_com_handled:
+            print("[BACKGROUND] Confirmation email handled by Cal.com — skipping SMTP send.", flush=True)
+        elif attendee_email and attendee_email.strip():
             try:
                 email_kwargs = {}
                 if school:

@@ -12,12 +12,35 @@ from google_auth_oauthlib.flow import Flow
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 DEFAULT_DEMO_JWT_SECRET = "demo_secret_key_12345678"
-JWT_SECRET = os.getenv("JWT_SECRET", DEFAULT_DEMO_JWT_SECRET)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
 
-if JWT_SECRET == DEFAULT_DEMO_JWT_SECRET:
-    print("[AUTH] WARNING: JWT_SECRET is still the default demo value. Set a real random JWT_SECRET — it still signs the short-lived 'view as school' impersonation tokens minted from the Schools admin page.")
+# This key signs the short-lived "view as school" impersonation tokens minted
+# from the Schools admin page, so a known or empty key means anyone can forge a
+# token scoped to any tenant.
+#
+# Two ways that used to happen silently:
+#   - the published demo default was used when JWT_SECRET was absent, and
+#   - os.getenv only substitutes its default when the variable is ABSENT, not
+#     when it is EMPTY. docker-compose passes `JWT_SECRET=${JWT_SECRET}`, which
+#     is an empty string when the deploy environment hasn't set it — that
+#     produced an empty signing key AND skipped the demo-value warning below.
+#
+# So treat unset, empty and the demo default identically, and fall back to a
+# random per-process key rather than a guessable one. The cost is that
+# impersonation tokens don't survive a restart (they're 2-hour support tokens);
+# the alternative is forgeable tenant access.
+_configured_jwt_secret = (os.getenv("JWT_SECRET") or "").strip()
+if not _configured_jwt_secret or _configured_jwt_secret == DEFAULT_DEMO_JWT_SECRET:
+    import secrets as _secrets
+    JWT_SECRET = _secrets.token_urlsafe(48)
+    print(
+        "[AUTH] WARNING: JWT_SECRET is unset, empty, or still the demo default — "
+        "generated a random per-process key instead. 'View as school' tokens will "
+        "stop working after a restart. Set a real random JWT_SECRET to fix this."
+    )
+else:
+    JWT_SECRET = _configured_jwt_secret
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
 

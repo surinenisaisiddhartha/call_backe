@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import api from '../api';
 import {
   School as SchoolIcon, Plus, X, RefreshCw, Copy, Check,
-  MapPin, Phone, Mail, Users, Bot, AlertTriangle, Trash2, KeyRound, Settings2, Save
+  MapPin, Phone, Mail, Users, Bot, AlertTriangle, Trash2, KeyRound, Settings2, Save,
+  Pencil, AtSign, Globe
 } from 'lucide-react';
 
 interface School {
@@ -17,6 +18,12 @@ interface School {
   status: string;
   contact_count: number;
   created_at: string | null;
+}
+
+interface EffectiveSetting {
+  value: string | null;
+  source: 'school' | 'platform' | 'unset';
+  secret: boolean;
 }
 
 interface SchoolsProps {
@@ -47,6 +54,21 @@ export default function Schools({ showToast }: SchoolsProps) {
   const [settingsForm, setSettingsForm] = useState<Record<string, string>>({});
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  // What each setting currently resolves to and where from ("school" override,
+  // "platform" default, or "unset") — so a blank edit box doesn't hide whether
+  // the setting is configured at all.
+  const [effective, setEffective] = useState<Record<string, EffectiveSetting>>({});
+  const [bookingProvider, setBookingProvider] = useState<string>('');
+
+  // Edit a school's own identity fields (name/location/phone/website/status).
+  const [editSchool, setEditSchool] = useState<School | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editSaving, setEditSaving] = useState(false);
+
+  // Move a school's login to a different email address.
+  const [emailSchool, setEmailSchool] = useState<School | null>(null);
+  const [newEmail, setNewEmail] = useState('');
+  const [emailSaving, setEmailSaving] = useState(false);
 
   const loadSchools = async () => {
     setLoading(true);
@@ -83,6 +105,15 @@ export default function Schools({ showToast }: SchoolsProps) {
       }
       if (!agent_error && !cognito_error) {
         showToast(`${school.name} onboarded successfully`, 'success');
+      }
+      // The knowledge base is scraped in the background from the school's own
+      // website. Without a website the agent has nothing to ground answers in,
+      // so say so plainly rather than letting it look fully onboarded.
+      if (!school.website) {
+        showToast(
+          `${school.name} has no website set, so its agent has no knowledge base. Add one to build it.`,
+          'error'
+        );
       }
 
       if (temp_password) {
@@ -132,15 +163,46 @@ export default function Schools({ showToast }: SchoolsProps) {
 
   const SETTINGS_MASK = '••••••••••••••••';
 
+  // Shows what a setting resolves to today and where it came from. This is the
+  // bit the override-only form was missing: an empty input box looked identical
+  // whether the platform default was filling it in or nothing was set anywhere.
+  const EffectiveHint = ({ field }: { field: string }) => {
+    const eff = effective[field];
+    if (!eff) return null;
+    const palette = {
+      school: { fg: 'var(--accent-success)', label: 'this school' },
+      platform: { fg: 'var(--accent-primary)', label: 'platform default' },
+      unset: { fg: 'var(--accent-error)', label: 'not configured' },
+    }[eff.source];
+    return (
+      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <span style={{ color: palette.fg, fontWeight: 700 }}>{palette.label}</span>
+        {eff.source !== 'unset' && (
+          <span style={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>in use: {eff.value}</span>
+        )}
+        {eff.source === 'unset' && <span>nothing set here or at platform level</span>}
+      </div>
+    );
+  };
+
+  const SettingField = ({ field, children }: { field: string; children: React.ReactNode }) => (
+    <div>
+      {children}
+      <EffectiveHint field={field} />
+    </div>
+  );
+
   const openSettings = async (school: School) => {
     setSettingsSchool(school);
     setSettingsLoading(true);
     try {
       const res = await api.get(`/schools/${school.id}/settings`);
-      const raw = res.data || {};
+      const overrides = res.data?.overrides || {};
       const form: Record<string, string> = {};
-      Object.keys(raw).forEach(k => { form[k] = raw[k] == null ? '' : String(raw[k]); });
+      Object.keys(overrides).forEach(k => { form[k] = overrides[k] == null ? '' : String(overrides[k]); });
       setSettingsForm(form);
+      setEffective(res.data?.effective || {});
+      setBookingProvider(res.data?.booking_provider || '');
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Failed to load settings', 'error');
       setSettingsSchool(null);
@@ -152,6 +214,73 @@ export default function Schools({ showToast }: SchoolsProps) {
   const closeSettings = () => {
     setSettingsSchool(null);
     setSettingsForm({});
+    setEffective({});
+    setBookingProvider('');
+  };
+
+  const openEdit = (school: School) => {
+    setEditSchool(school);
+    setEditForm({
+      name: school.name || '',
+      location: school.location || '',
+      contact_phone: school.contact_phone || '',
+      website: school.website || '',
+      status: school.status || 'active',
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editSchool) return;
+    setEditSaving(true);
+    try {
+      const res = await api.patch(`/schools/${editSchool.id}`, editForm);
+      showToast(`${editForm.name || editSchool.name} updated`, 'success');
+      if (res.data?.agent_error) {
+        showToast(`Details saved, but the voice agent could not be updated: ${res.data.agent_error}`, 'error');
+      }
+      // Changing the website invalidates the scraped knowledge base, so the
+      // backend rebuilds it — say so rather than leaving it looking instant.
+      if (res.data?.knowledge_refreshing) {
+        showToast('Website changed — rebuilding this school’s knowledge base in the background', 'success');
+      }
+      setEditSchool(null);
+      loadSchools();
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not update this school', 'error');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const saveNewEmail = async () => {
+    if (!emailSchool) return;
+    const target = newEmail.trim().toLowerCase();
+    if (!target || !target.includes('@')) {
+      showToast('Enter a valid email address', 'error');
+      return;
+    }
+    if (!window.confirm(
+      `Move ${emailSchool.name}'s login to ${target}?\n\n` +
+      `A new temporary password will be emailed to that address, and the old login ` +
+      `(${emailSchool.admin_email || 'none'}) will stop working.`
+    )) return;
+
+    setEmailSaving(true);
+    try {
+      const res = await api.post(`/schools/${emailSchool.id}/change-email`, { admin_email: target });
+      if (res.data?.temp_password) {
+        setCredentials({ email: res.data.admin_email, password: res.data.temp_password, school: emailSchool.name });
+      }
+      if (res.data?.warning) showToast(res.data.warning, 'error');
+      else showToast(`Login moved to ${target}`, 'success');
+      setEmailSchool(null);
+      setNewEmail('');
+      loadSchools();
+    } catch (err: any) {
+      showToast(err.response?.data?.detail || 'Could not change the login email', 'error');
+    } finally {
+      setEmailSaving(false);
+    }
   };
 
   const handleSettingsField = (field: string, value: string) => {
@@ -324,12 +453,21 @@ export default function Schools({ showToast }: SchoolsProps) {
 
               <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
                 <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+                  onClick={() => openEdit(s)} title="Edit this school's name, location, phone and website">
+                  <Pencil size={14} /> Edit
+                </button>
+                <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
                   onClick={() => handleReprovision(s)} title="Re-create/refresh this school's voice agent">
                   <RefreshCw size={14} /> Agent
                 </button>
                 <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
-                  onClick={() => openSettings(s)} title="Configure this school's own calendar, Cal.com, email and caller ID">
+                  onClick={() => openSettings(s)} title="See and change this school's Cal.com, calendar, email and caller ID settings">
                   <Settings2 size={14} /> Settings
+                </button>
+                <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+                  onClick={() => { setEmailSchool(s); setNewEmail(''); }}
+                  title="Move this school's login to a different email address">
+                  <AtSign size={14} /> Email
                 </button>
                 {s.admin_email && (
                   <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
@@ -372,49 +510,105 @@ export default function Schools({ showToast }: SchoolsProps) {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', marginTop: '18px' }}>
-                <div>
+                {bookingProvider && (
+                  <div style={{
+                    padding: '10px 12px', borderRadius: '10px', fontSize: '0.8rem',
+                    background: bookingProvider === 'cal.com' ? 'rgba(16,185,129,0.10)' : 'rgba(245,158,11,0.10)',
+                    border: `1px solid ${bookingProvider === 'cal.com' ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
+                  }}>
+                    {bookingProvider === 'cal.com' ? (
+                      <>Bookings run through <strong>Cal.com</strong> — it creates the booking, adds the
+                      calendar event and emails the attendee. Google Calendar and SMTP below are unused
+                      while a Cal.com key is set.</>
+                    ) : (
+                      <>No Cal.com key is set, so this school falls back to <strong>Google Calendar + SMTP</strong>
+                      {' '}for calendar events and confirmation emails.</>
+                    )}
+                  </div>
+                )}
+
+                <SettingField field="retell_phone_number">
                   <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Outbound Caller ID</div>
                   <input className="form-input" style={{ width: '100%' }} placeholder="+91 9876543210 (default: platform number)"
                     value={settingsForm.retell_phone_number || ''} onChange={e => handleSettingsField('retell_phone_number', e.target.value)} />
-                </div>
+                </SettingField>
 
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Google Calendar</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <textarea className="form-input" style={{ width: '100%', minHeight: '70px', fontFamily: 'monospace', fontSize: '0.78rem' }}
-                      placeholder="Service account credentials JSON (default: platform calendar)"
-                      value={settingsForm.google_calendar_credentials_json || ''}
-                      onChange={e => handleSettingsField('google_calendar_credentials_json', e.target.value)} />
-                    <input className="form-input" style={{ width: '100%' }} placeholder="Calendar ID, e.g. admissions@school.edu.in"
-                      value={settingsForm.google_calendar_id || ''} onChange={e => handleSettingsField('google_calendar_id', e.target.value)} />
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>
+                    Cal.com — bookings, calendar &amp; email
                   </div>
-                </div>
-
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Cal.com (virtual meetings)</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com API key (default: platform account)"
-                      value={settingsForm.cal_com_api_key || ''} onChange={e => handleSettingsField('cal_com_api_key', e.target.value)} />
-                    <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com event link"
-                      value={settingsForm.cal_com_event_link || ''} onChange={e => handleSettingsField('cal_com_event_link', e.target.value)} />
-                  </div>
-                </div>
-
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Confirmation Email (SMTP)</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: '8px' }}>
-                      <input className="form-input" placeholder="SMTP server, e.g. smtp.gmail.com"
-                        value={settingsForm.smtp_server || ''} onChange={e => handleSettingsField('smtp_server', e.target.value)} />
-                      <input className="form-input" placeholder="Port" value={settingsForm.smtp_port || ''}
-                        onChange={e => handleSettingsField('smtp_port', e.target.value)} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <SettingField field="cal_com_api_key">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com API key (default: platform account)"
+                        value={settingsForm.cal_com_api_key || ''} onChange={e => handleSettingsField('cal_com_api_key', e.target.value)} />
+                    </SettingField>
+                    <SettingField field="cal_com_event_link">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com event link"
+                        value={settingsForm.cal_com_event_link || ''} onChange={e => handleSettingsField('cal_com_event_link', e.target.value)} />
+                    </SettingField>
+                    <SettingField field="cal_com_in_person_event_slug">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="In-person event slug, e.g. campus-visit"
+                        value={settingsForm.cal_com_in_person_event_slug || ''} onChange={e => handleSettingsField('cal_com_in_person_event_slug', e.target.value)} />
+                    </SettingField>
+                    <SettingField field="cal_com_virtual_event_slug">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="Virtual (Cal Video) event slug, e.g. calling"
+                        value={settingsForm.cal_com_virtual_event_slug || ''} onChange={e => handleSettingsField('cal_com_virtual_event_slug', e.target.value)} />
+                    </SettingField>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      Both slugs matter once an account has more than one event type: they decide whether an
+                      attendee is emailed a campus address or a video link. If a slug is missing, that
+                      meeting kind is not booked at all rather than guessed.
                     </div>
-                    <input className="form-input" style={{ width: '100%' }} placeholder="SMTP username"
-                      value={settingsForm.smtp_username || ''} onChange={e => handleSettingsField('smtp_username', e.target.value)} />
-                    <input className="form-input" style={{ width: '100%' }} type="password" placeholder="SMTP password"
-                      value={settingsForm.smtp_password || ''} onChange={e => handleSettingsField('smtp_password', e.target.value)} />
-                    <input className="form-input" style={{ width: '100%' }} placeholder="From email, e.g. admissions@school.edu.in"
-                      value={settingsForm.smtp_from_email || ''} onChange={e => handleSettingsField('smtp_from_email', e.target.value)} />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '4px' }}>Google Calendar</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Fallback only — used when no Cal.com key is configured.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <SettingField field="google_calendar_credentials_json">
+                      <textarea className="form-input" style={{ width: '100%', minHeight: '70px', fontFamily: 'monospace', fontSize: '0.78rem' }}
+                        placeholder="Service account credentials JSON (default: platform calendar)"
+                        value={settingsForm.google_calendar_credentials_json || ''}
+                        onChange={e => handleSettingsField('google_calendar_credentials_json', e.target.value)} />
+                    </SettingField>
+                    <SettingField field="google_calendar_id">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="Calendar ID, e.g. admissions@school.edu.in"
+                        value={settingsForm.google_calendar_id || ''} onChange={e => handleSettingsField('google_calendar_id', e.target.value)} />
+                    </SettingField>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '4px' }}>Confirmation Email (SMTP)</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Fallback only — Cal.com sends the confirmation when a Cal.com key is configured.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: '8px' }}>
+                      <SettingField field="smtp_server">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="SMTP server, e.g. smtp.gmail.com"
+                          value={settingsForm.smtp_server || ''} onChange={e => handleSettingsField('smtp_server', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="smtp_port">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="Port" value={settingsForm.smtp_port || ''}
+                          onChange={e => handleSettingsField('smtp_port', e.target.value)} />
+                      </SettingField>
+                    </div>
+                    <SettingField field="smtp_username">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="SMTP username"
+                        value={settingsForm.smtp_username || ''} onChange={e => handleSettingsField('smtp_username', e.target.value)} />
+                    </SettingField>
+                    <SettingField field="smtp_password">
+                      <input className="form-input" style={{ width: '100%' }} type="password" placeholder="SMTP password"
+                        value={settingsForm.smtp_password || ''} onChange={e => handleSettingsField('smtp_password', e.target.value)} />
+                    </SettingField>
+                    <SettingField field="smtp_from_email">
+                      <input className="form-input" style={{ width: '100%' }} placeholder="From email, e.g. admissions@school.edu.in"
+                        value={settingsForm.smtp_from_email || ''} onChange={e => handleSettingsField('smtp_from_email', e.target.value)} />
+                    </SettingField>
                   </div>
                 </div>
 
@@ -427,6 +621,113 @@ export default function Schools({ showToast }: SchoolsProps) {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit a school's own identity fields */}
+      {editSchool && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+        }} onClick={(e) => { if (e.target === e.currentTarget) setEditSchool(null); }}>
+          <div className="glass-panel" style={{ maxWidth: '480px', width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h2 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Pencil size={18} /> Edit {editSchool.name}
+                </h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
+                  Changing the name, location or phone re-renders this school's voice agent prompt.
+                  Changing the website rebuilds its knowledge base.
+                </p>
+              </div>
+              <button className="btn btn-secondary" onClick={() => setEditSchool(null)}><X size={16} /></button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '18px' }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>School name</div>
+                <input className="form-input" style={{ width: '100%' }} value={editForm.name || ''}
+                  onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Location</div>
+                <input className="form-input" style={{ width: '100%' }} placeholder="e.g. Gachibowli, Hyderabad"
+                  value={editForm.location || ''} onChange={e => setEditForm(p => ({ ...p, location: e.target.value }))} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Contact phone</div>
+                <input className="form-input" style={{ width: '100%' }} placeholder="+91 7569891111"
+                  value={editForm.contact_phone || ''} onChange={e => setEditForm(p => ({ ...p, contact_phone: e.target.value }))} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Globe size={14} /> Website
+                </div>
+                <input className="form-input" style={{ width: '100%' }} placeholder="https://school.edu.in"
+                  value={editForm.website || ''} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Status</div>
+                <select className="form-input" style={{ width: '100%' }} value={editForm.status || 'active'}
+                  onChange={e => setEditForm(p => ({ ...p, status: e.target.value }))}>
+                  <option value="active">active</option>
+                  <option value="suspended">suspended</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '4px' }}>
+                <button className="btn btn-secondary" onClick={() => setEditSchool(null)}>Cancel</button>
+                <button className="btn btn-primary" onClick={saveEdit} disabled={editSaving}>
+                  {editSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <Save size={16} />}
+                  {editSaving ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move a school's login to a different email */}
+      {emailSchool && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+        }} onClick={(e) => { if (e.target === e.currentTarget) setEmailSchool(null); }}>
+          <div className="glass-panel" style={{ maxWidth: '460px', width: '100%', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <h2 style={{ fontSize: '1.2rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AtSign size={18} /> Change login email
+              </h2>
+              <button className="btn btn-secondary" onClick={() => setEmailSchool(null)}><X size={16} /></button>
+            </div>
+
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '8px' }}>
+              {emailSchool.name} currently signs in as{' '}
+              <strong>{emailSchool.admin_email || 'no login yet'}</strong>.
+            </p>
+
+            <div style={{
+              marginTop: '12px', padding: '10px 12px', borderRadius: '10px', fontSize: '0.78rem',
+              background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)',
+            }}>
+              A brand-new login is created for the new address and a temporary password is emailed to it.
+              The old login is then removed and stops working immediately.
+            </div>
+
+            <div style={{ marginTop: '14px' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>New login email</div>
+              <input className="form-input" style={{ width: '100%' }} type="email" placeholder="admissions@school.edu.in"
+                value={newEmail} onChange={e => setNewEmail(e.target.value)} />
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '18px' }}>
+              <button className="btn btn-secondary" onClick={() => setEmailSchool(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveNewEmail} disabled={emailSaving}>
+                {emailSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <AtSign size={16} />}
+                {emailSaving ? 'Moving…' : 'Move Login'}
+              </button>
+            </div>
           </div>
         </div>
       )}

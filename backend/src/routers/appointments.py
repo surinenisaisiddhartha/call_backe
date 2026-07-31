@@ -26,6 +26,10 @@ class AppointmentCreate(BaseModel):
     contact_id: str
     scheduled_for: str  # ISO datetime
     purpose: str
+    # Decides which Cal.com event type is booked: the address-located campus
+    # visit, or the Cal Video one. Defaults to in_person to match the model
+    # default and the pre-existing behaviour of this endpoint.
+    meeting_type: str = "in_person"
 
 
 class AppointmentUpdate(BaseModel):
@@ -152,10 +156,14 @@ def create_appointment(
         raise HTTPException(status_code=400, detail="Invalid datetime format")
     
     # Create appointment
+    meeting_type = (appointment.meeting_type or "in_person").strip().lower()
+    if meeting_type not in ("in_person", "virtual"):
+        meeting_type = "in_person"
     new_appointment = Appointment(
         contact_id=appointment.contact_id,
         scheduled_for=scheduled_for,
         purpose=appointment.purpose,
+        meeting_type=meeting_type,
         status="Booked"
     )
     db.add(new_appointment)
@@ -164,16 +172,43 @@ def create_appointment(
     # Update contact status
     contact.status = "Completed"
     
-    # Sync with Google Calendar (the contact's own school's calendar if it
-    # has one configured, else the shared platform calendar)
+    # Cal.com is the primary path here too, so a booking made by staff in the
+    # dashboard produces the same confirmation email and calendar event as one
+    # booked by the voice agent. Google Calendar is the fallback for a school
+    # with no Cal.com credentials.
+    from src.school_settings import get_school_for_contact, get_google_calendar_config, cal_com_is_configured
+    school = get_school_for_contact(db, contact)
+    cal_com_handled = False
+    if cal_com_is_configured(db, school):
+        try:
+            import asyncio
+            from src import cal_com
+            cal_result = asyncio.run(cal_com.create_booking(
+                db=db,
+                contact_name=contact.name,
+                contact_email=contact.email or "guest@example.com",
+                start_time=dt.isoformat(),
+                school=school,
+                meeting_type=meeting_type,
+                purpose=appointment.purpose,
+                contact_phone=contact.phone_number,
+            ))
+            if cal_result.get("success"):
+                cal_com_handled = True
+                new_appointment.calcom_booking_id = cal_result.get("uid")
+                new_appointment.virtual_meeting_link = cal_result.get("meeting_url")
+                print(f"[CAL.COM] Manual booking created: uid={cal_result.get('uid')}")
+            else:
+                print(f"[CAL.COM] Manual booking failed ({cal_result.get('error')}) — falling back to Google Calendar")
+        except Exception as e:
+            print(f"[CAL.COM] Manual booking failed: {e} — falling back to Google Calendar")
+
     try:
-        from src.school_settings import get_school_for_contact, get_google_calendar_config
-        school = get_school_for_contact(db, contact)
         gcal_config = get_google_calendar_config(db, school)
         credentials_json = gcal_config["credentials_json"]
         calendar_id = gcal_config["calendar_id"]
 
-        if credentials_json and calendar_id:
+        if not cal_com_handled and credentials_json and calendar_id:
             result = create_event(
                 credentials_json=credentials_json,
                 calendar_id=calendar_id,
@@ -253,17 +288,59 @@ def update_appointment(
         appointment.status = update.status
         
     db.commit()
-    
-    # Sync updates with Google Calendar (the contact's own school's calendar
-    # if configured, else the shared platform calendar)
+
+    from src.school_settings import get_school_for_contact, get_google_calendar_config
+    school = get_school_for_contact(db, contact) if contact else None
+
+    # ── Cal.com first: it owns the attendee-facing side of the booking ──────
+    # Cancelling here is what actually frees the slot and emails the attendee a
+    # cancellation; a reschedule is a cancel + rebook so Cal.com re-sends the
+    # confirmation with the new time (and a fresh Cal Video room for virtual).
+    cal_com_handled = False
+    old_calcom_uid = appointment.calcom_booking_id
+    if old_calcom_uid:
+        try:
+            import asyncio
+            from src import cal_com
+            if appointment.status == "Cancelled":
+                asyncio.run(cal_com.cancel_booking(db, old_calcom_uid, reason="Cancelled via dashboard", school=school))
+                appointment.calcom_booking_id = None
+                appointment.virtual_meeting_link = None
+                cal_com_handled = True
+                print(f"[CAL.COM] Cancelled booking {old_calcom_uid}")
+            elif update.scheduled_for:
+                asyncio.run(cal_com.cancel_booking(db, old_calcom_uid, reason="Rescheduled via dashboard", school=school))
+                dt_iso = dt.isoformat() if dt else appointment.scheduled_for.isoformat() + "+00:00"
+                cal_result = asyncio.run(cal_com.create_booking(
+                    db=db,
+                    contact_name=contact.name if contact else "Guest",
+                    contact_email=(contact.email if contact else None) or "guest@example.com",
+                    start_time=dt_iso,
+                    school=school,
+                    meeting_type=appointment.meeting_type or "in_person",
+                    purpose=appointment.purpose,
+                    contact_phone=contact.phone_number if contact else None,
+                ))
+                if cal_result.get("success"):
+                    appointment.calcom_booking_id = cal_result.get("uid")
+                    appointment.virtual_meeting_link = cal_result.get("meeting_url")
+                    cal_com_handled = True
+                    print(f"[CAL.COM] Rebooked as {cal_result.get('uid')} for {dt_iso}")
+                else:
+                    print(f"[CAL.COM] Rebooking failed: {cal_result.get('error')}")
+            db.commit()
+        except Exception as e:
+            print(f"[CAL.COM] Reschedule/cancel sync failed: {e}")
+            db.rollback()
+
+    # Sync updates with Google Calendar — only for appointments Cal.com isn't
+    # managing (i.e. booked under the fallback path).
     try:
-        from src.school_settings import get_school_for_contact, get_google_calendar_config
-        school = get_school_for_contact(db, contact) if contact else None
         gcal_config = get_google_calendar_config(db, school)
         credentials_json = gcal_config["credentials_json"]
         calendar_id = gcal_config["calendar_id"]
 
-        if credentials_json and calendar_id:
+        if not cal_com_handled and credentials_json and calendar_id:
             # 1. If cancelled, delete the calendar event
             if appointment.status == "Cancelled" and old_event_id:
                 cancel_event(credentials_json, calendar_id, old_event_id)
@@ -315,11 +392,24 @@ def delete_appointment(
     _guard_school(db, appointment, current_user)
 
     old_event_id = appointment.google_calendar_event_id
+    old_calcom_uid = appointment.calcom_booking_id
     contact = db.query(Contact).filter(Contact.id == appointment.contact_id).first()
     school = get_school_for_contact(db, contact) if contact else None
 
     db.delete(appointment)
     db.commit()
+
+    # Cancel the Cal.com booking so the slot is freed and the attendee is told
+    # — deleting only our own row would leave the booking live on Cal.com and
+    # the attendee still expecting the meeting.
+    if old_calcom_uid:
+        try:
+            import asyncio
+            from src import cal_com
+            asyncio.run(cal_com.cancel_booking(db, old_calcom_uid, reason="Deleted via dashboard", school=school))
+            print(f"[CAL.COM] Cancelled booking {old_calcom_uid} for deleted appointment")
+        except Exception as e:
+            print(f"[CAL.COM] Delete sync failed: {e}")
 
     # Sync deletion with Google Calendar (this contact's school's calendar
     # if it has one, else the shared platform calendar)

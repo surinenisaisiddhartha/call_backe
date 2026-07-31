@@ -71,23 +71,45 @@ def startup_event():
     except Exception as e:
         print(f"WARNING: Scheduler failed to start: {e}")
 
-    # Auto-seed knowledge base on first startup if it's empty
+    # Auto-seed knowledge bases on startup — per school, so a school onboarded
+    # while the app was down (or one whose provisioning half-failed) still gets
+    # its own website scraped instead of being left with an empty knowledge
+    # base that makes its agent answer "I don't have that information" to
+    # everything. Schools that already have chunks are left alone; the nightly
+    # job handles keeping those current.
     import threading
     def _seed_knowledge_if_empty():
         try:
-            from src.db import SessionLocal, KnowledgeChunk
+            from src.db import SessionLocal, KnowledgeChunk, School
+            from src.knowledge import refresh_knowledge_base, DEFAULT_SCHOOL_SLUG
             db = SessionLocal()
             try:
-                count = db.query(KnowledgeChunk).count()
-                if count == 0:
-                    print("[STARTUP] Knowledge base is empty — seeding now from TSRA website...")
-                    from src.knowledge import refresh_knowledge_base
-                    total = refresh_knowledge_base()
-                    print(f"[STARTUP] Knowledge base seeded: {total} chunks loaded.")
-                else:
-                    print(f"[STARTUP] Knowledge base already has {count} chunks — skipping seed.")
+                schools = db.query(School).filter(School.status == "active").all()
+                if not schools:
+                    # Fresh single-tenant deployment with no schools row yet.
+                    if db.query(KnowledgeChunk).count() == 0:
+                        print("[STARTUP] Knowledge base is empty — seeding now...")
+                        total = refresh_knowledge_base()
+                        print(f"[STARTUP] Knowledge base seeded: {total} chunks loaded.")
+                    else:
+                        print("[STARTUP] Knowledge base already populated — skipping seed.")
+                    return
+                targets = [
+                    (s.id, s.name)
+                    for s in schools
+                    if (s.slug == DEFAULT_SCHOOL_SLUG or (s.website or "").strip())
+                    and db.query(KnowledgeChunk).filter(KnowledgeChunk.school_id == s.id).count() == 0
+                ]
             finally:
                 db.close()
+
+            if not targets:
+                print("[STARTUP] Every school already has a knowledge base — skipping seed.")
+                return
+            for school_id, name in targets:
+                print(f"[STARTUP] '{name}' has an empty knowledge base — seeding from its website...")
+                total = refresh_knowledge_base(school_id)
+                print(f"[STARTUP] '{name}' knowledge base seeded: {total} chunks loaded.")
         except Exception as e:
             print(f"[STARTUP] Knowledge base seed failed: {e}")
 

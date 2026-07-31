@@ -258,30 +258,14 @@ def process_webhook_payload(payload: dict):
                         callback_raw_text = phrase
                         scheduled_utc = parse_callback_time(phrase)
                         if scheduled_utc:
-                            # Attempt to create Google Calendar event
-                            from src.services.google_calendar import create_event
-                            from src.school_settings import get_school_for_contact, get_google_calendar_config
+                            # A callback is an outbound phone call WE promised to
+                            # make — not a meeting the parent booked. It used to
+                            # get its own Google Calendar event, which put
+                            # "meeting"-looking entries on the calendar for what
+                            # is just an internal reminder. The 1-minute
+                            # scheduler sweep is what actually guarantees the
+                            # callback fires, so no calendar entry is needed.
                             c_event_id = None
-                            try:
-                                school = get_school_for_contact(db, contact) if contact else None
-                                gcal_config = get_google_calendar_config(db, school)
-                                credentials_json = gcal_config["credentials_json"]
-                                calendar_id = gcal_config["calendar_id"]
-
-                                if credentials_json and calendar_id and contact:
-                                    result = create_event(
-                                        credentials_json=credentials_json,
-                                        calendar_id=calendar_id,
-                                        start_iso=scheduled_utc.isoformat() + "+00:00",
-                                        summary=f"{school.name if school else 'TSRA'} Callback — {contact.name}",
-                                        description=f"Automated retry callback scheduled. Raw phrase: {phrase}",
-                                        attendee_name=contact.name,
-                                        attendee_phone=contact.phone_number,
-                                        appointment_id=f"callback_{contact.id}",
-                                    )
-                                    c_event_id = result["event_id"]
-                            except Exception as e:
-                                print(f"[WEBHOOK] Google Calendar callback sync failed: {e}")
 
                             # Idempotent: update if already exists (e.g. tool created one mid-call)
                             existing_cb = db.query(ScheduledCallback).filter(

@@ -12,21 +12,38 @@ services:
       # without it (no SQLite fallback anymore). In Coolify, set this in the
       # service's environment variables panel.
       - DATABASE_URL=${DATABASE_URL}
-      - JWT_SECRET=demo_secret_key_12345678
+      # REQUIRED: signs the short-lived "view as school" impersonation tokens
+      # minted from the Schools admin page. This used to be hardcoded to
+      # "demo_secret_key_12345678" — a published, guessable value that anyone
+      # could use to forge a token scoped to any school. Supply a real random
+      # value from the environment instead (openssl rand -base64 48).
+      - JWT_SECRET=${JWT_SECRET}
+      # REQUIRED: shared secret on the Retell tool webhooks. Those URLs are
+      # publicly reachable and can create bookings and callbacks, so without
+      # this they are unauthenticated. It is also readable from the DB
+      # settings table (Settings -> aegis_tools_secret), which is where the
+      # live deployment currently gets it; set it in one place only, since a
+      # mismatch between env and DB rejects every tool call.
+      - AEGIS_TOOLS_SECRET=${AEGIS_TOOLS_SECRET:-}
+      # Cognito is the ONLY login path — without these, login returns 503.
+      - COGNITO_REGION=${COGNITO_REGION}
+      - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
+      - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+      - COGNITO_CLIENT_SECRET=${COGNITO_CLIENT_SECRET:-}
       # You can override other environment variables in Coolify settings:
       # - RETELL_API_KEY=your_retell_key
+      # - WEBHOOK_BASE_URL=https://your.domain/api/webhooks
+      # - CAL_COM_API_KEY=your_cal_com_key   (primary booking/calendar/email path)
+      # - CAL_COM_WEBHOOK_SECRET=the_same_secret_configured_in_your_cal.com_webhook
+      # Google Calendar + SMTP below are only the FALLBACK for a school with
+      # no Cal.com key — Cal.com handles booking, calendar and email otherwise.
+      # - GOOGLE_CALENDAR_CREDENTIALS_JSON=...
+      # - GOOGLE_CALENDAR_ID=...
       # - SMTP_SERVER=smtp.gmail.com
       # - SMTP_PORT=587
-      # - SMTP_USERNAME=saisiddhartha234@gmail.com
+      # - SMTP_USERNAME=you@yourschool.com
       # - SMTP_PASSWORD=your_app_password
-      # - SMTP_FROM_EMAIL=saisiddhartha234@gmail.com
-      # Security (recommended for production — see backend/README.md):
-      # - AEGIS_TOOLS_SECRET=set_a_random_string_and_rerun_setup_retell_agent.py
-      # - CAL_COM_WEBHOOK_SECRET=the_same_secret_configured_in_your_cal.com_webhook
-      # - ADMIN_EMAIL=you@yourschool.com
-      # - ADMIN_PASSWORD=choose_a_real_password
-      # - STAFF_EMAIL=staff@yourschool.com
-      # - STAFF_PASSWORD=choose_a_real_password
+      # - SMTP_FROM_EMAIL=you@yourschool.com
     ports:
       - "5000:5000"
     volumes:

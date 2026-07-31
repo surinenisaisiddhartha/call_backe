@@ -51,16 +51,41 @@ def get_google_calendar_config(db: Session, school: Optional[School]) -> dict:
 
 
 def get_cal_com_config(db: Session, school: Optional[School]) -> dict:
-    """Returns {"api_key": str, "event_link": str}."""
+    """
+    Returns {"api_key": str|None, "event_link": str|None}.
+
+    There is deliberately NO hardcoded fallback credential here. A real
+    `cal_live_...` key and its owner's personal booking link used to sit in
+    this file as the default, which meant (a) a live secret was committed to
+    the repo, and (b) any school without its own Cal.com account silently
+    booked virtual meetings into that one personal calendar. With no key
+    configured, cal_com.py already degrades gracefully — create_booking
+    returns "Cal.com is not configured" and the appointment is still saved
+    (just without a Cal Video link).
+    """
     if school and school.cal_com_api_key:
         return {
             "api_key": school.cal_com_api_key,
             "event_link": school.cal_com_event_link or "",
+            "virtual_event_slug": school.cal_com_virtual_event_slug or "",
+            "in_person_event_slug": school.cal_com_in_person_event_slug or "",
         }
     return {
-        "api_key": _global_setting(db, "cal_com_api_key", "CAL_COM_API_KEY", "cal_live_9872522039be685a1f90ad606ed57e60"),
-        "event_link": _global_setting(db, "cal_com_event_link", "CAL_COM_EVENT_LINK", "https://cal.com/sai-siddhartha-surineni-ai62cd"),
+        "api_key": _global_setting(db, "cal_com_api_key", "CAL_COM_API_KEY"),
+        "event_link": _global_setting(db, "cal_com_event_link", "CAL_COM_EVENT_LINK"),
+        "virtual_event_slug": _global_setting(db, "cal_com_virtual_event_slug", "CAL_COM_VIRTUAL_EVENT_SLUG"),
+        "in_person_event_slug": _global_setting(db, "cal_com_in_person_event_slug", "CAL_COM_IN_PERSON_EVENT_SLUG"),
     }
+
+
+def cal_com_is_configured(db: Session, school: Optional[School]) -> bool:
+    """
+    Whether Cal.com can handle this school's bookings at all. Cal.com is the
+    primary path for booking + calendar event + confirmation email; Google
+    Calendar and SMTP are only used as a fallback for a school that has no
+    Cal.com credentials, so this is the switch between the two.
+    """
+    return bool(get_cal_com_config(db, school)["api_key"])
 
 
 def get_smtp_config(db: Session, school: Optional[School]) -> dict:

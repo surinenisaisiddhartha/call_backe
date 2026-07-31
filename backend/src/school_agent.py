@@ -51,6 +51,20 @@ def render_school_prompt(school) -> str:
     phone = (school.contact_phone or "").strip() or _TEMPLATE_PHONE
     abbreviation = "".join(w[0] for w in name_no_article.split() if w and w[0].isalpha()).upper() or _TEMPLATE_ABBREVIATION
 
+    # Is this the very school the template was written about? Then the prompt
+    # already says exactly the right thing and must be used verbatim.
+    # Substituting anyway is not the harmless no-op it looks like:
+    #   - the derived abbreviation of "Shri Ram Academy" is "SRA", not "TSRA",
+    #     so the line **Never say the abbreviation "TSRA" out loud** got
+    #     rewritten to forbid "SRA" instead — un-guarding the one abbreviation
+    #     the agent must never speak, and
+    #   - "an IB day-boarding school" is true of this school, so the generic
+    #     rewrite below downgraded an accurate description to a vague one.
+    # Both fired every time the Schools page re-provisioned this school after
+    # a name/location/phone edit.
+    if name_full == _TEMPLATE_SCHOOL_NAME_FULL:
+        return text
+
     # Order matters: longest literals first so partial overlaps can't corrupt
     # the longer strings (e.g. replacing "Shri Ram Academy" before
     # "The Shri Ram Academy" would break the latter).

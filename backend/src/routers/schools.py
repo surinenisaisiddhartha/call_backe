@@ -13,7 +13,7 @@ Onboarding a school does three things:
 """
 import os
 import re
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from src.db import get_db, School, Contact, Settings
 from src.routers.auth import require_admin
@@ -74,7 +74,12 @@ def list_schools(db: Session = Depends(get_db), _admin: dict = Depends(require_a
 
 
 @router.post("")
-def create_school(payload: dict, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
+def create_school(
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     name = (payload.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="School name is required")
@@ -99,6 +104,16 @@ def create_school(payload: dict, db: Session = Depends(get_db), _admin: dict = D
 
     agent_error = _provision_agent(db, school)
 
+    # Build this school's own knowledge base from its own website, in the
+    # background — scraping a dozen pages takes far too long to hold the
+    # onboarding request open. Without it the school's agent has nothing to
+    # ground answers in and says "I don't have that information" to everything.
+    knowledge_status = "not started — no website provided"
+    if school.website:
+        from src.knowledge import refresh_knowledge_base
+        background_tasks.add_task(refresh_knowledge_base, school.id)
+        knowledge_status = f"scraping {school.website} in the background"
+
     temp_password = None
     cognito_error = None
     from src import cognito
@@ -117,6 +132,7 @@ def create_school(payload: dict, db: Session = Depends(get_db), _admin: dict = D
         "temp_password": temp_password,   # shown ONCE — not stored anywhere
         "agent_error": agent_error or None,
         "cognito_error": cognito_error,
+        "knowledge_status": knowledge_status,
     }
 
 
@@ -147,6 +163,67 @@ def reset_school_password(school_id: str, db: Session = Depends(get_db), _admin:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not recreate the login: {e}")
     return {"temp_password": temp_password}
+
+
+@router.post("/{school_id}/change-email")
+def change_school_email(school_id: str, payload: dict, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
+    """
+    Re-points this school's login at a different email address.
+
+    Cognito usernames are the email itself, so this is create-new + delete-old
+    rather than an attribute edit. The new user is created FIRST: if creation
+    fails (bad address, already taken, policy), the school keeps its existing
+    working login instead of being left with none. The old user is only deleted
+    once the new one exists.
+    """
+    from src import cognito
+
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    new_email = (payload.get("admin_email") or "").strip().lower()
+    if not new_email or "@" not in new_email or " " in new_email:
+        raise HTTPException(status_code=400, detail="A valid email address is required")
+
+    old_email = (school.admin_email or "").strip().lower()
+    if new_email == old_email:
+        raise HTTPException(status_code=400, detail="That is already this school's login email")
+
+    if db.query(School).filter(School.admin_email == new_email, School.id != school.id).first():
+        raise HTTPException(status_code=400, detail="Another school already uses that login email")
+
+    # Without Cognito there is no login to move — just record the address.
+    if not cognito.cognito_enabled():
+        school.admin_email = new_email
+        db.commit()
+        return {
+            "admin_email": new_email,
+            "temp_password": None,
+            "warning": "Cognito is not configured, so no login was created — only the recorded address changed.",
+        }
+
+    try:
+        temp_password = cognito.create_school_user(new_email, school.id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not create a login for {new_email}: {e}")
+
+    removed_old = False
+    if old_email:
+        removed_old = cognito.delete_school_user(old_email)
+
+    school.admin_email = new_email
+    db.commit()
+
+    return {
+        "admin_email": new_email,
+        "temp_password": temp_password,   # shown ONCE — not stored anywhere
+        "old_login_removed": removed_old,
+        "warning": None if (removed_old or not old_email) else (
+            f"The new login works, but the old login {old_email} could not be removed "
+            f"automatically — delete it in the Cognito console so it can't still sign in."
+        ),
+    }
 
 
 @router.post("/{school_id}/view-as")
@@ -187,12 +264,19 @@ def view_as_school(school_id: str, db: Session = Depends(get_db), admin: dict = 
 
 
 @router.patch("/{school_id}")
-def update_school(school_id: str, payload: dict, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
+def update_school(
+    school_id: str,
+    payload: dict,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     school = db.query(School).filter(School.id == school_id).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
 
     identity_changed = False
+    website_changed = False
     for field in ("name", "location", "contact_phone", "website", "status"):
         if field in payload and payload[field] is not None:
             value = (str(payload[field]) or "").strip()
@@ -200,13 +284,25 @@ def update_school(school_id: str, payload: dict, db: Session = Depends(get_db), 
                 setattr(school, field, value)
                 if field in ("name", "location", "contact_phone"):
                     identity_changed = True
+                if field == "website":
+                    website_changed = True
     db.commit()
 
     agent_error = None
     if identity_changed and school.retell_agent_id:
         agent_error = _provision_agent(db, school) or None
 
-    return {"school": _serialize(db, school), "agent_error": agent_error}
+    # A new website means the existing chunks describe the wrong site — rebuild
+    # this school's knowledge base from the new one.
+    if website_changed and school.website:
+        from src.knowledge import refresh_knowledge_base
+        background_tasks.add_task(refresh_knowledge_base, school.id)
+
+    return {
+        "school": _serialize(db, school),
+        "agent_error": agent_error,
+        "knowledge_refreshing": website_changed and bool(school.website),
+    }
 
 
 @router.delete("/{school_id}")
@@ -238,10 +334,12 @@ def delete_school(school_id: str, db: Session = Depends(get_db), _admin: dict = 
 
 _SCHOOL_SETTING_FIELDS = [
     "retell_phone_number",
-    "google_calendar_credentials_json",
-    "google_calendar_id",
     "cal_com_api_key",
     "cal_com_event_link",
+    "cal_com_virtual_event_slug",
+    "cal_com_in_person_event_slug",
+    "google_calendar_credentials_json",
+    "google_calendar_id",
     "smtp_server",
     "smtp_port",
     "smtp_username",
@@ -254,20 +352,92 @@ _SECRET_FIELDS = {"google_calendar_credentials_json", "cal_com_api_key", "smtp_p
 _SECRET_MASK = "••••••••••••••••"
 
 
+def _effective_settings(db: Session, school: School) -> dict:
+    """
+    What each setting ACTUALLY resolves to for this school right now, and where
+    that value comes from.
+
+    The override-only view this endpoint used to return showed a blank box for
+    anything the school hadn't overridden, which is indistinguishable from "not
+    configured anywhere" — an admin couldn't tell whether a school would send
+    email at all, let alone from which account. Each field here reports:
+      value  - the resolved value (masked if secret)
+      source - "school" (its own override), "platform" (shared default), or
+               "unset" (nothing configured at either level)
+    """
+    from src.school_settings import (
+        get_retell_phone_number, get_google_calendar_config,
+        get_cal_com_config, get_smtp_config,
+    )
+
+    gcal = get_google_calendar_config(db, school)
+    cal = get_cal_com_config(db, school)
+    smtp = get_smtp_config(db, school)
+
+    resolved = {
+        "retell_phone_number": get_retell_phone_number(db, school),
+        "cal_com_api_key": cal["api_key"],
+        "cal_com_event_link": cal["event_link"],
+        "cal_com_virtual_event_slug": cal["virtual_event_slug"],
+        "cal_com_in_person_event_slug": cal["in_person_event_slug"],
+        "google_calendar_credentials_json": gcal["credentials_json"],
+        "google_calendar_id": gcal["calendar_id"],
+        "smtp_server": smtp["server"],
+        "smtp_port": smtp["port"],
+        "smtp_username": smtp["username"],
+        "smtp_password": smtp["password"],
+        "smtp_from_email": smtp["from_email"],
+    }
+
+    out = {}
+    for field in _SCHOOL_SETTING_FIELDS:
+        value = resolved.get(field)
+        has_override = bool(getattr(school, field, None))
+        if value in (None, ""):
+            source = "unset"
+        elif has_override:
+            source = "school"
+        else:
+            source = "platform"
+        out[field] = {
+            "value": _SECRET_MASK if (value and field in _SECRET_FIELDS) else (
+                str(value) if value is not None else None
+            ),
+            "source": source,
+            "secret": field in _SECRET_FIELDS,
+        }
+    return out
+
+
 @router.get("/{school_id}/settings")
 def get_school_settings(school_id: str, db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
+    """
+    Returns both:
+      overrides - only what this school has set itself (what the edit form binds
+                  to; blank means "inherit the platform default")
+      effective - what each setting actually resolves to right now, and whether
+                  that came from the school or the platform
+    """
     school = db.query(School).filter(School.id == school_id).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
 
-    result = {}
+    overrides = {}
     for field in _SCHOOL_SETTING_FIELDS:
         value = getattr(school, field)
         if value and field in _SECRET_FIELDS:
-            result[field] = _SECRET_MASK
+            overrides[field] = _SECRET_MASK
         else:
-            result[field] = value
-    return result
+            overrides[field] = value
+
+    from src.school_settings import cal_com_is_configured
+    return {
+        "overrides": overrides,
+        "effective": _effective_settings(db, school),
+        # Which of the two delivery paths this school is actually on, so the UI
+        # doesn't have to re-derive the rule.
+        "booking_provider": "cal.com" if cal_com_is_configured(db, school) else "google+smtp",
+    }
 
 
 @router.patch("/{school_id}/settings")
