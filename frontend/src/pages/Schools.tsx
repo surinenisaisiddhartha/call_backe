@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
+import Pagination from '../components/Pagination';
 import {
   School as SchoolIcon, Plus, X, RefreshCw, Copy, Check,
   MapPin, Phone, Mail, Users, Bot, AlertTriangle, Trash2, KeyRound, Settings2, Save,
@@ -36,6 +37,8 @@ export default function Schools({ showToast }: SchoolsProps) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   const [name, setName] = useState('');
   const [location, setLocation] = useState('');
@@ -449,9 +452,11 @@ export default function Schools({ showToast }: SchoolsProps) {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: '16px' }}>
-          {schools.map(s => (
-            <div key={s.id} className="glass-panel" style={{ padding: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: '16px', paddingBottom: '16px' }}>
+              {schools.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(s => (
+                <div key={s.id} className="glass-panel" style={{ padding: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                   <label style={{ cursor: 'pointer' }} title="Upload School Logo">
@@ -535,6 +540,15 @@ export default function Schools({ showToast }: SchoolsProps) {
               </div>
             </div>
           ))}
+            </div>
+          </div>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={schools.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       )}
 

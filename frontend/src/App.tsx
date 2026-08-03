@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import api from './api';
 import Login from './pages/Login';
+import Landing from './pages/Landing';
 import Contacts from './pages/Contacts';
 import Scheduling from './pages/Scheduling';
 import Settings from './pages/Settings';
@@ -29,6 +30,17 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     localStorage.getItem('sidebar_collapsed') === '1'
   );
+
+  const [showLogin, setShowLogin] = useState<boolean>(window.location.hash === '#login');
+
+  React.useEffect(() => {
+    const handleHashChange = () => {
+       if (window.location.hash === '#login') setShowLogin(true);
+       else if (!window.location.hash || window.location.hash === '#home') setShowLogin(false);
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const toggleSidebar = () => {
     setSidebarCollapsed(prev => {
@@ -63,6 +75,16 @@ export default function App() {
   const userRole = user?.role || 'user';
   const schoolName = user?.school_name || null;
   const schoolLogo = user?.school_logo || null;
+
+  React.useEffect(() => {
+    if (schoolName) {
+      document.title = `${schoolName} Portal - EnquiryCall`;
+    } else if (userRole === 'admin') {
+      document.title = `Admin Console - EnquiryCall`;
+    } else {
+      document.title = 'EnquiryCall | AI Admissions Calling';
+    }
+  }, [schoolName, userRole]);
 
   // The URL carries which school's dashboard you're looking at:
   //   #shri-ram-academy/contacts
@@ -162,7 +184,10 @@ export default function App() {
   };
 
   if (!token) {
-    return <Login onLoginSuccess={handleLoginSuccess} showToast={showToast} />;
+    if (showLogin) {
+      return <Login onLoginSuccess={handleLoginSuccess} showToast={showToast} />;
+    }
+    return <Landing onLoginClick={() => window.location.hash = '#login'} />;
   }
 
   const navItems: { tab: Tab; icon: React.ReactNode; label: string }[] = [
@@ -187,13 +212,6 @@ export default function App() {
         padding: '0 30px'
       }}>
         <div className="left-section" style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <div className="logo-container" style={{ margin: 0, paddingRight: '24px', borderRight: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', padding: '8px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 15px rgba(59, 130, 246, 0.25)' }}>
-              <MessageSquare style={{ color: '#fff', flexShrink: 0 }} size={22} />
-            </div>
-            <span className="logo-text" style={{ fontSize: '1.4rem', fontWeight: 800, letterSpacing: '-0.02em' }}>EnquiryCall</span>
-          </div>
-
           <div className="header-brand-label" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
             <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', overflow: 'hidden' }}>
               {schoolLogo ? (
@@ -217,8 +235,9 @@ export default function App() {
         </div>
 
         <div className="right-section" style={{ display: 'flex', alignItems: 'center' }}>
-          <div style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.4, paddingLeft: '24px', borderLeft: '1px solid var(--border-color)' }}>
-            Delivered by <br /><span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.85rem' }}>Response Informatics</span>
+          <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.2, paddingLeft: '24px', borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+            <span>Delivered by</span>
+            <img src="/ri-logo.png" alt="Response Informatics" style={{ height: '32px', objectFit: 'contain' }} />
           </div>
         </div>
       </header>
@@ -285,10 +304,29 @@ export default function App() {
           {activeTab === 'schools' && userRole === 'admin' && <Schools showToast={showToast} />}
           {activeTab === 'settings' && userRole === 'admin' && <Settings showToast={showToast} />}
         </main>
+    </div>
+
+      {/* Floating EnquiryCall Watermark */}
+      <div style={{
+        position: 'fixed',
+        bottom: '30px',
+        right: '30px',
+        zIndex: 40,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        opacity: 0.4,
+        pointerEvents: 'none',
+        userSelect: 'none'
+      }}>
+        <div style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', padding: '6px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)', opacity: 0.8 }}>
+          <MessageSquare style={{ color: '#fff', flexShrink: 0 }} size={18} />
+        </div>
+        <span style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>EnquiryCall</span>
       </div>
 
       {/* Toast Alert System */}
-      <div style={{ position: 'fixed', bottom: '24px', right: '24px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
+      <div style={{ position: 'fixed', bottom: '100px', right: '30px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
         {toasts.map(t => (
           <div
             key={t.id}

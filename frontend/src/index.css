@@ -114,6 +114,13 @@ body {
 .glass-panel:hover {
   border-color: rgba(255, 255, 255, 0.15);
   box-shadow: 0 12px 40px 0 rgba(59, 130, 246, 0.14);
+}
+
+.hover-lift {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.hover-lift:hover {
   transform: translateY(-2px);
 }
 
@@ -329,6 +336,7 @@ body {
   text-decoration: none;
   font-weight: 500;
   border-radius: 10px;
+  border-left: 3px solid transparent;
   transition: var(--transition-smooth);
 }
 
@@ -428,7 +436,9 @@ body {
 /* Contacts Table */
 .table-container {
   overflow-x: auto;
-  margin-top: 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 280px);
+  margin-top: 0px;
 }
 
 .custom-table {
@@ -709,4 +719,48 @@ body {
   .header-brand-label {
     display: none !important; /* Hide 'Signed in as' on tiny screens to make room for logo */
   }
+}
+
+
+/* Pagination Component */
+.pagination-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-color);
+  background: var(--sidebar-bg);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.pagination-info {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.page-size-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.page-navigation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-number {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
 }

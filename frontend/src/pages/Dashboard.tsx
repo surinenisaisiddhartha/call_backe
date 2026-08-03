@@ -170,13 +170,19 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
     onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = 'transparent'),
   };
 
+  const user = (() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  })();
+
   return (
     <div>
       {/* Header */}
       <div style={{ marginBottom: '28px' }}>
-        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>Dashboard</h1>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>
+          {user?.school_name ? `${user.school_name} Dashboard` : 'Platform Dashboard'}
+        </h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-          Live overview of your calling activity, appointments, and follow-ups
+          Welcome back{user?.email ? `, ${user.email}` : ''}! Here is your live overview of calling activity, appointments, and follow-ups.
         </p>
       </div>
 

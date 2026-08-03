@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import api from '../api';
+import Pagination from '../components/Pagination';
 import {
   BarChart2, Play, RefreshCw, Users, CheckCircle,
   AlertCircle, Calendar, Phone, Clock, FileText, ChevronDown, ChevronRight, Trash2,
@@ -82,6 +83,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
   const [callingId, setCallingId] = useState<string | null>(null);
   const [expandedTranscript, setExpandedTranscript] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [historyPages, setHistoryPages] = useState<Record<string, number>>({});
 
   const setHistoryPage = (campaignId: string, page: number) => {
@@ -248,12 +250,11 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
     scheduled: contacts.filter(c => c.status === 'Scheduled').length,
   };
 
-  const itemsPerPage = 8;
-  const totalPages = Math.ceil(campaigns.length / itemsPerPage);
-  const currentCampaigns = campaigns.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const totalPages = Math.ceil(campaigns.length / pageSize);
+  const currentCampaigns = campaigns.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '24px' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
         <div>
@@ -294,13 +295,14 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       </div>
 
       {campaigns.length === 0 ? (
-        <div className="glass-panel" style={{ textAlign: 'center', padding: '60px' }}>
-          <FileText size={48} style={{ color: 'var(--text-muted)', marginBottom: '16px' }} />
+        <div className="glass-panel" style={{ textAlign: 'center', padding: '60px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <FileText size={48} style={{ color: 'var(--text-muted)', marginBottom: '16px', alignSelf: 'center' }} />
           <p style={{ color: 'var(--text-secondary)' }}>No campaigns yet. Click <strong>New Campaign</strong> to import a CSV/Excel file.</p>
         </div>
       ) : (
-        <div className="glass-panel" style={{ padding: '0', overflow: 'hidden' }}>
-          {currentCampaigns.map((campaign, index) => {
+        <div className="glass-panel" style={{ padding: '0', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {currentCampaigns.map((campaign, index) => {
             const total = campaign.total_contacts || 1;
             const s = campaign.stats;
             const completionPct = Math.round((s.completed / total) * 100);
@@ -546,30 +548,15 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
               </div>
             );
           })}
+          </div>
 
-          {totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '15px', padding: '16px 20px', borderTop: '1px solid var(--border-color)' }}>
-              <button 
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="btn btn-secondary"
-                style={{ padding: '6px 16px', fontSize: '0.85rem' }}
-              >
-                Previous
-              </button>
-              <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                Page {currentPage} of {totalPages}
-              </span>
-              <button 
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="btn btn-secondary"
-                style={{ padding: '6px 16px', fontSize: '0.85rem' }}
-              >
-                Next
-              </button>
-            </div>
-          )}
+          <Pagination
+            currentPage={currentPage}
+            totalItems={campaigns.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       )}
 

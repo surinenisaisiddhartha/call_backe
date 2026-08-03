@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
+import Pagination from '../components/Pagination';
 import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2 } from 'lucide-react';
 
 interface Contact {
@@ -43,6 +44,9 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  
   // Reschedule Modal State
   const [rescheduleContact, setRescheduleContact] = useState<Contact | null>(null);
   const [scheduledFor, setScheduledFor] = useState('');
@@ -58,6 +62,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
 
   useEffect(() => {
     fetchContacts();
+    setCurrentPage(1);
   }, [search, statusFilter]);
 
   useEffect(() => {
@@ -208,17 +213,22 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
       </div>
 
       {/* Table grid */}
-      <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
-        {loading ? (
-          <div style={{ padding: '40px', textAlign: 'center' }}>
-            <RefreshCw className="animate-spin" style={{ animation: 'spin 2s linear infinite' }} size={24} />
-          </div>
-        ) : contacts.length === 0 ? (
-          <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
-            No leads found. Match filters or upload an Excel file.
-          </div>
-        ) : (
-          <div className="table-container">
+      {loading ? (
+        <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <RefreshCw className="animate-spin" style={{ animation: 'spin 2s linear infinite' }} size={24} />
+          <p style={{ marginTop: '16px', color: 'var(--text-muted)' }}>Loading contacts...</p>
+        </div>
+      ) : contacts.length === 0 ? (
+        <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <Phone size={48} style={{ color: 'var(--text-muted)', opacity: 0.5, marginBottom: '16px' }} />
+          <h3>No Contacts Found</h3>
+          <p style={{ color: 'var(--text-muted)', marginTop: '8px' }}>
+            There are no contacts matching your current filters.
+          </p>
+        </div>
+      ) : (
+        <div className="glass-panel" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
+          <div className="table-container" style={{ flex: 1 }}>
             <table className="custom-table">
               <thead>
                 <tr>
@@ -230,7 +240,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
                 </tr>
               </thead>
               <tbody>
-                {contacts.map((c) => (
+                {contacts.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((c) => (
                   <tr key={c.id}>
                     <td style={{ fontWeight: 600 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -294,8 +304,15 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
               </tbody>
             </table>
           </div>
-        )}
-      </div>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={contacts.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+          />
+        </div>
+      )}
 
       {/* Reschedule Modal */}
       {rescheduleContact && (

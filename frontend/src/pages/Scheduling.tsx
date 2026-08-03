@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api';
+import Pagination from '../components/Pagination';
 import {
   Calendar, Trash2, Edit2, CalendarRange, RefreshCw, Plus, X, Search, Phone,
   CalendarCheck, CheckCircle, Clock, XCircle, User
@@ -109,6 +110,8 @@ export default function Scheduling({ showToast }: SchedulingProps) {
 
   // --- 1. Callbacks States ---
   const [schedules, setSchedules] = useState<ScheduledCallback[]>([]);
+  const [cbPage, setCbPage] = useState(1);
+  const [cbPageSize, setCbPageSize] = useState(20);
   const [editCallback, setEditCallback] = useState<ScheduledCallback | null>(null);
   const [rescheduleTime, setRescheduleTime] = useState('');
   const [savingCallback, setSavingCallback] = useState(false);
@@ -133,6 +136,8 @@ export default function Scheduling({ showToast }: SchedulingProps) {
 
   // --- 2. Appointments States ---
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [aptPage, setAptPage] = useState(1);
+  const [aptPageSize, setAptPageSize] = useState(20);
   const [appointmentFilter, setAppointmentFilter] = useState<string>('all');
   const [editApt, setEditApt] = useState<Appointment | null>(null);
   const [editAptTime, setEditAptTime] = useState('');
@@ -670,91 +675,100 @@ export default function Scheduling({ showToast }: SchedulingProps) {
 
           {subTab === 'callbacks' ? (
             // ================= CALLBACKS TAB CONTENT =================
-            <div>
-              <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              <div className="glass-panel" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
                 {displayedSchedules.length === 0 ? (
                   <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     {selectedDateFilter ? 'No callbacks on this day.' : 'No callbacks scheduled this month.'}
                   </div>
                 ) : (
-                  <div className="table-container">
-                    <table className="custom-table">
-                      <thead>
-                        <tr>
-                          <th>Contact Name</th>
-                          <th>Contact Phone</th>
-                          <th>Call Type</th>
-                          <th>Scheduled For</th>
-                          <th>Calendar Sync</th>
-                          <th>Status</th>
-                          <th style={{ textAlign: 'center' }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayedSchedules.map((s) => (
-                          <tr key={s.id}>
-                            <td style={{ fontWeight: 600 }}>{s.contact_name}</td>
-                            <td>{s.contact_phone}</td>
-                            <td>
-                              <span className={`badge badge-${s.call_type.toLowerCase().replace('-', '')}`}>
-                                {s.call_type}
-                              </span>
-                            </td>
-                            <td>{new Date(s.scheduled_for).toLocaleString()}</td>
-                            <td>
-                              {s.google_calendar_event_id ? (
-                                <span style={{ color: 'var(--accent-success)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem' }}>
-                                  <CalendarRange size={14} /> Active
-                                </span>
-                              ) : (
-                                <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>None</span>
-                              )}
-                            </td>
-                            <td>
-                              <span className={`badge badge-${s.status.toLowerCase()}`}>
-                                {s.status === 'Scheduled' ? 'Pending' : s.status === 'Triggered' ? 'Fired' : s.status}
-                              </span>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
-                                {s.status === 'Scheduled' && (
-                                  <>
-                                    <button
-                                      className="btn btn-secondary"
-                                      style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-                                      onClick={() => openEditCallback(s)}
-                                    >
-                                      <Edit2 size={12} />
-                                      Edit
-                                    </button>
-                                    <button
-                                      className="btn btn-danger"
-                                      style={{ padding: '6px 12px', fontSize: '0.8rem' }}
-                                      onClick={() => cancelCallback(s.id)}
-                                    >
-                                      <Trash2 size={12} />
-                                      Cancel
-                                    </button>
-                                  </>
-                                )}
-                                {s.status !== 'Scheduled' && (
-                                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>—</span>
-                                )}
-                              </div>
-                            </td>
+                  <>
+                    <div className="table-container" style={{ flex: 1 }}>
+                      <table className="custom-table">
+                        <thead>
+                          <tr>
+                            <th>Contact Name</th>
+                            <th>Contact Phone</th>
+                            <th>Call Type</th>
+                            <th>Scheduled For</th>
+                            <th>Calendar Sync</th>
+                            <th>Status</th>
+                            <th style={{ textAlign: 'center' }}>Actions</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {displayedSchedules.slice((cbPage - 1) * cbPageSize, cbPage * cbPageSize).map((s) => (
+                            <tr key={s.id}>
+                              <td style={{ fontWeight: 600 }}>{s.contact_name}</td>
+                              <td>{s.contact_phone}</td>
+                              <td>
+                                <span className={`badge badge-${s.call_type.toLowerCase().replace('-', '')}`}>
+                                  {s.call_type}
+                                </span>
+                              </td>
+                              <td>{new Date(s.scheduled_for).toLocaleString()}</td>
+                              <td>
+                                {s.google_calendar_event_id ? (
+                                  <span style={{ color: 'var(--accent-success)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.85rem' }}>
+                                    <CalendarRange size={14} /> Active
+                                  </span>
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>None</span>
+                                )}
+                              </td>
+                              <td>
+                                <span className={`badge badge-${s.status.toLowerCase()}`}>
+                                  {s.status === 'Scheduled' ? 'Pending' : s.status === 'Triggered' ? 'Fired' : s.status}
+                                </span>
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                                  {s.status === 'Scheduled' && (
+                                    <>
+                                      <button
+                                        className="btn btn-secondary"
+                                        style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                                        onClick={() => openEditCallback(s)}
+                                      >
+                                        <Edit2 size={12} />
+                                        Edit
+                                      </button>
+                                      <button
+                                        className="btn btn-danger"
+                                        style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                                        onClick={() => cancelCallback(s.id)}
+                                      >
+                                        <Trash2 size={12} />
+                                        Cancel
+                                      </button>
+                                    </>
+                                  )}
+                                  {s.status !== 'Scheduled' && (
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>—</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <Pagination
+                      currentPage={cbPage}
+                      totalItems={displayedSchedules.length}
+                      pageSize={cbPageSize}
+                      onPageChange={setCbPage}
+                      onPageSizeChange={setCbPageSize}
+                    />
+                  </>
                 )}
               </div>
             </div>
           ) : (
             // ================= APPOINTMENTS TAB CONTENT =================
-            <div>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
               {/* Stats Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '28px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '28px', flexShrink: 0 }}>
                 {[
                   { label: 'Total', value: aptStats.total, icon: <CalendarCheck size={22} />, color: '#a78bfa' },
                   { label: 'Upcoming', value: aptStats.booked, icon: <Clock size={22} />, color: '#60a5fa' },
@@ -799,7 +813,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
               )}
 
               {/* Filter Tabs */}
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexShrink: 0 }}>
                 {['all', 'Booked', 'Completed', 'Cancelled'].map(s => (
                   <button
                     key={s}
@@ -821,7 +835,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
               </div>
 
               {/* Table */}
-              <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
+              <div className="glass-panel" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
                 {filteredApts.length === 0 ? (
                   <div style={{ padding: '80px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     <CalendarCheck size={48} style={{ marginBottom: '16px', opacity: 0.3 }} />
@@ -831,119 +845,128 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                     </div>
                   </div>
                 ) : (
-                  <div className="table-container">
-                    <table className="custom-table">
-                      <thead>
-                        <tr>
-                          <th>Contact</th>
-                          <th>Purpose</th>
-                          <th>Scheduled For</th>
-                          <th>Meeting</th>
-                          <th>Status</th>
-                          <th style={{ textAlign: 'center' }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredApts.map(apt => (
-                          <tr key={apt.id}>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                  <User size={16} style={{ color: 'var(--accent-primary)' }} />
-                                </div>
-                                <div>
-                                  <div style={{ fontWeight: 700 }}>{apt.contact_name}</div>
-                                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <Phone size={11} /> {apt.contact_phone}
+                  <>
+                    <div className="table-container" style={{ flex: 1 }}>
+                      <table className="custom-table">
+                        <thead>
+                          <tr>
+                            <th>Contact</th>
+                            <th>Purpose</th>
+                            <th>Scheduled For</th>
+                            <th>Meeting</th>
+                            <th>Status</th>
+                            <th style={{ textAlign: 'center' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredApts.slice((aptPage - 1) * aptPageSize, aptPage * aptPageSize).map(apt => (
+                            <tr key={apt.id}>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                  <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(99,102,241,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <User size={16} style={{ color: 'var(--accent-primary)' }} />
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 700 }}>{apt.contact_name}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <Phone size={11} /> {apt.contact_phone}
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ fontSize: '1.2rem' }}>{purposeEmoji(apt.purpose)}</span>
-                                <span style={{ fontWeight: 500 }}>{apt.purpose || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
-                              </div>
-                            </td>
-                            <td>
-                              <div style={{ fontWeight: 600 }}>
-                                {new Date(apt.scheduled_for).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                              </div>
-                              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                                {new Date(apt.scheduled_for).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
-                              </div>
-                            </td>
-                            <td>
-                              {apt.meeting_type === 'virtual' ? (
-                                apt.virtual_meeting_link ? (
-                                  <a
-                                    href={apt.virtual_meeting_link}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ color: 'var(--accent-success)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
-                                  >
-                                    <CheckCircle size={14} /> Join Virtual Meeting
-                                  </a>
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontSize: '1.2rem' }}>{purposeEmoji(apt.purpose)}</span>
+                                  <span style={{ fontWeight: 500 }}>{apt.purpose || <span style={{ color: 'var(--text-muted)' }}>—</span>}</span>
+                                </div>
+                              </td>
+                              <td>
+                                <div style={{ fontWeight: 600 }}>
+                                  {new Date(apt.scheduled_for).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                </div>
+                                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                                  {new Date(apt.scheduled_for).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                </div>
+                              </td>
+                              <td>
+                                {apt.meeting_type === 'virtual' ? (
+                                  apt.virtual_meeting_link ? (
+                                    <a
+                                      href={apt.virtual_meeting_link}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{ color: 'var(--accent-success)', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'none' }}
+                                    >
+                                      <CheckCircle size={14} /> Join Virtual Meeting
+                                    </a>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Virtual — link pending</span>
+                                  )
                                 ) : (
-                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Virtual — link pending</span>
-                                )
-                              ) : (
-                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>In-person (campus)</span>
-                              )}
-                            </td>
-                            <td>
-                              <span style={{
-                                display: 'inline-flex', alignItems: 'center', gap: '6px',
-                                padding: '4px 12px', borderRadius: '20px', fontSize: '0.82rem', fontWeight: 700,
-                                color: APPOINTMENT_STATUS_COLORS[apt.status], background: APPOINTMENT_STATUS_BG[apt.status],
-                                border: `1px solid ${APPOINTMENT_STATUS_COLORS[apt.status]}44`
-                              }}>
-                                {apt.status === 'Booked' && <Clock size={12} />}
-                                {apt.status === 'Completed' && <CheckCircle size={12} />}
-                                {apt.status === 'Cancelled' && <XCircle size={12} />}
-                                {apt.status}
-                              </span>
-                            </td>
-                            <td>
-                              <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
-                                {apt.status === 'Booked' && (
-                                  <>
-                                    <button
-                                      className="btn btn-secondary"
-                                      style={{ padding: '6px 10px', fontSize: '0.8rem' }}
-                                      onClick={() => openEditApt(apt)}
-                                      title="Reschedule"
-                                    >
-                                      <Edit2 size={12} />
-                                    </button>
-                                    <button
-                                      className="btn btn-secondary"
-                                      style={{ padding: '6px 10px', fontSize: '0.8rem', color: 'var(--accent-success)' }}
-                                      onClick={() => markAptCompleted(apt.id)}
-                                      title="Mark Completed"
-                                    >
-                                      <CheckCircle size={12} />
-                                    </button>
-                                    <button
-                                      className="btn btn-danger"
-                                      style={{ padding: '6px 10px', fontSize: '0.8rem' }}
-                                      onClick={() => deleteApt(apt.id)}
-                                      title="Cancel"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </>
+                                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>In-person (campus)</span>
                                 )}
-                                {apt.status !== 'Booked' && (
-                                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>—</span>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                              </td>
+                              <td>
+                                <span style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                  padding: '4px 12px', borderRadius: '20px', fontSize: '0.82rem', fontWeight: 700,
+                                  color: APPOINTMENT_STATUS_COLORS[apt.status], background: APPOINTMENT_STATUS_BG[apt.status],
+                                  border: `1px solid ${APPOINTMENT_STATUS_COLORS[apt.status]}44`
+                                }}>
+                                  {apt.status === 'Booked' && <Clock size={12} />}
+                                  {apt.status === 'Completed' && <CheckCircle size={12} />}
+                                  {apt.status === 'Cancelled' && <XCircle size={12} />}
+                                  {apt.status}
+                                </span>
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                                  {apt.status === 'Booked' && (
+                                    <>
+                                      <button
+                                        className="btn btn-secondary"
+                                        style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                                        onClick={() => openEditApt(apt)}
+                                        title="Reschedule"
+                                      >
+                                        <Edit2 size={12} />
+                                      </button>
+                                      <button
+                                        className="btn btn-secondary"
+                                        style={{ padding: '6px 10px', fontSize: '0.8rem', color: 'var(--accent-success)' }}
+                                        onClick={() => markAptCompleted(apt.id)}
+                                        title="Mark Completed"
+                                      >
+                                        <CheckCircle size={12} />
+                                      </button>
+                                      <button
+                                        className="btn btn-danger"
+                                        style={{ padding: '6px 10px', fontSize: '0.8rem' }}
+                                        onClick={() => deleteApt(apt.id)}
+                                        title="Cancel"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </>
+                                  )}
+                                  {apt.status !== 'Booked' && (
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>—</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <Pagination
+                      currentPage={aptPage}
+                      totalItems={filteredApts.length}
+                      pageSize={aptPageSize}
+                      onPageChange={setAptPage}
+                      onPageSizeChange={setAptPageSize}
+                    />
+                  </>
                 )}
               </div>
             </div>
