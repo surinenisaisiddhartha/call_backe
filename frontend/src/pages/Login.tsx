@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import api from '../api';
-import { Lock, Mail, RefreshCw, KeyRound, School as SchoolIcon, ArrowLeft, ArrowRight } from 'lucide-react';
+import api, { getErrorMessage } from '../api';
+import { Lock, Mail, RefreshCw, KeyRound, School as SchoolIcon, ArrowLeft, ArrowRight, AlertCircle } from 'lucide-react';
 
 interface LoginProps {
   onLoginSuccess: (token: string, user?: any) => void;
@@ -26,11 +26,34 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
+  // Login errors are shown INLINE and stay until the user changes something.
+  // A toast is wrong here: it disappears after four seconds, sits in the far
+  // corner away from the field that caused it, and on a sign-in screen the
+  // message is the whole point — you need to be able to re-read it while
+  // retyping. Toasts remain for the rest of the app, where they're transient
+  // feedback about work that already succeeded.
+  const [error, setError] = useState<string | null>(null);
+
+  const fail = (err: unknown, fallback: string) => setError(getErrorMessage(err, fallback));
+
   const handleIdentify = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+
+    // Check the address here rather than spending a round trip to be told
+    // it's malformed. The browser's own `type=email` check is lenient —
+    // it accepts "a@b" — so a typo like a missing ".com" would otherwise
+    // sail through to the password step and fail there instead, where the
+    // real cause is much harder to guess.
+    const trimmed = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(trimmed)) {
+      setError('That does not look like a complete email address. Check for a typo.');
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await api.post('/auth/identify', { email });
+      const res = await api.post('/auth/identify', { email: trimmed });
       setIdentifiedSchool(
         res.data.school_name
           ? { name: res.data.school_name, location: res.data.school_location || null }
@@ -38,7 +61,7 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
       );
       setStep('password');
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Could not continue with that email', 'error');
+      fail(err, 'Could not continue with that email');
     } finally {
       setLoading(false);
     }
@@ -48,22 +71,31 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
     setStep('email');
     setPassword('');
     setIdentifiedSchool(null);
+    setError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     setLoading(true);
     try {
-      const res = await api.post('/auth/login', { email, password });
+      const res = await api.post('/auth/login', { email: email.trim(), password });
       if (res.data.challenge === 'NEW_PASSWORD_REQUIRED') {
         setChallengeSession(res.data.session);
-        showToast('Please set a new password to continue', 'success');
         return;
       }
       showToast(`Welcome back${res.data.user?.school_name ? `, ${res.data.user.school_name}` : ''}!`, 'success');
       onLoginSuccess(res.data.token, res.data.user);
     } catch (err: any) {
-      showToast(err.response?.data?.detail || err.response?.data?.error || 'Authentication failed', 'error');
+      // Deliberately the SAME wording whether the address is unknown or the
+      // password is simply wrong. Distinguishing them would turn this form
+      // into an account-enumeration oracle, undoing the care taken in
+      // /auth/identify to never confirm whether an account exists.
+      if (err?.response?.status === 401) {
+        setError('That email and password combination is not correct. Please try again.');
+      } else {
+        fail(err, 'Could not sign you in');
+      }
     } finally {
       setLoading(false);
     }
@@ -71,21 +103,26 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
 
   const handleSetNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     if (newPassword !== confirmPassword) {
-      showToast('Passwords do not match', 'error');
+      setError('The two passwords do not match.');
+      return;
+    }
+    if (newPassword.length < 8) {
+      setError('Your new password must be at least 8 characters long.');
       return;
     }
     setLoading(true);
     try {
       const res = await api.post('/auth/set-new-password', {
-        email,
+        email: email.trim(),
         new_password: newPassword,
         session: challengeSession,
       });
       showToast('Password updated — welcome!', 'success');
       onLoginSuccess(res.data.token, res.data.user);
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Could not set the new password', 'error');
+      fail(err, 'Could not set the new password');
     } finally {
       setLoading(false);
     }
@@ -166,6 +203,27 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
           </div>
         )}
 
+        {/* Inline error — stays put until the user edits a field, so it can be
+            re-read while retyping. Shown above the form on every step,
+            including the email step. */}
+        {error && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: '10px',
+              padding: '12px 14px', marginBottom: '18px', borderRadius: '12px',
+              background: 'rgba(239, 68, 68, 0.10)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+            }}
+          >
+            <AlertCircle size={18} style={{ color: 'var(--accent-error)', flexShrink: 0, marginTop: '1px' }} />
+            <span style={{ fontSize: '0.85rem', lineHeight: 1.45, color: 'var(--text-primary)' }}>
+              {error}
+            </span>
+          </div>
+        )}
+
         {inChallenge ? (
           <form onSubmit={handleSetNewPassword} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div className="form-group">
@@ -177,7 +235,7 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
                   className="form-input"
                   style={{ paddingLeft: '48px', width: '100%' }}
                   value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
+                  onChange={(e) => { setNewPassword(e.target.value); setError(null); }}
                   minLength={8}
                   required
                 />
@@ -196,7 +254,7 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
                   className="form-input"
                   style={{ paddingLeft: '48px', width: '100%' }}
                   value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  onChange={(e) => { setConfirmPassword(e.target.value); setError(null); }}
                   minLength={8}
                   required
                 />
@@ -222,7 +280,7 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
                     className="form-input"
                     style={{ paddingLeft: '48px', width: '100%' }}
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); setError(null); }}
                     autoFocus
                     required
                   />
@@ -241,7 +299,7 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
                     className="form-input"
                     style={{ paddingLeft: '48px', width: '100%' }}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => { setPassword(e.target.value); setError(null); }}
                     autoFocus
                     required
                   />

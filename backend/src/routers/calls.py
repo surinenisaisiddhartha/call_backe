@@ -62,9 +62,25 @@ async def make_retell_request(endpoint: str, method: str, body: dict = None) -> 
             print(f"[RETELL] Request to {endpoint} failed: {e}")
             raise HTTPException(status_code=502, detail=f"Could not reach Retell: {e}")
 
+# Retell's concurrency limit is an account-level plan setting — it does not
+# change minute to minute. Every dashboard load was making a live call to
+# Retell's API for it, which was the single slowest request in the app (~1s,
+# dominated by the round trip to Retell). Cache it briefly: the number stays
+# accurate enough for a dashboard, and a plan change shows up within a minute.
+_CONCURRENCY_CACHE = {"data": None, "fetched_at": 0.0}
+_CONCURRENCY_TTL_SECONDS = 60
+
+
 @router.get("/concurrency")
 async def get_concurrency(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    import time
+    now = time.time()
+    if _CONCURRENCY_CACHE["data"] is not None and now - _CONCURRENCY_CACHE["fetched_at"] < _CONCURRENCY_TTL_SECONDS:
+        return _CONCURRENCY_CACHE["data"]
+
     data = await make_retell_request("/get-concurrency", "GET")
+    _CONCURRENCY_CACHE["data"] = data
+    _CONCURRENCY_CACHE["fetched_at"] = now
     return data
 
 @router.post("/start-campaign")

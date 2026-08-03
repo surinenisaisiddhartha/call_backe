@@ -37,26 +37,46 @@ def _configured_slug(db: Session, school: School, meeting_type: str) -> str:
 
 
 def _fetch_event_types(api_key: str) -> list:
-    """Flattened list of the account's event types, or [] on failure."""
+    """
+    Flattened list of the account's event types, or [] on failure.
+
+    Cached: this is an external HTTP call to Cal.com that sits in the booking
+    path, so it ran while the caller waited for "your appointment is booked".
+    Event types change when someone edits them in the Cal.com dashboard, not
+    during a call. A failure is deliberately NOT cached — otherwise one blip
+    would keep bookings failing for the whole TTL.
+    """
+    from src.cache import cal_event_types_cache, _MISS
+
+    # Keyed on a suffix of the key so each school's own Cal.com account gets
+    # its own entry, without holding the full credential as a dict key.
+    cache_key = f"et:{api_key[-8:]}"
+    cached = cal_event_types_cache.get(cache_key)
+    if cached is not _MISS:
+        return cached
+
     headers = get_headers(api_key, CAL_API_VERSION_EVENT_TYPES)
     try:
         res = httpx.get(f"{CAL_BASE_URL}/event-types", headers=headers, timeout=30.0)
         print(f"[CAL] Event types status: {res.status_code}")
         if res.status_code != 200:
             print("Failed to fetch Cal.com event types:", res.text)
-            return []
+            return []   # not cached — a transient failure must not stick
         # v2 returns {"data":{"eventTypeGroups":[{"eventTypes":[...]}]}}
         # OR {"data":[...]}
         raw_data = res.json().get("data", {})
         if isinstance(raw_data, list):
-            return raw_data
-        event_types = []
-        for group in raw_data.get("eventTypeGroups", []):
-            event_types.extend(group.get("eventTypes", []))
+            event_types = raw_data
+        else:
+            event_types = []
+            for group in raw_data.get("eventTypeGroups", []):
+                event_types.extend(group.get("eventTypes", []))
+        if event_types:
+            cal_event_types_cache.set(cache_key, event_types)
         return event_types
     except Exception as e:
         print("Cal.com event type retrieval failed:", e)
-        return []
+        return []   # not cached
 
 def get_headers(api_key: str, api_version: str, extra: dict = None) -> dict:
     h = {

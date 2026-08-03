@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import api from '../api';
+import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
 import {
   Calendar, Trash2, Edit2, CalendarRange, RefreshCw, Plus, X, Search, Phone,
@@ -247,7 +247,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
       setShowNewScheduleModal(false);
       fetchSchedules();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || err.response?.data?.error || 'Failed to schedule callback', 'error');
+      showToast(getErrorMessage(err, 'Failed to schedule callback'), 'error');
     } finally {
       setSchedulingCallback(false);
     }
@@ -328,7 +328,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
       setShowCreateApt(false);
       fetchAppointments();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to create appointment', 'error');
+      showToast(getErrorMessage(err, 'Failed to create appointment'), 'error');
     } finally {
       setCreatingApt(false);
     }

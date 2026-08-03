@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import api from '../api';
+import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
 import {
   BarChart2, Play, RefreshCw, Users, CheckCircle,
@@ -185,7 +185,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       setUploadFile(null);
       fetchCampaigns();
     } catch (err: any) {
-      showToast(err.response?.data?.error || 'Failed to upload spreadsheet', 'error');
+      showToast(getErrorMessage(err, 'Failed to upload spreadsheet'), 'error');
     } finally {
       setUploadLoading(false);
     }
@@ -198,7 +198,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       showToast('Campaign started! Calls are being dialed.', 'success');
       fetchCampaigns();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to start campaign', 'error');
+      showToast(getErrorMessage(err, 'Failed to start campaign'), 'error');
     } finally {
       setCallingId(null);
     }

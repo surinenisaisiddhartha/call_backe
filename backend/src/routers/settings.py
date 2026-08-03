@@ -84,6 +84,14 @@ def save_settings(
             os.environ[key.upper()] = str(value)
 
         db.commit()
+
+        # Settings are cached on the live-call path (the tools secret is read
+        # on every agent tool call). Drop the cache now so a rotated secret or
+        # a changed API key takes effect on the next call rather than after the
+        # TTL — a stale secret would 401 every tool call in the meantime.
+        from src.cache import settings_cache
+        settings_cache.invalidate()
+
         return {"success": True}
     except Exception as e:
         db.rollback()

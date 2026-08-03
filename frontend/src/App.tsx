@@ -21,6 +21,24 @@ interface Toast {
   id: number;
 }
 
+/** Rendered in BOTH the signed-out and signed-in trees — see the note at the
+ *  `if (!token)` early return below. */
+function ToastStack({ toasts }: { toasts: Toast[] }) {
+  return (
+    <div style={{ position: 'fixed', bottom: '100px', right: '30px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
+      {toasts.map(t => (
+        <div
+          key={t.id}
+          className="toast"
+          style={{ borderLeft: `4px solid ${t.type === 'success' ? 'var(--accent-success)' : 'var(--accent-error)'}` }}
+        >
+          <span>{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -183,9 +201,19 @@ export default function App() {
     showToast('Logged out successfully', 'success');
   };
 
+  // The toast container has to render on the login screen too. It used to live
+  // only inside the authenticated layout below, AFTER this early return — so
+  // every message raised while signed out was created and then never displayed:
+  // a wrong password, an unreachable server, Cognito not configured. The user
+  // clicked and simply nothing happened.
   if (!token) {
     if (showLogin) {
-      return <Login onLoginSuccess={handleLoginSuccess} showToast={showToast} />;
+      return (
+        <>
+          <Login onLoginSuccess={handleLoginSuccess} showToast={showToast} />
+          <ToastStack toasts={toasts} />
+        </>
+      );
     }
     return <Landing onLoginClick={() => window.location.hash = '#login'} />;
   }
@@ -325,18 +353,7 @@ export default function App() {
         <span style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>EnquiryCall</span>
       </div>
 
-      {/* Toast Alert System */}
-      <div style={{ position: 'fixed', bottom: '100px', right: '30px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
-        {toasts.map(t => (
-          <div
-            key={t.id}
-            className="toast"
-            style={{ borderLeft: `4px solid ${t.type === 'success' ? 'var(--accent-success)' : 'var(--accent-error)'}` }}
-          >
-            <span>{t.message}</span>
-          </div>
-        ))}
-      </div>
+      <ToastStack toasts={toasts} />
     </div>
   );
 }

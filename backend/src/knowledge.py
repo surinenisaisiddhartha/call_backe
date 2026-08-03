@@ -322,6 +322,15 @@ def refresh_knowledge_base(school_id: str = None):
                     total_chunks += 1
 
         db.commit()
+
+        # The cached copy now describes the old content — drop it so the very
+        # next caller question is answered from the freshly scraped pages.
+        # Both keys: the school's own, and the unscoped one a single-tenant
+        # deployment uses.
+        from src.cache import knowledge_cache
+        knowledge_cache.invalidate(resolved_school_id)
+        knowledge_cache.invalidate("__all__")
+
         print(f"[SCRAPER] Knowledge base refreshed for '{label}': {total_chunks} chunks")
         return total_chunks
 
@@ -425,14 +434,37 @@ def search_knowledge(query: str, limit: int = 3, school_id: str = None) -> List[
         if not query_words:
             return []
             
-        chunk_query = db.query(KnowledgeChunk)
-        if school_id:
-            chunk_query = chunk_query.filter(KnowledgeChunk.school_id == school_id)
-        chunks = chunk_query.all()
+        # This runs while a caller waits on the phone, and it scans every chunk
+        # in Python — so the whole set was being pulled from a remote database
+        # on each lookup. Cache the pre-processed form: the lowercased,
+        # punctuation-stripped text and word set that scoring needs, computed
+        # once per refresh instead of once per question.
+        # Invalidated whenever the knowledge base is rebuilt, so a "Refresh Now"
+        # is reflected immediately rather than after the TTL.
+        from src.cache import knowledge_cache
+
+        def _load_chunks():
+            q = db.query(KnowledgeChunk)
+            if school_id:
+                q = q.filter(KnowledgeChunk.school_id == school_id)
+            prepared = []
+            for ch in q.all():
+                clean = re.sub(r'[^\w\s]', ' ', (ch.content or "").lower())
+                prepared.append({
+                    "source_url": ch.source_url,
+                    "page_title": ch.page_title,
+                    "content": ch.content,
+                    "clean_content": clean,
+                    "content_words": set(clean.split()),
+                })
+            return prepared
+
+        chunks = knowledge_cache.get_or_load(school_id or "__all__", _load_chunks)
+
         for chunk in chunks:
-            clean_content = re.sub(r'[^\w\s]', ' ', chunk.content.lower())
-            content_words = set(clean_content.split())
-            
+            clean_content = chunk["clean_content"]
+            content_words = chunk["content_words"]
+
             score = 0
             for qw in query_words:
                 if qw in content_words:
@@ -441,12 +473,12 @@ def search_knowledge(query: str, limit: int = 3, school_id: str = None) -> List[
                     score += 2  # partial match (e.g. query "fee" matches "fees")
                 elif qw in clean_content:
                     score += 1  # general substring match
-                    
+
             if score > 0:
                 results.append({
-                    "source_url": chunk.source_url,
-                    "page_title": chunk.page_title,
-                    "content": chunk.content,
+                    "source_url": chunk["source_url"],
+                    "page_title": chunk["page_title"],
+                    "content": chunk["content"],
                     "score": score
                 })
         
@@ -495,13 +527,21 @@ def get_knowledge_status(school_id: str = None) -> dict:
         if school_id:
             chunk_query = chunk_query.filter(KnowledgeChunk.school_id == school_id)
 
+        from sqlalchemy import func
+
         total_chunks = chunk_query.count()
         last_scraped = chunk_query.order_by(KnowledgeChunk.scraped_at.desc()).first()
 
         # How many distinct pages this knowledge base was actually built from,
         # rather than the length of the original school's hardcoded URL list —
         # that number was meaningless for any other school.
-        urls_monitored = len({c.source_url for c in chunk_query.all()})
+        # Counted in SQL: the previous version loaded every chunk's full text
+        # into memory just to count distinct URLs, which grows with the size of
+        # the knowledge base for a number the database can compute directly.
+        url_count_q = db.query(func.count(func.distinct(KnowledgeChunk.source_url)))
+        if school_id:
+            url_count_q = url_count_q.filter(KnowledgeChunk.school_id == school_id)
+        urls_monitored = url_count_q.scalar() or 0
 
         return {
             "total_chunks": total_chunks,

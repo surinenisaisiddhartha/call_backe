@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import api from '../api';
+import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
 import {
   School as SchoolIcon, Plus, X, RefreshCw, Copy, Check,
@@ -82,7 +82,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       const res = await api.get('/schools');
       setSchools(res.data);
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to load schools', 'error');
+      showToast(getErrorMessage(err, 'Failed to load schools'), 'error');
     } finally {
       setLoading(false);
     }
@@ -106,7 +106,7 @@ export default function Schools({ showToast }: SchoolsProps) {
         showToast('Logo updated successfully', 'success');
       }
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to upload logo', 'error');
+      showToast(getErrorMessage(err, 'Failed to upload logo'), 'error');
     }
   };
 
@@ -150,7 +150,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       setShowForm(false);
       loadSchools();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to create school', 'error');
+      showToast(getErrorMessage(err, 'Failed to create school'), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -162,7 +162,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       showToast(`Voice agent refreshed for ${school.name}`, 'success');
       loadSchools();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Agent provisioning failed', 'error');
+      showToast(getErrorMessage(err, 'Agent provisioning failed'), 'error');
     }
   };
 
@@ -173,7 +173,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       setCredentials({ email: school.admin_email || '', password: res.data.temp_password, school: school.name });
       showToast('New temporary password generated', 'success');
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Could not reset the password', 'error');
+      showToast(getErrorMessage(err, 'Could not reset the password'), 'error');
     }
   };
 
@@ -184,7 +184,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       showToast(`${school.name} removed`, 'success');
       loadSchools();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Could not remove this school', 'error');
+      showToast(getErrorMessage(err, 'Could not remove this school'), 'error');
     }
   };
 
@@ -231,7 +231,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       setEffective(res.data?.effective || {});
       setBookingProvider(res.data?.booking_provider || '');
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to load settings', 'error');
+      showToast(getErrorMessage(err, 'Failed to load settings'), 'error');
       setSettingsSchool(null);
     } finally {
       setSettingsLoading(false);
@@ -277,7 +277,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       setEditSchool(null);
       loadSchools();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Could not update this school', 'error');
+      showToast(getErrorMessage(err, 'Could not update this school'), 'error');
     } finally {
       setEditSaving(false);
     }
@@ -308,7 +308,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       setNewEmail('');
       loadSchools();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Could not change the login email', 'error');
+      showToast(getErrorMessage(err, 'Could not change the login email'), 'error');
     } finally {
       setEmailSaving(false);
     }
@@ -326,7 +326,7 @@ export default function Schools({ showToast }: SchoolsProps) {
       showToast(`Settings saved for ${settingsSchool.name}`, 'success');
       closeSettings();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to save settings', 'error');
+      showToast(getErrorMessage(err, 'Failed to save settings'), 'error');
     } finally {
       setSettingsSaving(false);
     }

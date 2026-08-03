@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import api from '../api';
+import api, { getErrorMessage } from '../api';
 import {
   Users, CheckCircle, Phone, Calendar, Clock, RefreshCw,
   PhoneCall, CalendarCheck, ChevronRight, BarChart2
@@ -103,7 +103,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
       setLoading(false);
     } catch (err) {
       console.error('Dashboard fetch failed', err);
-      showToast('Failed to load dashboard data', 'error');
+      showToast(getErrorMessage(err, 'Failed to load dashboard data'), 'error');
       setLoading(false);
     }
   };
