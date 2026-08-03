@@ -62,6 +62,10 @@ def _provision_agent(db: Session, school: School) -> str:
         school.retell_agent_id = result["agent_id"]
         school.retell_llm_id = result["llm_id"]
         db.commit()
+        # The agent id -> school mapping is cached on the live-call path; a
+        # newly provisioned agent must resolve to this school immediately.
+        from src.cache import school_cache
+        school_cache.invalidate()
         return ""
     except Exception as e:
         print(f"[SCHOOLS] Agent provisioning failed for '{school.name}': {e}")
@@ -375,6 +379,11 @@ def delete_school(school_id: str, db: Session = Depends(get_db), _admin: dict = 
 
     db.delete(school)
     db.commit()
+    # Per-school Cal.com credentials may have changed, so the cached event
+    # types for the old key no longer apply to this school.
+    from src.cache import cal_event_types_cache, school_cache
+    cal_event_types_cache.invalidate()
+    school_cache.invalidate()
     return {"success": True}
 
 

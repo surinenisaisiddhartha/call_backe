@@ -221,13 +221,26 @@ def get_batches(db: Session = Depends(get_db), current_user: dict = Depends(get_
     if current_user.get("school_id"):
         query = query.filter(UploadBatch.school_id == current_user["school_id"])
     batches = query.order_by(UploadBatch.uploaded_at.desc()).all()
+
+    # One grouped query for EVERY campaign's status counts, instead of one per
+    # campaign. Against a remote database the per-campaign version spent nearly
+    # all its time on network round trips, and got linearly worse as campaigns
+    # were added.
+    counts_by_batch: dict = {}
+    batch_ids = [b.id for b in batches]
+    if batch_ids:
+        rows = (
+            db.query(Contact.batch_id, Contact.status, func.count(Contact.id))
+            .filter(Contact.batch_id.in_(batch_ids))
+            .group_by(Contact.batch_id, Contact.status)
+            .all()
+        )
+        for batch_id, status, n in rows:
+            counts_by_batch.setdefault(batch_id, {})[status] = n
+
     result = []
     for b in batches:
-        # Per-campaign status counts
-        status_counts = db.query(Contact.status, func.count(Contact.id)).filter(
-            Contact.batch_id == b.id
-        ).group_by(Contact.status).all()
-        counts = {s: c for s, c in status_counts}
+        counts = counts_by_batch.get(b.id, {})
         result.append({
             "id": b.id,
             "file_name": b.file_name,

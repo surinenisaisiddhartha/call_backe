@@ -26,8 +26,18 @@ def verify_tools_secret(req: Request, db: Session = Depends(get_db)) -> None:
     config. If no secret is configured yet, the check is skipped (with a
     warning) so existing unconfigured deployments keep working.
     """
-    setting = db.query(Settings).filter(Settings.key == "aegis_tools_secret").first()
-    expected = (setting.value if setting else None) or os.getenv("AEGIS_TOOLS_SECRET")
+    # Cached: this runs on EVERY tool call the agent makes mid-conversation,
+    # and re-reading it from a remote database each time added a round trip of
+    # dead air to every lookup, booking and callback. Invalidated immediately
+    # when settings are saved (see routers/settings.py), so rotating the secret
+    # takes effect at once rather than after the TTL.
+    from src.cache import settings_cache
+
+    def _load_secret():
+        s = db.query(Settings).filter(Settings.key == "aegis_tools_secret").first()
+        return s.value if s else None
+
+    expected = settings_cache.get_or_load("aegis_tools_secret", _load_secret) or os.getenv("AEGIS_TOOLS_SECRET")
     if not expected:
         print("[TOOLS] WARNING: aegis_tools_secret not configured — tool webhook endpoints are unauthenticated. Set it in Settings to lock these down.")
         return
@@ -213,8 +223,16 @@ def resolve_calling_school_id(db: Session, req: Request, request_data: Any) -> O
     if not agent_id:
         return None
 
-    school = db.query(School).filter(School.retell_agent_id == agent_id).first()
-    return school.id if school else None
+    # Cached by agent id — resolved on every tool call, and an agent's school
+    # only changes when a school is re-provisioned. Only the id is cached, not
+    # the ORM row, so nothing stale is ever attached to a live session.
+    from src.cache import school_cache
+
+    def _load():
+        school = db.query(School).filter(School.retell_agent_id == agent_id).first()
+        return school.id if school else None
+
+    return school_cache.get_or_load(f"agent:{agent_id}", _load)
 
 
 def resolve_contact(db: Session, req: Request, request_data: Any) -> Optional[Contact]:

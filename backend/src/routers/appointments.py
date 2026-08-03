@@ -57,10 +57,21 @@ def get_appointments(
         query = query.filter(Appointment.contact_id == contact_id)
     
     appointments = query.order_by(Appointment.scheduled_for.desc()).all()
-    
+
+    # Fetch every contact in ONE query rather than one per appointment. The
+    # database is remote, so each extra round trip costs tens of milliseconds —
+    # this endpoint was issuing 1 + N queries and spending most of its time
+    # waiting on the network rather than doing work.
+    contact_ids = {a.contact_id for a in appointments}
+    contacts_by_id = {}
+    if contact_ids:
+        contacts_by_id = {
+            c.id: c for c in db.query(Contact).filter(Contact.id.in_(contact_ids)).all()
+        }
+
     results = []
     for apt in appointments:
-        contact = db.query(Contact).filter(Contact.id == apt.contact_id).first()
+        contact = contacts_by_id.get(apt.contact_id)
         results.append({
             "id": apt.id,
             "contact_id": apt.contact_id,

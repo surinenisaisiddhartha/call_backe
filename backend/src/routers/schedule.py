@@ -147,7 +147,12 @@ def get_schedules(
     current_user: dict = Depends(get_current_user)
 ):
     """Return scheduled callbacks. Defaults to Scheduled + Triggered. Pass ?status=Scheduled to filter."""
-    query = db.query(ScheduledCallback)
+    from sqlalchemy.orm import joinedload
+
+    # joinedload pulls each callback's contact in the SAME query. Without it
+    # every callback lazy-loaded its contact separately below (s.contact),
+    # which against a remote database meant a round trip per distinct contact.
+    query = db.query(ScheduledCallback).options(joinedload(ScheduledCallback.contact))
     if current_user.get("school_id"):
         query = query.join(Contact, ScheduledCallback.contact_id == Contact.id).filter(
             Contact.school_id == current_user["school_id"])
