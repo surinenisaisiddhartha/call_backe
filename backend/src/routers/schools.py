@@ -308,6 +308,7 @@ def view_as_school(school_id: str, db: Session = Depends(get_db), admin: dict = 
             "role": "school",
             "school_id": school.id,
             "school_name": school.name,
+            "school_slug": school.slug,
             "impersonated": True,
         },
     }

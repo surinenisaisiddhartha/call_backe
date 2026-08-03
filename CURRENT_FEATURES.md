@@ -1,4 +1,4 @@
-# Call Manager (Aegis Calling) — Current Features
+# EnquiryCall — Current Features
 
 **Document type:** Feature catalog (as-built, grounded directly in the codebase)
 **Document version:** 2.0
@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-Call Manager is a live, working **multi-tenant** AI outbound-calling platform
+EnquiryCall is a live, working **multi-tenant** AI outbound-calling platform
 for school admissions outreach. Each onboarded school ("tenant") gets its own
 login, its own leads, its own voice agent, and its own knowledge base built
 from its own website.

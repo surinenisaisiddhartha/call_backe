@@ -697,7 +697,7 @@ def book_appointment(
             calendar_id=gcal_config["calendar_id"],
             start_iso=dt.isoformat(),
             summary=f"{school_name} {request.purpose} — {attendee_name}",
-            description=f"Booked via Aegis voice calling agent. Purpose: {request.purpose}",
+            description=f"Booked via the EnquiryCall voice agent. Purpose: {request.purpose}",
             attendee_name=attendee_name,
             attendee_phone=attendee_phone,
             attendee_email=(request.attendee_email or "").strip() or (contact.email or ""),

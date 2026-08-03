@@ -2,7 +2,7 @@
 setup_retell_agent.py
 
 Creates (once) or updates (on every run) the single shared Retell AI
-"Maya" agent for Aegis Calling Manager, using agent_prompt.md as the
+"Maya" agent for EnquiryCall, using agent_prompt.md as the
 ENTIRE system prompt — nothing else, no default template content.
 
 PERMANENT / DEPLOYMENT-AGNOSTIC BEHAVIOUR:

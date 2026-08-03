@@ -19,7 +19,7 @@ from src.routers.tools import router as tools_router
 from src.routers.appointments import router as appointments_router
 from src.routers.schools import router as schools_router
 
-app = FastAPI(title="Aegis Calling API", version="1.0.0")
+app = FastAPI(title="EnquiryCall API", version="1.0.0")
 
 # CORS middleware config
 app.add_middleware(
@@ -75,6 +75,31 @@ def startup_event():
         init_scheduler()
     except Exception as e:
         print(f"WARNING: Scheduler failed to start: {e}")
+
+    # Cognito is the ONLY login path. Without it the app starts and serves
+    # every page, but /api/auth/login returns 503 and NOBODY can sign in —
+    # which previously only became visible when someone tried to log in and
+    # got a failure with no clue in the deploy logs. Say it loudly at startup.
+    try:
+        from src import cognito
+        if not cognito.cognito_enabled():
+            missing = [
+                name for name, value in (
+                    ("COGNITO_REGION", cognito.COGNITO_REGION),
+                    ("COGNITO_USER_POOL_ID", cognito.COGNITO_USER_POOL_ID),
+                    ("COGNITO_CLIENT_ID", cognito.COGNITO_CLIENT_ID),
+                ) if not value
+            ]
+            print("=" * 78)
+            print("[STARTUP] LOGIN IS DISABLED — Cognito is not configured.")
+            print(f"[STARTUP] Missing environment variable(s): {', '.join(missing)}")
+            print("[STARTUP] Set them in your deployment's environment settings and redeploy.")
+            print("[STARTUP] Until then /api/auth/login returns 503 and no one can sign in.")
+            print("=" * 78)
+        else:
+            print("[STARTUP] Cognito login is configured.")
+    except Exception as e:
+        print(f"[STARTUP] Could not determine Cognito status: {e}")
 
     # Auto-seed knowledge bases on startup — per school, so a school onboarded
     # while the app was down (or one whose provisioning half-failed) still gets
@@ -137,7 +162,7 @@ def startup_event():
             print(f"[STARTUP] Retell agent auto-configuration failed (non-fatal): {e}")
 
     threading.Thread(target=_configure_retell_agent, daemon=True).start()
-    print("Aegis Calling API is ready.")
+    print("EnquiryCall API is ready.")
 
 if __name__ == "__main__":
     import uvicorn
