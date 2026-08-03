@@ -1,8 +1,8 @@
 # EnquiryCall — Current Features
 
 **Document type:** Feature catalog (as-built, grounded directly in the codebase)
-**Document version:** 2.0
-**As of:** 30 July 2026, `deployment1` branch
+**Document version:** 3.0
+**As of:** 3 August 2026, `feature/merged-updates` branch
 
 ---
 
@@ -53,8 +53,14 @@ limits, which are as much a part of the as-built picture as the features.
 - **Grounded answers only**: every factual claim about the school comes from a
   real-time lookup against **that school's own** knowledge base — never from
   the model's memory, and never from another school's content.
-- **One question at a time** during booking: date/time, then purpose, then
-  email, waiting for a real answer each time.
+- **One question per turn** during booking — a hard rule, not a preference.
+  At most one question mark per turn, and "and"/"also" joining two questions
+  is forbidden. It also may not describe what an appointment involves until
+  the caller has said in-person or virtual, must answer a caller's own
+  question before continuing its own, and must not re-ask something already
+  given. This was tightened after a real call where the agent asked three
+  things at once, described a campus tour to someone who wanted a video
+  call, and had to be corrected twice.
 - **No fabricated confirmations**: "your appointment is booked" or "callback
   scheduled" is only ever spoken after the corresponding backend tool call has
   actually run and returned success.
@@ -164,8 +170,12 @@ a school still gets an event and an email rather than silently nothing.
 
 ## 8. Dashboard (React frontend)
 
+**Landing page** — a public marketing page at the root URL for signed-out
+visitors, describing the product; "Login to Console" reveals the sign-in form
+(`#login`). Signed-in users never see it.
+
 **Dashboard** — contacts, recent call history, upcoming appointments and
-pending callbacks at a glance.
+pending callbacks at a glance, with a time-of-day greeting.
 
 **Campaigns** — all uploaded campaigns; expand for per-contact call history,
 trigger an individual call, view transcripts inline.
@@ -187,14 +197,35 @@ login and its knowledge base in one step), and per school:
 - **Change login email** — moves the Cognito login to a new address (create
   new, then delete old, in that order, so a failure never leaves the school
   with no login).
+- **Logo upload** — a school's logo is uploaded to AWS S3 and shown in its
+  dashboard header. Requires `S3_BUCKET_NAME` and an AWS region on the
+  server; the endpoint returns a clear 500 if they are missing.
 - **Refresh agent** and **reset password**.
+
+**Pagination** on the Campaigns, Leads, Scheduling and Schools tables, with a
+selectable page size.
 
 **System Settings** (admin only) — Retell credentials, Cal.com key/link and
 event slugs, Google Calendar and SMTP fallbacks, dialer concurrency, retry
 policy, and the tool-webhook shared secret. Secrets are masked once saved.
 
-**Login** — email/password against Cognito, with a first-login
-"set a new password" step.
+**Login** — two steps: enter an email, which identifies which school it
+belongs to (by registered address, or by domain against the school's own
+website host), then a password on a screen branded with that school. A
+first-login "set a new password" step follows a temporary password.
+
+### Error handling
+- Every failure states what actually went wrong rather than one generic
+  message: server unreachable, request timed out, permission denied, item
+  gone, server error. It also detects an **HTML body on a JSON API** and says
+  the API URL is likely wrong — the exact symptom of a misrouted deployment.
+- **Login errors are inline and persist** until a field is edited, rather
+  than a toast that vanishes in four seconds away from the field concerned.
+  The email step validates the address before spending a round trip.
+- A wrong password and an unknown email give **identical wording**, so the
+  form cannot be used to discover which accounts exist.
+- An **error boundary** catches render crashes and offers Reload or "Sign out
+  and reset", instead of a blank white page.
 
 ---
 
@@ -220,6 +251,31 @@ policy, and the tool-webhook shared secret. Secrets are masked once saved.
   double-dialed.
 - **Background jobs**: safety status reset (3 min), callback sweep (1 min),
   nightly knowledge refresh, Google Calendar reconciliation (10 min).
+
+### Performance
+The database is remote, so a query costs tens of milliseconds of network
+latency rather than real work (measured: 18–44 ms warm, ~80 ms on a new
+connection). The work below removed round trips rather than computation.
+
+- **No N+1 queries** on the dashboard endpoints. Appointments fetched one
+  contact per row (11 queries for 10 rows); campaigns ran a `GROUP BY` per
+  campaign; callbacks lazy-loaded each contact. All are now single batched
+  or joined queries, so they no longer degrade as rows are added.
+- **A short-lived in-process cache** (`src/cache.py`) for the things that
+  don't change between calls: platform settings (30 s), a school by agent id
+  (60 s), a school's knowledge chunks (5 min, storing the pre-processed
+  search form), Cal.com event types (5 min), and Retell's account
+  concurrency limit (60 s).
+- Caches are **invalidated explicitly on write** — a knowledge refresh, a
+  settings save, or an agent provision clears the relevant entry at once
+  rather than waiting for the TTL. This matters most for the tools secret: a
+  stale one would reject every tool call mid-conversation.
+- A Cal.com failure is deliberately **never** cached, so one network blip
+  cannot keep bookings failing for the whole TTL.
+
+Effect: the full dashboard load went from ~2.9 s to ~0.65 s, and
+`lookup_school_info` — which runs while a caller waits on the phone — from
+611 ms with 3 queries to 14 ms with none.
 
 ---
 
@@ -289,8 +345,23 @@ These are current, real constraints — not planned work.
 - **A page that 404s keeps its previous chunks** rather than losing content to
   a transient fetch failure, so a permanently removed page can leave stale
   content behind until the next successful full refresh.
+- **The cache is per process.** Run with more than one uvicorn worker and
+  each holds its own copy; invalidating in one does not clear the others.
+  The TTLs bound how far a worker can lag — hence 30 s for settings. Scaling
+  beyond a single process means moving this to Redis.
+- **Pagination is client-side.** The table pages through a list that was
+  fetched in full, so it improves readability, not load time. Large lead
+  lists will still transfer entirely on every page load.
+- **Logo upload needs AWS S3 configured** (`S3_BUCKET_NAME` plus a region
+  and credentials). Without it the upload endpoint returns a 500.
 - **Multi-tenancy is verified by test, not by production use** — only one
   school currently exists.
+- **A Cognito login is bound to whichever database was active when it was
+  created** (`custom:school_id`). Onboarding a school against one database
+  and signing in against another produces an account that authenticates but
+  sees no data. The clean fix is granting
+  `cognito-idp:AdminUpdateUserAttributes` to the backend's IAM user so the
+  binding can be corrected in one call.
 - **The database is shared with unrelated applications**, so table-level
   changes need care.
 - A Cal.com API key was previously committed to this repository. It has been
