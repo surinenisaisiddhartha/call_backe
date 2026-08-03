@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import api from '../api';
+import api, { getErrorMessage } from '../api';
 import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2 } from 'lucide-react';
 
 interface Contact {
@@ -98,7 +98,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
       showToast(`Call initiated to ${name}!`, 'success');
       fetchContacts();
     } catch (err: any) {
-      showToast(err.response?.data?.error || 'Failed to trigger call', 'error');
+      showToast(getErrorMessage(err, 'Failed to trigger call'), 'error');
     }
   };
 
@@ -122,7 +122,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled }: 
       setRescheduleContact(null);
       fetchContacts();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || err.response?.data?.error || 'Failed to schedule callback', 'error');
+      showToast(getErrorMessage(err, 'Failed to schedule callback'), 'error');
     } finally {
       setRescheduling(false);
     }

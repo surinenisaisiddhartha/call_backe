@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import api from '../api';
+import api, { getErrorMessage } from '../api';
 import { Calendar, CalendarRange, Shield, Cpu, RefreshCw, CheckCircle, HelpCircle, Mail, Database, Search, BookOpen, AlertTriangle } from 'lucide-react';
 
 interface SettingsProps {
@@ -60,7 +60,7 @@ export default function Settings({ showToast }: SettingsProps) {
         setKbRefreshing(false);
       }, 8000);
     } catch (err) {
-      showToast('Failed to trigger knowledge base refresh', 'error');
+      showToast(getErrorMessage(err, 'Failed to trigger knowledge base refresh'), 'error');
       setKbRefreshing(false);
     }
   };
@@ -76,7 +76,7 @@ export default function Settings({ showToast }: SettingsProps) {
       const res = await api.get('/knowledge/search', { params: { query: kbSearchQuery } });
       setKbSearchResult(res.data.answer || 'No results found.');
     } catch (err) {
-      showToast('Knowledge base search failed', 'error');
+      showToast(getErrorMessage(err, 'Knowledge base search failed'), 'error');
     } finally {
       setKbSearching(false);
     }
@@ -89,7 +89,7 @@ export default function Settings({ showToast }: SettingsProps) {
 
       setLoading(false);
     } catch (err) {
-      showToast('Failed to load settings', 'error');
+      showToast(getErrorMessage(err, 'Failed to load settings'), 'error');
       setLoading(false);
     }
   };

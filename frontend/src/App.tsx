@@ -20,6 +20,24 @@ interface Toast {
   id: number;
 }
 
+/** Rendered in BOTH the signed-out and signed-in trees — see the note at the
+ *  `if (!token)` early return below. */
+function ToastStack({ toasts }: { toasts: Toast[] }) {
+  return (
+    <div style={{ position: 'fixed', bottom: '24px', right: '24px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
+      {toasts.map(t => (
+        <div
+          key={t.id}
+          className="toast"
+          style={{ borderLeft: `4px solid ${t.type === 'success' ? 'var(--accent-success)' : 'var(--accent-error)'}` }}
+        >
+          <span>{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -161,8 +179,18 @@ export default function App() {
     showToast('Logged out successfully', 'success');
   };
 
+  // The toast container has to render on the login screen too. It used to live
+  // only inside the authenticated layout below, AFTER this early return — so
+  // every message raised while signed out was created and then never displayed:
+  // a wrong password, an unreachable server, Cognito not configured. The user
+  // clicked and simply nothing happened.
   if (!token) {
-    return <Login onLoginSuccess={handleLoginSuccess} showToast={showToast} />;
+    return (
+      <>
+        <Login onLoginSuccess={handleLoginSuccess} showToast={showToast} />
+        <ToastStack toasts={toasts} />
+      </>
+    );
   }
 
   const navItems: { tab: Tab; icon: React.ReactNode; label: string }[] = [
@@ -287,18 +315,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* Toast Alert System */}
-      <div style={{ position: 'fixed', bottom: '24px', right: '24px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
-        {toasts.map(t => (
-          <div
-            key={t.id}
-            className="toast"
-            style={{ borderLeft: `4px solid ${t.type === 'success' ? 'var(--accent-success)' : 'var(--accent-error)'}` }}
-          >
-            <span>{t.message}</span>
-          </div>
-        ))}
-      </div>
+      <ToastStack toasts={toasts} />
     </div>
   );
 }
