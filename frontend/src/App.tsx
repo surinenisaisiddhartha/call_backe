@@ -8,12 +8,13 @@ import Settings from './pages/Settings';
 import Campaigns from './pages/Campaigns';
 import Dashboard from './pages/Dashboard';
 import Schools from './pages/Schools';
+import Insights from './pages/Insights';
 import {
   Users, Settings as SettingsIcon, LogOut, MessageSquare,
   BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard,
-  PanelLeftClose, PanelLeftOpen, School as SchoolIcon
+  PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp
 } from 'lucide-react';
-type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'scheduling' | 'settings' | 'schools';
+type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'scheduling' | 'insights' | 'settings' | 'schools';
 
 interface Toast {
   message: string;
@@ -112,7 +113,7 @@ export default function App() {
   const schoolSlug = user?.school_slug || (userRole === 'admin' ? 'platform' : null);
 
   const allowedTabsFor = (role: string): Tab[] => {
-    const tabs: Tab[] = ['dashboard', 'campaigns', 'contacts', 'scheduling'];
+    const tabs: Tab[] = ['dashboard', 'campaigns', 'contacts', 'scheduling', 'insights'];
     if (role === 'admin') tabs.push('settings', 'schools');
     return tabs;
   };
@@ -147,6 +148,15 @@ export default function App() {
     }
   }, [token, user, activeTab, schoolSlug]);
   const [jumpToContactId, setJumpToContactId] = useState<string | null>(null);
+  // Set when a bucket on Call Insights is clicked; Contacts consumes it once
+  // and clears it, so returning to the tab later doesn't re-apply the filter.
+  const [jumpToClassification, setJumpToClassification] = useState<string | null>(null);
+
+  const viewClassificationFromInsights = (label: string) => {
+    setJumpToClassification(label);
+    setActiveTab('contacts');
+    window.location.hash = hashFor('contacts');
+  };
 
   const viewContactFromElsewhere = (contactId: string) => {
     setJumpToContactId(contactId);
@@ -223,6 +233,7 @@ export default function App() {
     { tab: 'campaigns', icon: <BarChart2 size={20} />, label: 'Campaigns' },
     { tab: 'contacts', icon: <Users size={20} />, label: 'Leads Directory' },
     { tab: 'scheduling', icon: <CalendarCheck size={20} />, label: 'Scheduling' },
+    { tab: 'insights', icon: <TrendingUp size={20} />, label: 'Call Insights' },
   ];
 
   if (userRole === 'admin') {
@@ -327,8 +338,9 @@ export default function App() {
         <main className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
           {activeTab === 'dashboard' && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
           {activeTab === 'campaigns' && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
-          {activeTab === 'contacts' && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} />}
+          {activeTab === 'contacts' && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} jumpToClassification={jumpToClassification} onClassificationHandled={() => setJumpToClassification(null)} />}
           {activeTab === 'scheduling' && <Scheduling showToast={showToast} />}
+          {activeTab === 'insights' && <Insights showToast={showToast} onViewClassification={viewClassificationFromInsights} />}
           {activeTab === 'schools' && userRole === 'admin' && <Schools showToast={showToast} />}
           {activeTab === 'settings' && userRole === 'admin' && <Settings showToast={showToast} />}
         </main>

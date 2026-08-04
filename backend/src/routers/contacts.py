@@ -398,14 +398,288 @@ def get_all_call_history(
     } for a, c in results]
 
 
+CLASSIFICATIONS = ["Hot Lead", "Warm Lead", "Time Pass", "Not Interested",
+                   "Unclassified", "Not Reached"]
+
+# -- Lead scoring ---------------------------------------------------------
+# Each signal contributes a fixed, visible number of points. These weights are
+# ordinary judgement, not a trained model, and they are written out here so
+# anyone can argue with them and change them - a score nobody can interrogate
+# is a score nobody should act on.
+#
+# Ordering principle: what a caller DID outweighs what they SAID, and what they
+# said outweighs how they sounded. Booking a time is a commitment; sounding
+# enthusiastic costs nothing.
+SCORE_WEIGHTS = {
+    "booked_appointment":   45,   # committed to a time - the strongest signal
+    "requested_callback":   15,   # asked US to call back; auto-retries excluded
+    "engagement_serious":   25,
+    "engagement_casual":   -10,   # pleasant but not pursuing it - the time-passers
+    "engagement_none":     -35,
+    "interest_hot":         15,
+    "interest_warm":         7,
+    "interest_cold":       -15,
+    "asked_many_topics":    10,   # 3+ subjects: doing real research
+    "asked_some_topics":     5,
+    "long_conversation":    10,   # 2min+: they stayed and engaged
+    "medium_conversation":   5,
+    "very_short_call":     -10,   # under 20s: hung up
+    "is_parent":             5,   # the actual decision maker
+    "wrong_number":        -40,
+}
+
+
+def _score_contact(contact, booked: bool, callback: bool, analysis: dict, duration: float):
+    """
+    Returns (score 0-100, [human-readable reasons]).
+
+    Reasons come back with the number because a bare score invites exactly the
+    wrong behaviour - blind trust or blanket dismissal. Seeing "booked an
+    appointment (+45), asked about 4 different things (+10)" makes it checkable.
+    """
+    score = 0
+    reasons = []
+
+    def add(key, text):
+        nonlocal score
+        pts = SCORE_WEIGHTS[key]
+        score += pts
+        reasons.append("%s (%+d)" % (text, pts))
+
+    # Do-not-call is absolute: no pile of positive signals can override somebody
+    # explicitly asking not to be contacted again.
+    if contact.status == "DoNotCall":
+        return 0, ["asked not to be contacted"]
+
+    if booked:
+        add("booked_appointment", "booked an appointment")
+    if callback:
+        add("requested_callback", "asked to be called back")
+
+    if analysis:
+        engagement = (analysis.get("engagement_quality") or "").strip()
+        if engagement == "Serious":
+            add("engagement_serious", "engaged seriously")
+        elif engagement == "Casual":
+            add("engagement_casual", "engaged only casually")
+        elif engagement == "NotInterested":
+            add("engagement_none", "said they are not interested")
+
+        interest = (analysis.get("interest_level") or "").strip()
+        if interest == "Hot":
+            add("interest_hot", "sounded very interested")
+        elif interest == "Warm":
+            add("interest_warm", "sounded fairly interested")
+        elif interest == "Cold":
+            add("interest_cold", "sounded uninterested")
+
+        topics = [x for x in (analysis.get("topics_discussed") or "").split(",")
+                  if x.strip() and x.strip().lower() != "none"]
+        if len(topics) >= 3:
+            add("asked_many_topics", "asked about %d different things" % len(topics))
+        elif topics:
+            add("asked_some_topics", "asked about %d thing(s)" % len(topics))
+
+        caller_type = (analysis.get("caller_type") or "").strip()
+        if caller_type == "Parent":
+            add("is_parent", "spoke to the parent")
+        elif caller_type == "WrongNumber":
+            add("wrong_number", "wrong number")
+
+    if duration:
+        if duration >= 120:
+            add("long_conversation", "talked for %ds" % int(duration))
+        elif duration >= 45:
+            add("medium_conversation", "talked for %ds" % int(duration))
+        elif duration < 20:
+            add("very_short_call", "call lasted seconds")
+
+    return max(0, min(100, score)), reasons
+
+
+def _band(score: int, has_signal: bool, analysis: dict, booked: bool, callback: bool, answered: bool):
+    """
+    Score -> the label people actually read.
+
+    The score alone is not allowed to decide this, for three reasons found by
+    running it over real data:
+
+    1. A BOOKED APPOINTMENT IS ALWAYS HOT. Someone who commits to a time is the
+       best lead you have, whatever else is missing. Scored purely on points, a
+       booking with no analysis attached came to 55 and was labelled Warm --
+       demoting a real commitment because a machine had not got round to
+       listening to the call.
+
+    2. NO ANALYSIS MEANS NO VERDICT, not a bad one. Every call made before
+       analysis was switched on has no engagement or interest data, so it loses
+       ~40 points it never had the chance to earn. Banding those on score alone
+       labelled three-minute conversations "Not Interested" -- the exact
+       mistake that buries a good lead. They are Unclassified until a real call
+       is analysed.
+
+    3. TIME PASS IS ABOUT ENGAGEMENT, NOT POINTS. A chatty caller who asks lots
+       of questions can out-score a brief serious one, and calling them a Warm
+       Lead is precisely what this feature exists to prevent.
+    """
+    if not has_signal:
+        return "Not Reached"
+
+    # Deeds first, and they are not overridable by the arithmetic.
+    if booked:
+        return "Hot Lead"
+
+    if analysis:
+        if (analysis.get("engagement_quality") or "") == "Casual" and score < 60:
+            return "Time Pass"
+        if score >= 60:
+            return "Hot Lead"
+        if score >= 30:
+            return "Warm Lead"
+        return "Not Interested"
+
+    # No analysis: judge only on what we can actually observe.
+    if callback:
+        return "Warm Lead"
+    if answered:
+        return "Unclassified"
+    return "Not Reached"
+
+
+def compute_interest_levels(db: Session, contacts: list) -> dict:
+    """Label-only view; compute_lead_scores has the score and the reasoning."""
+    return {cid: v["classification"] for cid, v in compute_lead_scores(db, contacts).items()}
+
+
+def compute_lead_scores(db: Session, contacts: list) -> dict:
+    """
+    {contact_id: {score, classification, reasons}} for a page of contacts.
+
+    Four batched queries for the whole page regardless of size, never per row.
+    """
+    import json as _json
+    from src.db import Appointment
+
+    ids = [c.id for c in contacts]
+    if not ids:
+        return {}
+
+    booked = {
+        r[0] for r in db.query(Appointment.contact_id).filter(
+            Appointment.contact_id.in_(ids), Appointment.status == "Booked"
+        ).all()
+    }
+    # ONLY callbacks the caller asked for. The system schedules its own
+    # auto-retries when a call goes unanswered (call_type "Reminder"), and
+    # scoring those would reward somebody for never picking up the phone.
+    callbacks = {
+        r[0] for r in db.query(ScheduledCallback.contact_id).filter(
+            ScheduledCallback.contact_id.in_(ids),
+            ScheduledCallback.status.in_(["Scheduled", "Triggering"]),
+            ScheduledCallback.call_type != "Reminder",
+        ).all()
+    }
+
+    latest_analysis, longest_call, answered = {}, {}, set()
+    rows = (
+        db.query(CallAttempt.contact_id, CallAttempt.analysis_json, CallAttempt.duration_sec)
+        .filter(CallAttempt.contact_id.in_(ids))
+        .order_by(CallAttempt.started_at.asc())
+        .all()
+    )
+    for contact_id, raw, duration in rows:
+        if duration and duration > longest_call.get(contact_id, 0):
+            longest_call[contact_id] = duration
+        if duration and duration > 5:
+            answered.add(contact_id)
+        if raw:
+            try:
+                parsed = _json.loads(raw)
+                if isinstance(parsed, dict) and parsed:
+                    latest_analysis[contact_id] = parsed
+            except (ValueError, TypeError):
+                pass
+
+    out = {}
+    for c in contacts:
+        analysis = latest_analysis.get(c.id)
+        duration = longest_call.get(c.id, 0)
+        has_signal = bool(analysis) or c.id in booked or c.id in callbacks or c.id in answered
+        if not has_signal:
+            out[c.id] = {"score": 0, "classification": "Not Reached", "reasons": ["not reached yet"]}
+            continue
+        score, reasons = _score_contact(c, c.id in booked, c.id in callbacks, analysis, duration)
+        out[c.id] = {
+            "score": score,
+            "classification": _band(
+                score, has_signal, analysis,
+                c.id in booked, c.id in callbacks, c.id in answered,
+            ),
+            "reasons": reasons,
+        }
+    return out
+
+
+
+def persist_lead_scores(db: Session, contacts: list) -> dict:
+    """
+    Recompute and STORE the score for these contacts.
+
+    Called whenever something that feeds a score changes — a call is analysed,
+    an appointment is booked, a callback is requested. Storing it is what makes
+    "show me the hottest leads" an indexed SQL query over one page instead of a
+    Python pass over every lead the school has ever had.
+
+    Deliberately scoped to the contacts handed in. Never recompute the whole
+    table: at 10,000 leads a day that is the exact operation that would make
+    the dashboard unusable.
+    """
+    from datetime import datetime as _dt
+
+    scored = compute_lead_scores(db, contacts)
+    now = _dt.utcnow()
+    for c in contacts:
+        s = scored.get(c.id)
+        if not s:
+            continue
+        if c.lead_score != s["score"] or c.lead_classification != s["classification"]:
+            c.lead_score = s["score"]
+            c.lead_classification = s["classification"]
+            c.lead_scored_at = now
+    db.commit()
+    return scored
+
+
+def rescore_contact(db: Session, contact_id: str):
+    """Rescore one contact after a call, booking or callback. Never raises —
+    a scoring failure must not break the webhook that triggered it."""
+    try:
+        contact = db.query(Contact).filter(Contact.id == contact_id).first()
+        if contact:
+            persist_lead_scores(db, [contact])
+    except Exception as e:
+        print(f"[SCORING] Could not rescore contact {contact_id}: {e}")
+
+
 @router.get("")
 def get_contacts(
     status: str = None,
     batchId: str = None,
     search: str = None,
+    interest: str = None,
+    page: int = 1,
+    page_size: int = 50,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    A PAGE of leads, ranked best-first.
+
+    Filtering, ranking and paging all happen in SQL against the stored
+    lead_score. The previous version returned every lead and sorted them in
+    Python: 8.7 KB for 20 leads, which is roughly 4 MB per page load at 10,000
+    and grows every single day. A school doing 1,000-10,000 calls a day would
+    have made that unusable within a week.
+    """
     query = db.query(Contact)
     if current_user.get("school_id"):
         query = query.filter(Contact.school_id == current_user["school_id"])
@@ -413,14 +687,56 @@ def get_contacts(
         query = query.filter(Contact.status == status)
     if batchId:
         query = query.filter(Contact.batch_id == batchId)
+    if interest:
+        query = query.filter(Contact.lead_classification == interest.strip())
     if search:
         query = query.filter(
-            Contact.name.ilike(f"%{search}%") | 
+            Contact.name.ilike(f"%{search}%") |
             Contact.phone_number.ilike(f"%{search}%")
         )
 
-    contacts = query.order_by(Contact.created_at.desc()).all()
-    return contacts
+    total = query.count()
+
+    page = max(1, page)
+    page_size = max(1, min(page_size, 200))   # a caller cannot ask for everything
+    rows = (
+        query.order_by(Contact.lead_score.desc(), Contact.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    # Only this page is scored, so the reasons stay fresh without touching the
+    # rest of the table.
+    scored = compute_lead_scores(db, rows)
+
+    items = [
+        {
+            "id": c.id,
+            "school_id": c.school_id,
+            "batch_id": c.batch_id,
+            "name": c.name,
+            "phone_number": c.phone_number,
+            "email": c.email,
+            "notes": c.notes,
+            "status": c.status,
+            "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "Not Reached"),
+            "lead_score": scored.get(c.id, {}).get("score", c.lead_score or 0),
+            "score_reasons": scored.get(c.id, {}).get("reasons", []),
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        }
+        for c in rows
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": (total + page_size - 1) // page_size,
+    }
+
 
 @router.get("/{id}")
 def get_contact_history(
@@ -437,9 +753,58 @@ def get_contact_history(
     attempts = db.query(CallAttempt).filter(CallAttempt.contact_id == id).order_by(CallAttempt.started_at.desc()).all()
     schedules = db.query(ScheduledCallback).filter(ScheduledCallback.contact_id == id).order_by(ScheduledCallback.scheduled_for.desc()).all()
 
+    # Serialise attempts explicitly so the post-call analysis comes back as a
+    # real object rather than the JSON string it is stored as. A malformed or
+    # legacy value must not break the whole history view, so parsing failures
+    # degrade to no analysis rather than raising.
+    import json as _json
+
+    def _attempt_dict(a):
+        analysis = None
+        if a.analysis_json:
+            try:
+                parsed = _json.loads(a.analysis_json)
+                if isinstance(parsed, dict) and parsed:
+                    analysis = parsed
+            except (ValueError, TypeError):
+                analysis = None
+        return {
+            "id": a.id,
+            "attempt_number": a.attempt_number,
+            "started_at": a.started_at.isoformat() if a.started_at else None,
+            "ended_at": a.ended_at.isoformat() if a.ended_at else None,
+            "outcome": a.outcome,
+            "duration_sec": a.duration_sec,
+            "transcript": a.transcript,
+            "summary": a.summary,
+            "recording_url": a.recording_url,
+            "callback_raw_text": a.callback_raw_text,
+            "user_sentiment": a.user_sentiment,
+            "call_successful": a.call_successful,
+            "analysis": analysis,
+            "detected_topics": [x for x in (a.detected_topics or "").split(",") if x],
+        }
+
+    # The lead's standing judgement, so the drawer answers "is this person
+    # worth my time?" without the reader having to reconstruct it from a list
+    # of calls.
+    scored = compute_lead_scores(db, [contact]).get(contact.id, {})
+
+    # Every topic this person has ever raised, across all their calls — one
+    # call's topics say what they asked that day, this says what they care about.
+    all_topics = []
+    for a in attempts:
+        for label in (a.detected_topics or "").split(","):
+            if label and label not in all_topics:
+                all_topics.append(label)
+
     return {
         "contact": contact,
-        "attempts": attempts,
+        "lead_score": scored.get("score", 0),
+        "classification": scored.get("classification", "Not Reached"),
+        "score_reasons": scored.get("reasons", []),
+        "topics_asked": all_topics,
+        "attempts": [_attempt_dict(a) for a in attempts],
         "schedules": schedules
     }
 

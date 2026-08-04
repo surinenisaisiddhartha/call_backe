@@ -108,7 +108,15 @@ body {
   box-shadow: var(--glass-shadow);
   border-radius: var(--border-radius);
   padding: 24px;
-  transition: var(--transition-smooth);
+  /* Only the two properties the :hover rule below actually changes.
+     This was `all 0.3s`, which also animated LAYOUT properties. A page that
+     swaps a centred "Loading…" panel (padding: 60px) for the loaded table
+     panel (padding: 0) renders both as .glass-panel in the same position, so
+     React patches the existing node's style instead of replacing it — and the
+     padding then animated from 60px to 0, making the whole page visibly slide
+     and resettle every time it finished loading. */
+  transition: border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .glass-panel:hover {

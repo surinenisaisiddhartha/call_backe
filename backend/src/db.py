@@ -150,6 +150,15 @@ class Contact(Base):
     email = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
     status = Column(String(50), default="Pending")  # Pending, Calling, Completed, NeedsReschedule, Scheduled, Failed
+    # ── Lead scoring, stored rather than computed per request ──────────
+    # A school doing 1,000-10,000 calls a day cannot have every lead scored on
+    # every page load: ranking and filtering by score have to happen in SQL,
+    # over an index, against a page of 50 rows — not in Python over the whole
+    # table. Recomputed whenever something that feeds the score changes (a call
+    # is analysed, an appointment is booked, a callback is requested).
+    lead_score = Column(Integer, default=0)
+    lead_classification = Column(String(30), default="Not Reached")
+    lead_scored_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -171,6 +180,18 @@ class CallAttempt(Base):
     recording_url = Column(String(500), nullable=True)   # Retell-hosted recording URL
     duration_sec = Column(Float, nullable=True)           # Call duration in seconds
     callback_raw_text = Column(Text, nullable=True)       # Raw phrase from lead e.g. "tomorrow at 11"
+    # ── Post-call analysis (from Retell's call_analyzed webhook) ──────
+    # Stored as JSON rather than one column per field: the field list is
+    # defined in school_agent.POST_CALL_ANALYSIS_FIELDS and will change as
+    # the team learns what's useful, and a schema migration per tweak would
+    # make that painful for no gain — nothing joins or filters on these.
+    analysis_json = Column(Text, nullable=True)           # synopsis, topics, interest, caller type, concerns, next step
+    # Topics detected deterministically from the CALLER's own words (src/topics.py).
+    # Separate from the LLM's analysis on purpose: this is reproducible, works on
+    # calls made before analysis existed, and costs nothing per call.
+    detected_topics = Column(Text, nullable=True)         # comma-separated labels
+    user_sentiment = Column(String(50), nullable=True)    # Retell's own read: Positive / Neutral / Negative
+    call_successful = Column(String(10), nullable=True)   # Retell's own judgement of whether the call achieved its goal
     created_at = Column(DateTime, default=datetime.utcnow)
 
     contact = relationship("Contact", back_populates="attempts")
@@ -270,6 +291,60 @@ def init_db():
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE upload_batches ADD COLUMN school_id VARCHAR(36);"))
                 conn.commit()
+
+        # Stored lead score on contacts
+        contact_cols_now = [c['name'] for c in inspector.get_columns('contacts')]
+        for col_name, col_type in (
+            ("lead_score", "INTEGER DEFAULT 0"),
+            ("lead_classification", "VARCHAR(30) DEFAULT 'Not Reached'"),
+            ("lead_scored_at", "TIMESTAMP"),
+        ):
+            if col_name not in contact_cols_now:
+                print(f"[DB] Self-healing migration: adding {col_name} to contacts table")
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE contacts ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
+
+        # ── Indexes ───────────────────────────────────────────────────────
+        # There were none beyond the primary keys. Every lookup below runs on
+        # every dashboard load and every webhook, and at 1,000-10,000 calls a
+        # day each one was heading for a full table scan. Created concurrently
+        # is not used because these run inside startup on a small table; add
+        # them by hand if the table is ever large enough for the lock to matter.
+        for index_name, table, columns in (
+            ("ix_contacts_school_id",           "contacts",            "school_id"),
+            ("ix_contacts_batch_id",            "contacts",            "batch_id"),
+            ("ix_contacts_status",              "contacts",            "status"),
+            # The ranking index: "this school's leads, best first".
+            ("ix_contacts_school_score",        "contacts",            "school_id, lead_score DESC"),
+            ("ix_contacts_school_class",        "contacts",            "school_id, lead_classification"),
+            ("ix_call_attempts_contact_id",     "call_attempts",       "contact_id"),
+            ("ix_call_attempts_started_at",     "call_attempts",       "started_at"),
+            ("ix_appointments_contact_id",      "appointments",        "contact_id"),
+            ("ix_scheduled_callbacks_contact",  "scheduled_callbacks", "contact_id"),
+            ("ix_scheduled_callbacks_status",   "scheduled_callbacks", "status"),
+            ("ix_knowledge_chunks_school_id",   "knowledge_chunks",    "school_id"),
+        ):
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({columns});"))
+                    conn.commit()
+            except Exception as idx_err:
+                print(f"[DB] Could not create index {index_name}: {idx_err}")
+
+        # Post-call analysis fields on call_attempts
+        attempt_columns = [c['name'] for c in inspector.get_columns('call_attempts')]
+        for col_name, col_type in (
+            ("analysis_json", "TEXT"),
+            ("detected_topics", "TEXT"),
+            ("user_sentiment", "VARCHAR(50)"),
+            ("call_successful", "VARCHAR(10)"),
+        ):
+            if col_name not in attempt_columns:
+                print(f"[DB] Self-healing migration: adding {col_name} to call_attempts table")
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE call_attempts ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
 
         kc_columns = [c['name'] for c in inspector.get_columns('knowledge_chunks')]
         if 'school_id' not in kc_columns:

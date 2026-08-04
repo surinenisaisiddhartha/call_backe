@@ -121,6 +121,9 @@ def save_state(state: dict) -> None:
         pass  # local file is a convenience cache only — never fatal
 
 
+from src.school_agent import POST_CALL_ANALYSIS_FIELDS
+
+
 def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
     """
     The four custom function tools the agent can call mid-conversation.
@@ -375,6 +378,12 @@ def run_agent_setup(webhook_base_url: str = None, retell_api_key: str = None, ra
             # low enough that background-noise/line-static false interrupts
             # (the original choppiness complaint) stay reduced.
             interruption_sensitivity=0.6,
+            # Structured post-call analysis (synopsis, topics, interest,
+            # caller type, concerns, next step). Defined once in
+            # school_agent.py so this startup path and per-school
+            # provisioning can never drift apart — without it Retell
+            # returns an empty custom_analysis_data.
+            post_call_analysis_data=POST_CALL_ANALYSIS_FIELDS,
         )
         print(f"[SETUP] Agent updated: voice={voice_id}, webhook={new_webhook_url}")
         save_state({"llm_id": llm_id, "agent_id": agent_id})

@@ -25,6 +25,111 @@ _TEMPLATE_ABBREVIATION = "TSRA"
 VOICE_ID_DEFAULT = "11labs-Monika"
 
 
+# ── Post-call analysis ───────────────────────────────────────────────────
+# Retell runs an LLM over the finished transcript and returns these as
+# `custom_analysis_data` on the call_analyzed webhook. Without this list it
+# returns an empty {} and all we get is a generic one-paragraph summary.
+#
+# Kept deliberately small. Every field is another thing the analysis model has
+# to judge, and a long list makes each answer shallower — these are the four
+# an admissions team actually acts on, plus the two that make a lead findable.
+POST_CALL_ANALYSIS_FIELDS = [
+    {
+        "type": "string",
+        "name": "call_synopsis",
+        "description": (
+            "A detailed account of how the call actually went, in 3-6 sentences. "
+            "Cover what the caller wanted, what they were told, any hesitation or "
+            "objection they raised, and how it ended. Write about what was really "
+            "said — do not pad it with generic sales language."
+        ),
+    },
+    {
+        "type": "enum",
+        "name": "primary_topic",
+        "description": (
+            "The ONE subject this caller cared about most. Pick the closest "
+            "category even if they used different words — someone asking 'how much "
+            "per year', 'what is the cost', or 'any discount for siblings' is all "
+            "Fees. Policies covers rules and conditions: refund, uniform, "
+            "attendance, leave, discipline. NoQuestions means they asked nothing."
+        ),
+        "choices": [
+            "Fees", "Admissions", "Curriculum", "Facilities", "Transport",
+            "Hostel", "Timings", "Location", "Policies", "Other", "NoQuestions",
+        ],
+    },
+    {
+        "type": "string",
+        "name": "topics_discussed",
+        "description": (
+            "EVERY subject raised, as a comma-separated list using ONLY these exact "
+            "words: Fees, Admissions, Curriculum, Facilities, Transport, Hostel, "
+            "Timings, Location, Policies, Other. Do not invent other labels and do "
+            "not write a sentence — this list is counted across calls, so the exact "
+            "words matter. Answer 'none' if they asked nothing."
+        ),
+    },
+    {
+        "type": "enum",
+        "name": "engagement_quality",
+        "description": (
+            "How seriously this caller was actually engaging, which is NOT the same "
+            "as being polite or staying on the line. "
+            "Serious = genuinely evaluating the school, asked substantive questions, "
+            "gave real answers about their child. "
+            "Casual = engaged pleasantly but non-committal, browsing, would not give "
+            "details, agreed to things just to end the call politely. "
+            "NotInterested = made clear they do not want this. "
+            "Unclear = too short or garbled to judge."
+        ),
+        "choices": ["Serious", "Casual", "NotInterested", "Unclear"],
+    },
+    {
+        "type": "enum",
+        "name": "interest_level",
+        "description": (
+            "How interested the caller sounded, judged on what they said and how "
+            "they engaged — not on whether anything was booked. "
+            "Hot = keen, asked real questions, wants to proceed. "
+            "Warm = open but not committing, wants time or more information. "
+            "Cold = disengaged, unhappy, or clearly not pursuing it. "
+            "Unclear = too short or too garbled to judge."
+        ),
+        "choices": ["Hot", "Warm", "Cold", "Unclear"],
+    },
+    {
+        "type": "enum",
+        "name": "caller_type",
+        "description": (
+            "Who we actually reached. Parent = a parent or guardian enquiring for "
+            "their child. Student = the prospective student. WrongNumber = not the "
+            "person we asked for and no connection to them. NotAvailable = the right "
+            "household but the person could not talk. Other = anyone else, such as an "
+            "agent or consultant."
+        ),
+        "choices": ["Parent", "Student", "WrongNumber", "NotAvailable", "Other"],
+    },
+    {
+        "type": "string",
+        "name": "concerns_raised",
+        "description": (
+            "Any hesitation, objection or blocker the caller expressed — cost, "
+            "distance, timing, comparing other schools, needing to consult a spouse. "
+            "Quote or closely paraphrase them. Answer 'none' if they raised nothing."
+        ),
+    },
+    {
+        "type": "string",
+        "name": "recommended_next_step",
+        "description": (
+            "One concrete sentence on what the admissions team should do next for "
+            "this specific lead, based on what was said."
+        ),
+    },
+]
+
+
 def get_school_agent_id(db, contact) -> str | None:
     """
     The Retell agent to dial a given contact with: their school's own agent,
@@ -111,6 +216,7 @@ def provision_school_agent(school, retell_api_key: str, webhook_base_url: str, a
         webhook_url=webhook_url,
         responsiveness=1,
         interruption_sensitivity=0.6,
+        post_call_analysis_data=POST_CALL_ANALYSIS_FIELDS,
     )
 
     if school.retell_llm_id and school.retell_agent_id:

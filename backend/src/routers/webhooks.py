@@ -81,6 +81,13 @@ def process_webhook_payload(payload: dict):
         disconnection_reason = call.get("disconnection_reason")
         duration_ms = call.get("duration_ms", 0) or 0
         call_analysis = call.get("call_analysis", {}) or {}
+        # Retell's structured post-call analysis. custom_analysis_data holds the
+        # fields defined in school_agent.POST_CALL_ANALYSIS_FIELDS (synopsis,
+        # topics, interest level, caller type, concerns, next step); it arrives
+        # empty until those are configured on the agent.
+        custom_analysis = call_analysis.get("custom_analysis_data") or {}
+        user_sentiment = call_analysis.get("user_sentiment")
+        call_successful = call_analysis.get("call_successful")
         recording_url = call.get("recording_url") or call_analysis.get("recording_url")
 
         print(f"[WEBHOOK] Event={event} | Call={call_id} | Batch={batch_call_id} | Reason={disconnection_reason}")
@@ -332,6 +339,18 @@ def process_webhook_payload(payload: dict):
                 attempt.transcript = transcript
             if summary:
                 attempt.summary = summary
+            if custom_analysis:
+                import json as _json
+                attempt.analysis_json = _json.dumps(custom_analysis)
+            if transcript:
+                # Deterministic topic detection from the caller's own words —
+                # independent of whether the LLM analysis arrived.
+                from src.topics import detect_topics
+                attempt.detected_topics = ",".join(detect_topics(transcript))
+            if user_sentiment:
+                attempt.user_sentiment = str(user_sentiment)
+            if call_successful is not None:
+                attempt.call_successful = str(call_successful)
             if callback_raw_text:
                 attempt.callback_raw_text = callback_raw_text
         else:
@@ -374,6 +393,13 @@ def process_webhook_payload(payload: dict):
                         attempt.transcript = transcript
                     if summary:
                         attempt.summary = summary
+                    if custom_analysis:
+                        import json as _json
+                        attempt.analysis_json = _json.dumps(custom_analysis)
+                    if user_sentiment:
+                        attempt.user_sentiment = str(user_sentiment)
+                    if call_successful is not None:
+                        attempt.call_successful = str(call_successful)
                     if callback_raw_text:
                         attempt.callback_raw_text = callback_raw_text
                     if contact:
@@ -384,6 +410,15 @@ def process_webhook_payload(payload: dict):
                     raise e
             else:
                 raise e
+        # The score's inputs just changed (outcome, analysis, maybe a booking),
+        # so refresh the stored value. Scoped to this one contact — never the
+        # whole table, which at 10,000 calls a day would be ruinous.
+        try:
+            from src.routers.contacts import rescore_contact
+            rescore_contact(db, contact_id)
+        except Exception as score_err:
+            print(f"[WEBHOOK] Rescore failed for {contact_id}: {score_err}")
+
         print(f"[WEBHOOK] Contact {contact_id} => {contact_status} | AutoScheduled={auto_scheduled}")
 
         # ── 5. Free dialer slot → auto-dial next contact ──────────────────
