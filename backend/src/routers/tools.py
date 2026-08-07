@@ -108,6 +108,17 @@ class BookAppointmentRequest(RetellToolBase):
     contact_id: str = None
 
 
+class SaveProfileRequest(RetellToolBase):
+    """
+    Every profile field arrives as an optional extra — the agent sends only
+    what it just learned, so the model deliberately declares none of them and
+    they are read off the raw payload instead. Declaring twenty Optional[str]
+    fields here would duplicate profile.py and drift from it.
+    """
+    model_config = {"extra": "allow"}
+    contact_id: str = None
+
+
 class MarkOutcomeRequest(RetellToolBase):
     outcome: str  # interested_followup_scheduled, appointment_booked, not_interested, do_not_call, wrong_number, no_answer, undetermined
     notes: str = ""
@@ -805,3 +816,62 @@ def end_call(
     call_id = req.headers.get("x-retell-call-id", "unknown")
     print(f"[TOOLS] end_call invoked for call_id={call_id}")
     return {"result": "Call ended. Goodbye!"}
+
+
+@router.post("/save-profile")
+def save_profile(
+    request: SaveProfileRequest,
+    req: Request,
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
+):
+    """
+    Tool: save_profile(...) — record what we just learned about this family.
+
+    Called REPEATEDLY during one conversation, each time with only the fields
+    the agent has just heard. Writes merge: a field that isn't in the payload
+    leaves the stored value alone, so the profile only ever accumulates.
+
+    Never fails the call. If the contact can't be resolved, or a value doesn't
+    match its allowed vocabulary, the tool still returns a cheerful result —
+    the agent is mid-sentence with a parent on the line, and an error here
+    would cost the conversation to save a field. Anything dropped is logged.
+    """
+    try:
+        from src.profile import apply_profile, completeness, FIELD_NAMES
+
+        contact = resolve_contact(db, req, request)
+        if not contact:
+            print("[TOOLS] save_profile: could not resolve contact — nothing saved")
+            return {"result": "Noted."}
+
+        # Pydantic keeps the unknown-but-allowed keys in model_extra.
+        payload = dict(request.model_extra or {})
+        submitted = [k for k in payload if k in FIELD_NAMES]
+
+        written = apply_profile(contact, payload)
+        if written:
+            contact.updated_at = datetime.utcnow()
+            db.commit()
+
+        dropped = [k for k in submitted if k not in written]
+        unknown = [k for k in payload if k not in FIELD_NAMES]
+        if dropped:
+            # Usually an enum value outside its choice list. Worth seeing:
+            # a field that is always dropped means the prompt and the allowed
+            # vocabulary disagree.
+            print(f"[TOOLS] save_profile: ignored values for {dropped} on contact {contact.id}")
+        if unknown:
+            print(f"[TOOLS] save_profile: unknown field(s) {unknown} — not in profile.py")
+
+        filled = completeness(contact)
+        print(f"[TOOLS] save_profile: saved {written} for {contact.name} ({filled}/20 known)")
+        return {"result": "Noted."}
+
+    except Exception as e:
+        print(f"[TOOLS] save_profile error: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {"result": "Noted."}

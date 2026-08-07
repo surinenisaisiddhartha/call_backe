@@ -224,8 +224,10 @@ export default function Scheduling({ showToast }: SchedulingProps) {
     tomorrow.setDate(tomorrow.getDate() + 1);
     setScheduledFor(tomorrow.toISOString().slice(0, 16));
     try {
-      const res = await api.get('/contacts');
-      setContacts(res.data);
+      // A picker, so it needs real rows — but /contacts is paginated and caps
+      // at 200. Best-scored leads come first, which is the right 200 to show.
+      const res = await api.get('/contacts', { params: { page_size: 200 } });
+      setContacts(res.data.items || []);
     } catch (err) {
       console.error('Error fetching contacts:', err);
     }
@@ -307,8 +309,8 @@ export default function Scheduling({ showToast }: SchedulingProps) {
     setNewAptPurpose('');
     setNewAptContactId('');
     try {
-      const res = await api.get('/contacts');
-      setAptContacts(res.data);
+      const res = await api.get('/contacts', { params: { page_size: 200 } });
+      setAptContacts(res.data.items || []);
     } catch {}
   };
 

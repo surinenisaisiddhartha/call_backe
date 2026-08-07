@@ -159,6 +159,33 @@ class Contact(Base):
     lead_score = Column(Integer, default=0)
     lead_classification = Column(String(30), default="Not Reached")
     lead_scored_at = Column(DateTime, nullable=True)
+
+    # ── The 20-point profile, captured mid-call by the save_profile tool ──
+    # Defined canonically in profile.py; these columns must match FIELD_NAMES
+    # exactly, which init_db() asserts at startup. Kept as columns on contacts
+    # rather than a side table because the counselor queue filters and ranks on
+    # them alongside lead_score, and a join on every page of a 10,000-row
+    # queue is a cost with nothing to show for it.
+    child_name = Column(String(255), nullable=True)
+    child_age = Column(String(50), nullable=True)
+    grade_sought = Column(String(100), nullable=True)
+    academic_year = Column(String(50), nullable=True)
+    current_school = Column(String(255), nullable=True)
+    board_preference = Column(String(30), nullable=True)
+    locality = Column(String(255), nullable=True)
+    sibling_status = Column(String(30), nullable=True)
+    transport_needed = Column(String(20), nullable=True)
+    boarding_needed = Column(String(30), nullable=True)
+    special_requirements = Column(Text, nullable=True)
+    budget_band = Column(String(30), nullable=True)
+    competition_considered = Column(Text, nullable=True)
+    decision_timeline = Column(String(30), nullable=True)
+    decision_maker = Column(String(30), nullable=True)
+    admission_urgency = Column(String(30), nullable=True)
+    campus_visit_interest = Column(String(30), nullable=True)
+    referral_source = Column(String(255), nullable=True)
+    preferred_contact_time = Column(String(255), nullable=True)
+    language_preference = Column(String(30), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -301,6 +328,31 @@ def init_db():
         ):
             if col_name not in contact_cols_now:
                 print(f"[DB] Self-healing migration: adding {col_name} to contacts table")
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE contacts ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
+
+        # ── The 20-point profile ──────────────────────────────────────────
+        # Column list is derived from profile.py so the schema cannot drift
+        # from the tool definition. All free text at the DB level: the enum
+        # constraint is enforced in profile.normalize_value(), where an
+        # unrecognised value can be dropped with a log line instead of raising
+        # mid-call and costing the caller the conversation.
+        from src.profile import FIELD_NAMES as PROFILE_FIELD_NAMES
+
+        model_columns = set(Contact.__table__.columns.keys())
+        missing_on_model = [f for f in PROFILE_FIELD_NAMES if f not in model_columns]
+        if missing_on_model:
+            raise RuntimeError(
+                f"profile.py declares fields with no column on Contact: {missing_on_model}. "
+                f"Add them to the Contact model in db.py."
+            )
+
+        contact_cols_now = [c['name'] for c in inspector.get_columns('contacts')]
+        for col_name in PROFILE_FIELD_NAMES:
+            if col_name not in contact_cols_now:
+                col_type = str(Contact.__table__.columns[col_name].type.compile(engine.dialect))
+                print(f"[DB] Self-healing migration: adding profile field {col_name} to contacts table")
                 with engine.connect() as conn:
                     conn.execute(text(f"ALTER TABLE contacts ADD COLUMN {col_name} {col_type};"))
                     conn.commit()

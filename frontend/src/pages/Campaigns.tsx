@@ -91,7 +91,9 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
   };
 
   // Overall stats and concurrency states
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [contactStats, setContactStats] = useState({
+    total: 0, completed: 0, calling: 0, needs_reschedule: 0, scheduled: 0,
+  });
   const [concurrency, setConcurrency] = useState({ current: 0, limit: 20 });
 
   // Upload modal states
@@ -113,8 +115,8 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       const res = await api.get('/contacts/batches');
       setCampaigns(res.data);
 
-      const contactsRes = await api.get('/contacts');
-      setContacts(contactsRes.data);
+      const statsRes = await api.get('/contacts/stats');
+      setContactStats(statsRes.data);
 
       try {
         const concRes = await api.get('/calls/concurrency');
@@ -242,12 +244,13 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
     );
   }
 
+  // Counted in SQL, not from a fetched page — /contacts caps at 200 rows.
   const stats = {
-    total: contacts.length,
-    completed: contacts.filter(c => c.status === 'Completed').length,
-    calling: contacts.filter(c => c.status === 'Calling').length,
-    needsReschedule: contacts.filter(c => c.status === 'NeedsReschedule').length,
-    scheduled: contacts.filter(c => c.status === 'Scheduled').length,
+    total: contactStats.total,
+    completed: contactStats.completed,
+    calling: contactStats.calling,
+    needsReschedule: contactStats.needs_reschedule,
+    scheduled: contactStats.scheduled,
   };
 
   const totalPages = Math.ceil(campaigns.length / pageSize);

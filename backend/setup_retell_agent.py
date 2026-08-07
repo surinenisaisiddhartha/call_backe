@@ -124,9 +124,18 @@ def save_state(state: dict) -> None:
 from src.school_agent import POST_CALL_ANALYSIS_FIELDS
 
 
+def build_profile_parameters():
+    """
+    save_profile's parameter schema, generated from profile.PROFILE_FIELDS so
+    the tool the agent sees and the columns we store into cannot disagree.
+    """
+    from src.profile import build_tool_parameters
+    return build_tool_parameters()
+
+
 def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
     """
-    The four custom function tools the agent can call mid-conversation.
+    The custom function tools the agent can call mid-conversation.
     URLs point at your FastAPI backend's tool webhook endpoints.
     Match these names EXACTLY to what agent_prompt.md Section 10 references.
     """
@@ -235,6 +244,30 @@ def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
             },
             # Same reasoning as schedule_callback's timeout: give the remote
             # Postgres round-trip real headroom instead of aborting early.
+            "timeout_ms": 20000,
+        },
+        {
+            "type": "custom",
+            "name": "save_profile",
+            "description": (
+                "Record facts you have learned about this family. Call this "
+                "DURING the conversation, as soon as you learn something — not "
+                "once at the end. Send ONLY the fields you actually heard; "
+                "leave everything else out. Calling it several times in one "
+                "call is expected and correct: each call adds to what is "
+                "already stored and never erases it. NEVER guess or infer a "
+                "value to fill a field — an empty field is correct and useful, "
+                "a wrong one is not. Do not read this list out or interview "
+                "the caller; capture what comes up naturally."
+            ),
+            "url": f"{base}/tools/save-profile",
+            "method": "POST",
+            # Silent on both sides: this fires mid-conversation, often while
+            # the parent is still talking. Any spoken filler here would make
+            # the agent interrupt itself to say it is taking notes.
+            "speak_during_execution": False,
+            "speak_after_execution": False,
+            "parameters": build_profile_parameters(),
             "timeout_ms": 20000,
         },
         {

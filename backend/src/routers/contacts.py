@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School
 from src.routers.auth import get_current_user
+from src.profile import profile_dict, completeness
 import openpyxl
 import phonenumbers
 
@@ -723,6 +724,10 @@ def get_contacts(
             "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "Not Reached"),
             "lead_score": scored.get(c.id, {}).get("score", c.lead_score or 0),
             "score_reasons": scored.get(c.id, {}).get("reasons", []),
+            # Only the points actually learned, plus the count — a counselor
+            # scanning the queue wants "14/20 known", not twenty nulls.
+            "profile": profile_dict(c),
+            "profile_completeness": completeness(c),
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
         }
@@ -735,6 +740,50 @@ def get_contacts(
         "page": page,
         "page_size": page_size,
         "pages": (total + page_size - 1) // page_size,
+    }
+
+
+@router.get("/stats")
+def get_contact_stats(
+    batchId: str = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Counts by status for the whole tenant — the numbers on the dashboard tiles
+    and the campaign summary.
+
+    These used to be derived on the client by fetching every contact and
+    calling .filter() over the array. Once GET /contacts became paginated that
+    became both wrong and unfixable from the client: the page cap is 200, so a
+    school with 10,000 leads would have shown "200 Total Leads" and a
+    "Completed" count drawn from whichever 200 happened to be on page one.
+    Wrong numbers that look plausible are worse than a crash, so the counts are
+    computed in SQL where the whole table is visible.
+
+    MUST STAY DEFINED ABOVE GET /{id} — FastAPI matches in declaration order,
+    and /{id} would otherwise swallow "stats" as a contact id.
+    """
+    from sqlalchemy import func
+
+    query = db.query(Contact.status, func.count(Contact.id))
+    if current_user.get("school_id"):
+        query = query.filter(Contact.school_id == current_user["school_id"])
+    if batchId:
+        query = query.filter(Contact.batch_id == batchId)
+
+    by_status = {status or "Unknown": count for status, count in query.group_by(Contact.status).all()}
+
+    return {
+        "total": sum(by_status.values()),
+        "by_status": by_status,
+        # Spelled out so the client never has to know the status vocabulary.
+        "completed": by_status.get("Completed", 0),
+        "calling": by_status.get("Calling", 0),
+        "pending": by_status.get("Pending", 0),
+        "needs_reschedule": by_status.get("NeedsReschedule", 0),
+        "scheduled": by_status.get("Scheduled", 0),
+        "failed": by_status.get("Failed", 0),
     }
 
 
@@ -803,6 +852,10 @@ def get_contact_history(
         "lead_score": scored.get("score", 0),
         "classification": scored.get("classification", "Not Reached"),
         "score_reasons": scored.get("reasons", []),
+        # What the agent learned about the family, mid-call. Only the points
+        # actually captured — see profile.py.
+        "profile": profile_dict(contact),
+        "profile_completeness": completeness(contact),
         "topics_asked": all_topics,
         "attempts": [_attempt_dict(a) for a in attempts],
         "schedules": schedules

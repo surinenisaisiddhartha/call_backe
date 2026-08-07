@@ -82,7 +82,9 @@ function initials(name: string): string {
 
 export default function Dashboard({ showToast, onViewContact }: DashboardProps) {
   const [loading, setLoading] = useState(true);
-  const [contacts, setContacts] = useState<any[]>([]);
+  // Tile counts come from the server. /contacts is paginated (200 max), so
+  // counting a fetched array would report the page size, not the tenant.
+  const [leadStats, setLeadStats] = useState<{ total: number; completed: number }>({ total: 0, completed: 0 });
   const [history, setHistory] = useState<CallRecord[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [callbacks, setCallbacks] = useState<Callback[]>([]);
@@ -90,13 +92,13 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
 
   const fetchAll = async () => {
     try {
-      const [contactsRes, historyRes, apptRes, schedRes] = await Promise.all([
-        api.get('/contacts'),
+      const [statsRes, historyRes, apptRes, schedRes] = await Promise.all([
+        api.get('/contacts/stats'),
         api.get('/contacts/history/all'),
         api.get('/appointments'),
         api.get('/schedule'),
       ]);
-      setContacts(contactsRes.data);
+      setLeadStats(statsRes.data);
       setHistory(historyRes.data);
       setAppointments(apptRes.data);
       setCallbacks(schedRes.data);
@@ -134,10 +136,10 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   const callsToday = history.filter(h => h.started_at && parseTs(h.started_at) >= todayStartIST).length;
   const bookedAppointments = appointments.filter(a => a.status === 'Booked');
   const pendingCallbacks = callbacks.filter(c => c.status === 'Scheduled');
-  const completedLeads = contacts.filter(c => c.status === 'Completed').length;
+  const completedLeads = leadStats.completed;
 
   const stats = [
-    { label: 'Total Leads', value: contacts.length, color: 'var(--accent-primary)', icon: Users },
+    { label: 'Total Leads', value: leadStats.total, color: 'var(--accent-primary)', icon: Users },
     { label: 'Calls Today', value: callsToday, color: 'var(--accent-secondary)', icon: PhoneCall },
     { label: 'Leads Completed', value: completedLeads, color: 'var(--accent-success)', icon: CheckCircle },
     { label: 'Appointments Booked', value: bookedAppointments.length, color: '#8b5cf6', icon: Calendar },
