@@ -211,41 +211,7 @@ def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
             # real headroom.
             "timeout_ms": 20000,
         },
-        {
-            "type": "custom",
-            "name": "book_appointment",
-            "description": (
-                "REQUIRED to create any campus visit / counseling booking. You "
-                "MUST call this function as soon as the caller has confirmed a "
-                "date, time, and purpose — nothing is booked until you call it. "
-                "Never promise, describe, or claim a booking (or a booking "
-                "problem) without actually calling this. You do NOT need the "
-                "caller's phone number; the system already has it."
-            ),
-            "url": f"{base}/tools/book-appointment",
-            "method": "POST",
-            "speak_during_execution": True,
-            "speak_after_execution": True,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "datetime_iso": {"type": "string", "description": "Resolved absolute appointment time, ISO 8601."},
-                    "purpose": {"type": "string", "description": "e.g. 'campus tour', 'admission counseling'."},
-                    "attendee_name": {"type": "string", "description": "Caller's name (optional — the backend already knows it)."},
-                    "attendee_phone": {"type": "string", "description": "Optional — leave blank; the backend uses the number that was dialed. Do NOT ask the caller for their phone number just to book."},
-                    "attendee_email": {"type": "string", "description": "The caller's confirmed or collected email ID (for the confirmation email)."},
-                    "meeting_type": {
-                        "type": "string",
-                        "enum": ["in_person", "virtual"],
-                        "description": "Whether the caller wants an in-person campus visit or a virtual online meeting. Ask the caller directly; default to 'in_person' only if they don't specify. For 'virtual', a unique meeting link is generated and emailed automatically — never read it aloud on the call.",
-                    },
-                },
-                "required": ["datetime_iso", "purpose"],
-            },
-            # Same reasoning as schedule_callback's timeout: give the remote
-            # Postgres round-trip real headroom instead of aborting early.
-            "timeout_ms": 20000,
-        },
+
         {
             "type": "custom",
             "name": "save_profile",

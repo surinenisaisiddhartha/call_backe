@@ -541,50 +541,24 @@ export default function Scheduling({ showToast }: SchedulingProps) {
 
   return (
     <div>
-      {/* Tab Switcher and Actions Header */}
+      {/* Actions Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-secondary)', padding: '4px', borderRadius: '10px', width: 'fit-content' }}>
-            <button
-              onClick={() => setSubTab('callbacks')}
-              className={`btn ${subTab === 'callbacks' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '0.9rem', border: 'none' }}
-            >
-              Callbacks
-            </button>
-            <button
-              onClick={() => setSubTab('appointments')}
-              className={`btn ${subTab === 'appointments' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '0.9rem', border: 'none' }}
-            >
-              Appointments
-            </button>
-          </div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#fff', margin: 0 }}>Callbacks</h2>
         </div>
 
         <div style={{ display: 'flex', gap: '12px' }}>
           <button className="btn btn-secondary" onClick={fetchData} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <RefreshCw size={16} /> Refresh
           </button>
-          {subTab === 'callbacks' ? (
-            <button
-              className="btn btn-primary"
-              onClick={openNewScheduleModalHandler}
-              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-            >
-              <Plus size={18} />
-              New Callback
-            </button>
-          ) : (
-            <button
-              className="btn btn-primary"
-              onClick={openCreateAptHandler}
-              style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-            >
-              <Plus size={18} />
-              New Appointment
-            </button>
-          )}
+          <button
+            className="btn btn-primary"
+            onClick={openNewScheduleModalHandler}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
+            <Plus size={18} />
+            New Callback
+          </button>
         </div>
       </div>
 

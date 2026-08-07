@@ -158,7 +158,7 @@ export default function Landing({ onLoginClick }: LandingProps) {
             {
               icon: <CalendarCheck size={28} />,
               title: "Automated Scheduling",
-              desc: "Seamlessly integrates with Google Calendar to book campus tours and counselor appointments instantly during calls.",
+              desc: "Seamlessly schedules callback times for interested leads instantly during calls, syncing them with counselor follow-up queues.",
               color: "#10b981"
             },
             {
