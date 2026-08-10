@@ -882,20 +882,30 @@ def auto_assign_contacts(
     if not counselors:
         raise HTTPException(status_code=400, detail="No onboarded counselors available for assignment")
     
-    unassigned_contacts = db.query(Contact).filter(
-        Contact.school_id == school_id,
-        Contact.assigned_counselor_id.is_(None)
-    ).all()
+    # Collect valid/active counselor IDs so we can detect orphaned assignments
+    active_counselor_ids = {c.id for c in counselors}
+
+    # Pick up (1) truly unassigned AND (2) assigned to a deleted counselor
+    all_contacts = db.query(Contact).filter(Contact.school_id == school_id).all()
+    needs_assignment = [
+        c for c in all_contacts
+        if c.assigned_counselor_id is None
+        or c.assigned_counselor_id not in active_counselor_ids
+    ]
     
-    if not unassigned_contacts:
-        return {"success": True, "message": "All contacts are already assigned", "assigned_count": 0}
+    if not needs_assignment:
+        return {"success": True, "message": "All contacts are already assigned to active counselors", "assigned_count": 0}
         
     counselor_count = len(counselors)
-    for idx, contact in enumerate(unassigned_contacts):
+    for idx, contact in enumerate(needs_assignment):
         contact.assigned_counselor_id = counselors[idx % counselor_count].id
         
     db.commit()
-    return {"success": True, "message": f"Successfully auto-assigned {len(unassigned_contacts)} leads", "assigned_count": len(unassigned_contacts)}
+    return {
+        "success": True,
+        "message": f"Successfully auto-assigned {len(needs_assignment)} leads across {counselor_count} counselors",
+        "assigned_count": len(needs_assignment)
+    }
 
 
 
