@@ -788,6 +788,61 @@ def get_contact_stats(
     }
 
 
+from src.db import Counselor
+
+@router.get("/counselors/all")
+def get_counselors(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
+    return [{"id": c.id, "name": c.name, "email": c.email, "phone_number": c.phone_number} for c in counselors]
+
+class CounselorCreatePayload(BaseModel):
+    name: str
+    email: str
+    phone_number: str | None = None
+
+@router.post("/counselors")
+def create_counselor(
+    payload: CounselorCreatePayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    
+    existing = db.query(Counselor).filter(Counselor.school_id == school_id, Counselor.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Counselor with this email already exists")
+
+    new_counselor = Counselor(
+        school_id=school_id,
+        name=payload.name,
+        email=payload.email,
+        phone_number=payload.phone_number
+    )
+    db.add(new_counselor)
+    db.commit()
+    db.refresh(new_counselor)
+    return {"success": True, "counselor": {"id": new_counselor.id, "name": new_counselor.name, "email": new_counselor.email}}
+
+@router.delete("/counselors/{id}")
+def delete_counselor(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    counselor = db.query(Counselor).filter(Counselor.id == id, Counselor.school_id == school_id).first()
+    if not counselor:
+        raise HTTPException(status_code=404, detail="Counselor not found")
+    
+    db.delete(counselor)
+    db.commit()
+    return {"success": True, "message": "Counselor removed successfully"}
+
+
 @router.get("/{id}")
 def get_contact_history(
     id: str,
@@ -916,58 +971,4 @@ def update_contact(
     db.refresh(contact)
     return {"success": True, "contact": {"id": contact.id, "notes": contact.notes, "email": contact.email, "name": contact.name, "assigned_counselor_id": contact.assigned_counselor_id}}
 
-
-from src.db import Counselor
-
-@router.get("/counselors/all")
-def get_counselors(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    school_id = resolve_school_id(db, current_user)
-    counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
-    return [{"id": c.id, "name": c.name, "email": c.email, "phone_number": c.phone_number} for c in counselors]
-
-class CounselorCreatePayload(BaseModel):
-    name: str
-    email: str
-    phone_number: str | None = None
-
-@router.post("/counselors")
-def create_counselor(
-    payload: CounselorCreatePayload,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    school_id = resolve_school_id(db, current_user)
-    
-    existing = db.query(Counselor).filter(Counselor.school_id == school_id, Counselor.email == payload.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Counselor with this email already exists")
-
-    new_counselor = Counselor(
-        school_id=school_id,
-        name=payload.name,
-        email=payload.email,
-        phone_number=payload.phone_number
-    )
-    db.add(new_counselor)
-    db.commit()
-    db.refresh(new_counselor)
-    return {"success": True, "counselor": {"id": new_counselor.id, "name": new_counselor.name, "email": new_counselor.email}}
-
-@router.delete("/counselors/{id}")
-def delete_counselor(
-    id: str,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    school_id = resolve_school_id(db, current_user)
-    counselor = db.query(Counselor).filter(Counselor.id == id, Counselor.school_id == school_id).first()
-    if not counselor:
-        raise HTTPException(status_code=404, detail="Counselor not found")
-    
-    db.delete(counselor)
-    db.commit()
-    return {"success": True, "message": "Counselor removed successfully"}
 
