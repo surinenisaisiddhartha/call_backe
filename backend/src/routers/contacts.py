@@ -483,7 +483,14 @@ def _score_interest(analysis: dict) -> int:
 
 
 def _score_conversation_depth(analysis: dict, duration: float, detected_topics: str) -> int:
-    """Conversation Depth — 10%. Combines topics + duration."""
+    """Conversation Depth — 10%. Combines topics + duration.
+
+    Returns None (missing signal) when there is no evidence of a real
+    conversation — e.g. the user never spoke, all calls were NoAnswer /
+    IncompleteHangup, etc.  The caller-side filtering now happens upstream
+    in compute_lead_scores, so by the time we get here the duration and
+    topics already exclude non-engaged calls.
+    """
     # Topic count from both LLM analysis and keyword detection
     topic_count = 0
     if analysis:
@@ -493,6 +500,10 @@ def _score_conversation_depth(analysis: dict, duration: float, detected_topics: 
     if detected_topics:
         kw_topics = [x for x in detected_topics.split(",") if x.strip()]
         topic_count = max(topic_count, len(kw_topics))
+
+    # No topics AND no meaningful duration → missing signal
+    if topic_count == 0 and (not duration or duration < 10):
+        return None
 
     if topic_count >= 4:
         topic_score = 100
@@ -715,20 +726,28 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
     latest_analysis = {}
     longest_call = {}
     latest_detected_topics = {}
+    # Outcomes that indicate the user never actually engaged in conversation.
+    # Only "Answered" calls should contribute to scoring signals.
+    _NON_ENGAGED = {"NoAnswer", "Busy", "Failed", "IncompleteHangup"}
     rows = (
         db.query(
             CallAttempt.contact_id, CallAttempt.analysis_json,
             CallAttempt.duration_sec, CallAttempt.detected_topics,
+            CallAttempt.outcome,
         )
         .filter(CallAttempt.contact_id.in_(ids))
         .order_by(CallAttempt.started_at.asc())
         .all()
     )
-    for contact_id, raw, duration, det_topics in rows:
-        if duration and duration > longest_call.get(contact_id, 0):
+    for contact_id, raw, duration, det_topics, outcome in rows:
+        engaged = outcome not in _NON_ENGAGED
+        # Duration & topics only count from calls where the user spoke
+        if engaged and duration and duration > longest_call.get(contact_id, 0):
             longest_call[contact_id] = duration
-        if det_topics:
+        if engaged and det_topics:
             latest_detected_topics[contact_id] = det_topics
+        # Analysis: still use the latest available — even a partial call
+        # may have an LLM analysis (e.g. caller_type = WrongNumber)
         if raw:
             try:
                 parsed = _json.loads(raw)

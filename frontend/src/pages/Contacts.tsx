@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
-import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2 } from 'lucide-react';
+import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2, GripVertical } from 'lucide-react';
 
 interface Contact {
   id: string;
@@ -298,6 +298,97 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
     weightedBreakdown?: Record<string, number>;
     classificationReason?: string;
   } | null>(null);
+
+  // ── Drawer Dragging / Resizing State ──
+  const [drawerWidth, setDrawerWidth] = useState(540);
+  const [dragOffsetX, setDragOffsetX] = useState(0);
+  const [isResizing, setIsResizing] = useState(false);
+  const [isDraggingToClose, setIsDraggingToClose] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const dragStartXRef = useRef(0);
+  const startWidthRef = useRef(540);
+
+  // Trigger slide-in animation when selectedContact changes
+  useEffect(() => {
+    if (selectedContact) {
+      // Small delay so the DOM renders with the off-screen position first
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setDrawerVisible(true));
+      });
+    } else {
+      setDrawerVisible(false);
+      setDragOffsetX(0);
+    }
+  }, [selectedContact]);
+
+  // Close drawer with slide-out animation
+  const closeDrawer = useCallback(() => {
+    setDrawerVisible(false);
+    setDragOffsetX(0);
+    setTimeout(() => setSelectedContact(null), 320);
+  }, []);
+
+  // ── Left-edge resize handler ──
+  const handleResizeStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    dragStartXRef.current = clientX;
+    startWidthRef.current = drawerWidth;
+
+    const onMove = (ev: MouseEvent | TouchEvent) => {
+      const cx = 'touches' in ev ? ev.touches[0].clientX : ev.clientX;
+      const delta = dragStartXRef.current - cx;
+      const newW = Math.min(Math.max(startWidthRef.current + delta, 420), window.innerWidth * 0.88);
+      setDrawerWidth(newW);
+    };
+    const onUp = () => {
+      setIsResizing(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchend', onUp);
+  }, [drawerWidth]);
+
+  // ── Drag-to-dismiss handler (drag drawer body to the right to close) ──
+  const handleDragDismissStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    dragStartXRef.current = clientX;
+    setIsDraggingToClose(true);
+
+    const onMove = (ev: MouseEvent | TouchEvent) => {
+      const cx = 'touches' in ev ? ev.touches[0].clientX : ev.clientX;
+      const delta = cx - dragStartXRef.current;
+      if (delta > 0) setDragOffsetX(delta);
+    };
+    const onUp = (ev: MouseEvent | TouchEvent) => {
+      setIsDraggingToClose(false);
+      const cx = 'changedTouches' in ev ? ev.changedTouches[0].clientX : (ev as MouseEvent).clientX;
+      const delta = cx - dragStartXRef.current;
+      if (delta > 160) {
+        // Past dismiss threshold — slide out
+        setDragOffsetX(window.innerWidth);
+        closeDrawer();
+      } else {
+        // Snap back
+        setDragOffsetX(0);
+      }
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove);
+    window.addEventListener('touchend', onUp);
+  }, [closeDrawer]);
 
   // Changing a filter resets to page 1; the fetch effect below then runs once
   // for the new combination. Kept separate so a filter change doesn't fetch
@@ -646,28 +737,46 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
 
       {/* History Slide-out Drawer */}
       {selectedContact && (
-        <div 
+        <>
+        {/* Backdrop overlay */}
+        <div
+          className={`drawer-backdrop${drawerVisible ? ' drawer-backdrop-visible' : ''}`}
+          onClick={closeDrawer}
+        />
+        <div
+          className={`history-drawer${drawerVisible ? ' history-drawer-visible' : ''}`}
           style={{
-            position: 'fixed',
-            top: 0,
-            right: 0,
-            bottom: 0,
-            width: '520px',
-            background: 'var(--glass-bg)',
-            backdropFilter: 'blur(20px)',
-            borderLeft: '1px solid rgba(124, 58, 237, 0.12)',
-            boxShadow: '-8px 0 40px rgba(124, 58, 237, 0.08)',
-            zIndex: 1050,
-            padding: '32px',
-            overflowY: 'auto',
-            transition: 'var(--transition-smooth)'
+            width: `${drawerWidth}px`,
+            transform: `translateX(${dragOffsetX}px)`,
+            transition: (isResizing || isDraggingToClose) ? 'none' : undefined,
           }}
         >
+          {/* Left resize handle */}
+          <div
+            className="drawer-resize-handle"
+            onMouseDown={handleResizeStart}
+            onTouchStart={handleResizeStart}
+            title="Drag to resize"
+          >
+            <GripVertical size={16} />
+          </div>
+
+          {/* Drag-to-dismiss pill at top */}
+          <div
+            className="drawer-drag-dismiss-bar"
+            onMouseDown={handleDragDismissStart}
+            onTouchStart={handleDragDismissStart}
+            title="Drag right to close"
+          >
+            <div className="drawer-drag-pill" />
+          </div>
+
+          <div className="history-drawer-content">
           {/* Response AI CRM style header */}
           <div style={{ marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid var(--border-color)' }}>
             {/* Back button */}
             <button
-              onClick={() => setSelectedContact(null)}
+              onClick={closeDrawer}
               style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '10px', padding: 0 }}
             >
               ← All leads
@@ -685,7 +794,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                 </div>
               </div>
               <button
-                onClick={() => setSelectedContact(null)}
+                onClick={closeDrawer}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
               >
                 <X size={20} />
@@ -972,7 +1081,9 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
               )}
             </div>
           )}
-        </div>
+          </div>{/* end .history-drawer-content */}
+        </div>{/* end .history-drawer */}
+        </>
       )}
     </div>
   );

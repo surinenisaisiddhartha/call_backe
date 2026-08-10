@@ -326,8 +326,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
       {/* Header & Tabs */}
       <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Headphones style={{ color: 'var(--accent-primary)' }} size={32} />
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Counselor Priority Queue
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.95rem' }}>
@@ -372,11 +371,10 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               background: queueFilter === 'hot' ? 'rgba(239, 68, 68, 0.05)' : undefined
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Hot Leads
               </span>
-              <Flame size={20} style={{ color: '#ef4444' }} />
             </div>
             <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{hotCount}</div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Ready for immediate call</div>
@@ -391,11 +389,10 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               background: queueFilter === 'warm' ? 'rgba(245, 158, 11, 0.05)' : undefined
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Warm Follow-ups
               </span>
-              <Clock size={20} style={{ color: '#f59e0b' }} />
             </div>
             <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{warmCount}</div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>High intent, nurture required</div>
@@ -410,11 +407,10 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               background: queueFilter === 'callback' ? 'rgba(124, 58, 237, 0.05)' : undefined
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Requested Callbacks
               </span>
-              <Calendar size={20} style={{ color: '#7c3aed' }} />
             </div>
             <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{callbackCount}</div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Parent requested call</div>

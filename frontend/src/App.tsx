@@ -314,12 +314,17 @@ export default function App() {
             {/* Workspace info */}
             <div style={{ marginBottom: '8px' }}>
               <div className="sidebar-section-label">WORKSPACE</div>
-              <div className="sidebar-school-name">
+              <div className="sidebar-school-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 {schoolLogo && (
-                  <img src={schoolLogo.startsWith('http') ? schoolLogo : `http://localhost:5000${schoolLogo}`}
-                    alt="" style={{ height: '14px', objectFit: 'contain', marginRight: '6px', verticalAlign: 'middle' }} />
+                  <img
+                    src={schoolLogo.startsWith('http') ? schoolLogo : `http://localhost:5000${schoolLogo}`}
+                    alt=""
+                    style={{ width: '24px', height: '24px', objectFit: 'contain', flexShrink: 0, borderRadius: '4px' }}
+                  />
                 )}
-                {schoolName || (userRole === 'admin' ? 'Platform Admin' : '—')}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {schoolName || (userRole === 'admin' ? 'Platform Admin' : '—')}
+                </span>
               </div>
             </div>
 
