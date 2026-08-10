@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import api, { getErrorMessage } from '../api';
 import {
   Headphones, Flame, Clock, CheckCircle, Phone, Calendar,
-  Search, Filter, History, MessageSquare, AlertCircle, RefreshCw, X, ChevronRight, User, UserPlus, Trash2, Mail
+  Search, Filter, History, MessageSquare, AlertCircle, RefreshCw, X, ChevronRight, User, UserPlus, Trash2, Mail,
+  RotateCcw, CheckCircle2, Check
 } from 'lucide-react';
 
 interface Contact {
@@ -38,12 +39,17 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
   const [search, setSearch] = useState('');
   const [queueFilter, setQueueFilter] = useState<'all' | 'hot' | 'warm' | 'callback'>('hot');
   const [counselorFilter, setCounselorFilter] = useState<string>('all');
-  const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'roster'>('queue');
+  const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'completed' | 'roster'>('queue');
 
   // Action Modals State
   const [selectedForNote, setSelectedForNote] = useState<Contact | null>(null);
   const [counselorNote, setCounselorNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+
+  const [completeContact, setCompleteContact] = useState<Contact | null>(null);
+  const [completeOutcome, setCompleteOutcome] = useState('Campus Visit Scheduled');
+  const [completeNote, setCompleteNote] = useState('');
+  const [completing, setCompleting] = useState(false);
 
   const [rescheduleContact, setRescheduleContact] = useState<Contact | null>(null);
   const [scheduledFor, setScheduledFor] = useState('');
@@ -123,14 +129,21 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
     }
   }, [counselors]);
 
-  const filteredContacts = contacts.filter(c => {
-    // 1. Queue filter
-    if (queueFilter === 'hot') {
-      if (!(c.interest_level === 'Hot Lead' || c.lead_score >= 60)) return false;
-    } else if (queueFilter === 'warm') {
-      if (!(c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60))) return false;
-    } else if (queueFilter === 'callback') {
-      if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled')) return false;
+  const activeContacts = contacts.filter(c => c.status !== 'Completed');
+  const completedContacts = contacts.filter(c => c.status === 'Completed');
+
+  const currentDataset = activeWorkspace === 'completed' ? completedContacts : activeContacts;
+
+  const filteredContacts = currentDataset.filter(c => {
+    // 1. Queue priority filter (only applied on active queue)
+    if (activeWorkspace === 'queue') {
+      if (queueFilter === 'hot') {
+        if (!(c.interest_level === 'Hot Lead' || c.lead_score >= 60)) return false;
+      } else if (queueFilter === 'warm') {
+        if (!(c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60))) return false;
+      } else if (queueFilter === 'callback') {
+        if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled')) return false;
+      }
     }
 
     // 2. Counselor filter
@@ -142,19 +155,27 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
     return true;
   });
 
-  const hotCount = contacts.filter(c => {
+  const hotCount = activeContacts.filter(c => {
     const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
     return belongs && (c.interest_level === 'Hot Lead' || c.lead_score >= 60);
   }).length;
 
-  const warmCount = contacts.filter(c => {
+  const warmCount = activeContacts.filter(c => {
     const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
     return belongs && (c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60));
   }).length;
 
-  const callbackCount = contacts.filter(c => {
+  const callbackCount = activeContacts.filter(c => {
     const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
     return belongs && (c.status === 'NeedsReschedule' || c.status === 'Scheduled');
+  }).length;
+
+  const totalActiveCount = activeContacts.filter(c => {
+    return counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
+  }).length;
+
+  const totalCompletedCount = completedContacts.filter(c => {
+    return counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
   }).length;
 
   const triggerCall = async (contact: Contact) => {
@@ -182,6 +203,43 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
       showToast(getErrorMessage(err, 'Failed to save counselor note'), 'error');
     } finally {
       setSavingNote(false);
+    }
+  };
+
+  const handleCompleteFollowUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!completeContact) return;
+    setCompleting(true);
+    try {
+      const outcomeTag = `[${completeOutcome}]`;
+      const combinedNotes = completeNote.trim()
+        ? (completeContact.notes ? `${completeContact.notes} | ${outcomeTag}: ${completeNote.trim()}` : `${outcomeTag}: ${completeNote.trim()}`)
+        : (completeContact.notes ? `${completeContact.notes} | ${outcomeTag}` : outcomeTag);
+
+      await api.patch(`/contacts/${completeContact.id}`, {
+        status: 'Completed',
+        notes: combinedNotes
+      });
+      showToast(`Follow-up marked as Completed for ${completeContact.name}!`, 'success');
+      setCompleteContact(null);
+      setCompleteNote('');
+      fetchQueue();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to mark follow-up as completed'), 'error');
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const handleReopenFollowUp = async (contact: Contact) => {
+    try {
+      await api.patch(`/contacts/${contact.id}`, {
+        status: 'Pending'
+      });
+      showToast(`Reopened active follow-up for ${contact.name}!`, 'success');
+      fetchQueue();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to reopen follow-up'), 'error');
     }
   };
 
@@ -278,105 +336,113 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
         </div>
 
         {/* Workspace selector switcher */}
-        <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+        <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '10px', border: '1px solid var(--border-color)', gap: '4px', flexWrap: 'wrap' }}>
           <button
             onClick={() => setActiveWorkspace('queue')}
             className={`btn ${activeWorkspace === 'queue' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ fontSize: '0.82rem', padding: '6px 16px', border: 'none' }}
+            style={{ fontSize: '0.82rem', padding: '6px 14px', border: 'none' }}
           >
-            🎯 Priority Queue
+            🎯 Active Queue ({totalActiveCount})
+          </button>
+          <button
+            onClick={() => setActiveWorkspace('completed')}
+            className={`btn ${activeWorkspace === 'completed' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ fontSize: '0.82rem', padding: '6px 14px', border: 'none' }}
+          >
+            ✅ Completed ({totalCompletedCount})
           </button>
           <button
             onClick={() => setActiveWorkspace('roster')}
             className={`btn ${activeWorkspace === 'roster' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ fontSize: '0.82rem', padding: '6px 16px', border: 'none' }}
+            style={{ fontSize: '0.82rem', padding: '6px 14px', border: 'none' }}
           >
-            👥 Counselors Roster
+            👥 Counselors Roster ({counselors.length})
           </button>
         </div>
       </div>
 
-      {activeWorkspace === 'queue' ? (
-        <>
-          {/* KPI Stats Bar */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '16px', marginBottom: '28px' }}>
-            <div
-              onClick={() => setQueueFilter('hot')}
-              className="glass-panel hover-lift"
-              style={{
-                padding: '20px', cursor: 'pointer',
-                borderLeft: queueFilter === 'hot' ? '4px solid #ef4444' : undefined,
-                background: queueFilter === 'hot' ? 'rgba(239, 68, 68, 0.05)' : undefined
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  🔥 Hot Leads
-                </span>
-                <Flame size={20} style={{ color: '#ef4444' }} />
-              </div>
-              <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{hotCount}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Ready for immediate call</div>
+      {activeWorkspace === 'queue' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '16px', marginBottom: '28px' }}>
+          <div
+            onClick={() => setQueueFilter('hot')}
+            className="glass-panel hover-lift"
+            style={{
+              padding: '20px', cursor: 'pointer',
+              borderLeft: queueFilter === 'hot' ? '4px solid #ef4444' : undefined,
+              background: queueFilter === 'hot' ? 'rgba(239, 68, 68, 0.05)' : undefined
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                🔥 Hot Leads
+              </span>
+              <Flame size={20} style={{ color: '#ef4444' }} />
             </div>
-
-            <div
-              onClick={() => setQueueFilter('warm')}
-              className="glass-panel hover-lift"
-              style={{
-                padding: '20px', cursor: 'pointer',
-                borderLeft: queueFilter === 'warm' ? '4px solid #f59e0b' : undefined,
-                background: queueFilter === 'warm' ? 'rgba(245, 158, 11, 0.05)' : undefined
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  🟡 Warm Follow-ups
-                </span>
-                <Clock size={20} style={{ color: '#f59e0b' }} />
-              </div>
-              <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{warmCount}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>High intent, nurture required</div>
-            </div>
-
-            <div
-              onClick={() => setQueueFilter('callback')}
-              className="glass-panel hover-lift"
-              style={{
-                padding: '20px', cursor: 'pointer',
-                borderLeft: queueFilter === 'callback' ? '4px solid #7c3aed' : undefined,
-                background: queueFilter === 'callback' ? 'rgba(124, 58, 237, 0.05)' : undefined
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  📞 Requested Callbacks
-                </span>
-                <Calendar size={20} style={{ color: '#7c3aed' }} />
-              </div>
-              <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{callbackCount}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Parent requested call</div>
-            </div>
-
-            <div
-              onClick={() => setQueueFilter('all')}
-              className="glass-panel hover-lift"
-              style={{
-                padding: '20px', cursor: 'pointer',
-                borderLeft: queueFilter === 'all' ? '4px solid #06b6d4' : undefined,
-                background: queueFilter === 'all' ? 'rgba(6, 182, 212, 0.05)' : undefined
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#06b6d4', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  📋 Total Queue
-                </span>
-                <Filter size={20} style={{ color: '#06b6d4' }} />
-              </div>
-              <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{contacts.length}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>All scored leads</div>
-            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{hotCount}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Ready for immediate call</div>
           </div>
 
+          <div
+            onClick={() => setQueueFilter('warm')}
+            className="glass-panel hover-lift"
+            style={{
+              padding: '20px', cursor: 'pointer',
+              borderLeft: queueFilter === 'warm' ? '4px solid #f59e0b' : undefined,
+              background: queueFilter === 'warm' ? 'rgba(245, 158, 11, 0.05)' : undefined
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                🟡 Warm Follow-ups
+              </span>
+              <Clock size={20} style={{ color: '#f59e0b' }} />
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{warmCount}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>High intent, nurture required</div>
+          </div>
+
+          <div
+            onClick={() => setQueueFilter('callback')}
+            className="glass-panel hover-lift"
+            style={{
+              padding: '20px', cursor: 'pointer',
+              borderLeft: queueFilter === 'callback' ? '4px solid #7c3aed' : undefined,
+              background: queueFilter === 'callback' ? 'rgba(124, 58, 237, 0.05)' : undefined
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                📞 Requested Callbacks
+              </span>
+              <Calendar size={20} style={{ color: '#7c3aed' }} />
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{callbackCount}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Parent requested call</div>
+          </div>
+
+          <div
+            onClick={() => setQueueFilter('all')}
+            className="glass-panel hover-lift"
+            style={{
+              padding: '20px', cursor: 'pointer',
+              borderLeft: queueFilter === 'all' ? '4px solid #06b6d4' : undefined,
+              background: queueFilter === 'all' ? 'rgba(6, 182, 212, 0.05)' : undefined
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#06b6d4', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                📋 Active Queue
+              </span>
+              <Filter size={20} style={{ color: '#06b6d4' }} />
+            </div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 800, marginTop: '8px', fontFamily: 'var(--font-display)' }}>{totalActiveCount}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Pending follow-ups</div>
+          </div>
+        </div>
+      )}
+
+      {activeWorkspace !== 'roster' ? (
+        <>
           {/* Filter and Search controls */}
           <div className="glass-panel" style={{ padding: '16px', marginBottom: '24px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-tertiary)', padding: '10px 16px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
@@ -412,32 +478,36 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                 </select>
               </div>
 
-              <button
-                onClick={handleAutoAssign}
-                className="btn btn-secondary"
-                disabled={autoAssigning || counselors.length === 0}
-                style={{ fontSize: '0.82rem', padding: '8px 14px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}
-                title="Automatically distribute unassigned leads among active counselors"
-              >
-                <RefreshCw size={14} className={autoAssigning ? "animate-spin" : ""} style={{ animation: autoAssigning ? 'spin 2s linear infinite' : 'none' }} />
-                Auto-Assign Leads
-              </button>
+              {activeWorkspace === 'queue' && (
+                <button
+                  onClick={handleAutoAssign}
+                  className="btn btn-secondary"
+                  disabled={autoAssigning || counselors.length === 0}
+                  style={{ fontSize: '0.82rem', padding: '8px 14px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  title="Automatically distribute unassigned leads among active counselors"
+                >
+                  <RefreshCw size={14} className={autoAssigning ? "animate-spin" : ""} style={{ animation: autoAssigning ? 'spin 2s linear infinite' : 'none' }} />
+                  Auto-Assign Leads
+                </button>
+              )}
 
-              <div style={{ display: 'flex', gap: '8px' }}>
-                {(['hot', 'warm', 'callback', 'all'] as const).map(tab => (
-                  <button
-                    key={tab}
-                    onClick={() => setQueueFilter(tab)}
-                    className={`btn ${queueFilter === tab ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ fontSize: '0.82rem', padding: '8px 14px' }}
-                  >
-                    {tab === 'hot' && '🔥 Hot Leads'}
-                    {tab === 'warm' && '🟡 Warm'}
-                    {tab === 'callback' && '📞 Callbacks'}
-                    {tab === 'all' && 'All'}
-                  </button>
-                ))}
-              </div>
+              {activeWorkspace === 'queue' && (
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['hot', 'warm', 'callback', 'all'] as const).map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setQueueFilter(tab)}
+                      className={`btn ${queueFilter === tab ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+                    >
+                      {tab === 'hot' && '🔥 Hot Leads'}
+                      {tab === 'warm' && '🟡 Warm'}
+                      {tab === 'callback' && '📞 Callbacks'}
+                      {tab === 'all' && 'All'}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -554,41 +624,94 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
                     {/* Bottom Action Toolbar */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid var(--border-color)', flexWrap: 'wrap', gap: '12px' }}>
-                      <div style={{ display: 'flex', gap: '10px' }}>
-                        <button
-                          className="btn btn-primary"
-                          style={{ fontSize: '0.82rem', padding: '8px 14px' }}
-                          onClick={() => triggerCall(c)}
-                        >
-                          <Phone size={14} />
-                          Call Lead Now
-                        </button>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        {activeWorkspace === 'queue' ? (
+                          <>
+                            <button
+                              className="btn btn-primary"
+                              style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+                              onClick={() => triggerCall(c)}
+                            >
+                              <Phone size={14} />
+                              Call Lead Now
+                            </button>
 
-                        <button
-                          className="btn btn-secondary"
-                          style={{ fontSize: '0.82rem', padding: '8px 14px' }}
-                          onClick={() => {
-                            setSelectedForNote(c);
-                            setCounselorNote(c.notes || '');
-                          }}
-                        >
-                          <MessageSquare size={14} />
-                          Add Counselor Note
-                        </button>
+                            <button
+                              className="btn btn-secondary"
+                              style={{
+                                fontSize: '0.82rem', padding: '8px 14px',
+                                background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)',
+                                display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700
+                              }}
+                              onClick={() => {
+                                setCompleteContact(c);
+                                setCompleteOutcome('Campus Visit Scheduled');
+                                setCompleteNote('');
+                              }}
+                            >
+                              <CheckCircle size={14} />
+                              Mark Completed
+                            </button>
 
-                        <button
-                          className="btn btn-secondary"
-                          style={{ fontSize: '0.82rem', padding: '8px 14px' }}
-                          onClick={() => {
-                            setRescheduleContact(c);
-                            const tmrw = new Date();
-                            tmrw.setDate(tmrw.getDate() + 1);
-                            setScheduledFor(tmrw.toISOString().slice(0, 16));
-                          }}
-                        >
-                          <Calendar size={14} />
-                          Schedule Callback
-                        </button>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+                              onClick={() => {
+                                setSelectedForNote(c);
+                                setCounselorNote(c.notes || '');
+                              }}
+                            >
+                              <MessageSquare size={14} />
+                              Add Counselor Note
+                            </button>
+
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+                              onClick={() => {
+                                setRescheduleContact(c);
+                                const tmrw = new Date();
+                                tmrw.setDate(tmrw.getDate() + 1);
+                                setScheduledFor(tmrw.toISOString().slice(0, 16));
+                              }}
+                            >
+                              <Calendar size={14} />
+                              Schedule Callback
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '6px',
+                              padding: '6px 14px', borderRadius: '8px', fontSize: '0.82rem', fontWeight: 700,
+                              background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)'
+                            }}>
+                              <CheckCircle2 size={16} />
+                              Follow-up Completed
+                            </span>
+
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '0.82rem', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                              onClick={() => handleReopenFollowUp(c)}
+                            >
+                              <RotateCcw size={14} />
+                              Reopen Follow-up
+                            </button>
+
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+                              onClick={() => {
+                                setSelectedForNote(c);
+                                setCounselorNote(c.notes || '');
+                              }}
+                            >
+                              <MessageSquare size={14} />
+                              Edit Notes
+                            </button>
+                          </>
+                        )}
                       </div>
 
                       {onViewContact && (
@@ -787,6 +910,69 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               <button className="btn btn-primary" onClick={() => setCounselorCredentials(null)}>Done</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Mark Completed Modal */}
+      {completeContact && (
+        <div className="modal-overlay">
+          <form onSubmit={handleCompleteFollowUp} className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '520px', width: '100%', borderLeft: '4px solid #10b981' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '8px', borderRadius: '50%' }}>
+                  <CheckCircle size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700 }}>
+                    Complete Follow-up: {completeContact.name}
+                  </h3>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>📞 {completeContact.phone_number}</span>
+                </div>
+              </div>
+              <button type="button" onClick={() => setCompleteContact(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '12px' }}>
+              <div className="form-group">
+                <label className="form-label" style={{ fontWeight: 600 }}>Call Outcome / Disposition</label>
+                <select
+                  className="form-input"
+                  value={completeOutcome}
+                  onChange={(e) => setCompleteOutcome(e.target.value)}
+                  style={{ background: 'var(--bg-tertiary)', fontWeight: 600 }}
+                >
+                  <option value="Campus Visit Scheduled">🏫 Campus Visit Scheduled</option>
+                  <option value="Enrollment Discussion In-Progress">📝 Enrollment Discussion In-Progress</option>
+                  <option value="Parent Enrolled / Fee Paid">🎉 Parent Enrolled / Fee Paid</option>
+                  <option value="General Enquiry Resolved">💬 General Enquiry Resolved</option>
+                  <option value="Follow-up Completed (Parent Satisfied)">✅ Follow-up Completed (Parent Satisfied)</option>
+                  <option value="Not Interested / Dropped">❌ Not Interested / Dropped</option>
+                  <option value="Invalid Contact / Wrong Number">⚠️ Invalid Contact / Wrong Number</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ fontWeight: 600 }}>Counselor Observations / Notes</label>
+                <textarea
+                  className="form-input"
+                  rows={4}
+                  value={completeNote}
+                  onChange={(e) => setCompleteNote(e.target.value)}
+                  placeholder="e.g. Spoke with parent regarding Grade 5 admission. Confirmed campus tour on Saturday at 11 AM with admissions team."
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setCompleteContact(null)}>Cancel</button>
+              <button type="submit" className="btn btn-primary" style={{ background: '#10b981', borderColor: '#10b981' }} disabled={completing}>
+                {completing ? 'Completing...' : '✓ Mark as Completed'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

@@ -995,6 +995,7 @@ class ContactUpdatePayload(BaseModel):
     notes: str | None = None
     email: str | None = None
     name: str | None = None
+    status: str | None = None
     assigned_counselor_id: str | None = None
 
 @router.patch("/{id}")
@@ -1016,6 +1017,8 @@ def update_contact(
         contact.email = payload.email
     if payload.name is not None:
         contact.name = payload.name
+    if payload.status is not None:
+        contact.status = payload.status
     if payload.assigned_counselor_id is not None:
         if payload.assigned_counselor_id.lower() in ("none", "", "null"):
             contact.assigned_counselor_id = None
@@ -1024,6 +1027,16 @@ def update_contact(
 
     db.commit()
     db.refresh(contact)
-    return {"success": True, "contact": {"id": contact.id, "notes": contact.notes, "email": contact.email, "name": contact.name, "assigned_counselor_id": contact.assigned_counselor_id}}
+    return {
+        "success": True, 
+        "contact": {
+            "id": contact.id, 
+            "notes": contact.notes, 
+            "email": contact.email, 
+            "name": contact.name, 
+            "status": contact.status,
+            "assigned_counselor_id": contact.assigned_counselor_id
+        }
+    }
 
 
