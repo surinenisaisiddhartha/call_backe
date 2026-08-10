@@ -408,151 +408,270 @@ def get_all_call_history(
     } for a, c in results]
 
 
-CLASSIFICATIONS = ["Hot Lead", "Warm Lead", "Time Pass", "Not Interested",
-                   "Unclassified", "Not Reached"]
+CLASSIFICATIONS = ["HOT", "WARM", "COLD"]
 
-# -- Lead scoring ---------------------------------------------------------
-# Each signal contributes a fixed, visible number of points. These weights are
-# ordinary judgement, not a trained model, and they are written out here so
-# anyone can argue with them and change them - a score nobody can interrogate
-# is a score nobody should act on.
+# ── Weighted lead scoring ────────────────────────────────────────────────
+# Eight parameters, each scored 0–100 independently, then combined via a
+# fixed weight vector. The final weighted score (also 0–100) determines the
+# classification:
 #
-# Ordering principle: what a caller DID outweighs what they SAID, and what they
-# said outweighs how they sounded. Booking a time is a commitment; sounding
-# enthusiastic costs nothing.
-SCORE_WEIGHTS = {
-    "booked_appointment":   45,   # committed to a time - the strongest signal
-    "requested_callback":   15,   # asked US to call back; auto-retries excluded
-    "engagement_serious":   25,
-    "engagement_casual":   -10,   # pleasant but not pursuing it - the time-passers
-    "engagement_none":     -35,
-    "interest_hot":         15,
-    "interest_warm":         7,
-    "interest_cold":       -15,
-    "asked_many_topics":    10,   # 3+ subjects: doing real research
-    "asked_some_topics":     5,
-    "long_conversation":    10,   # 2min+: they stayed and engaged
-    "medium_conversation":   5,
-    "very_short_call":     -10,   # under 20s: hung up
-    "is_parent":             5,   # the actual decision maker
-    "wrong_number":        -40,
+#   75–100   → HOT
+#   50–74.99 → WARM
+#    0–49.99 → COLD
+#
+# The percentage determines the classification — never a single field like
+# engagement_quality or interest_level on its own.
+
+PARAM_WEIGHTS = {
+    "appointment_conversion_intent": 0.25,
+    "engagement_quality":            0.20,
+    "interest_level":                0.15,
+    "conversation_depth":            0.10,
+    "caller_relevance":              0.10,
+    "admission_intent":              0.10,
+    "requirement_fit":               0.05,
+    "follow_up_intent":              0.05,
 }
 
 
-def _score_contact(contact, booked: bool, callback: bool, analysis: dict, duration: float):
-    """
-    Returns (score 0-100, [human-readable reasons]).
-
-    Reasons come back with the number because a bare score invites exactly the
-    wrong behaviour - blind trust or blanket dismissal. Seeing "booked an
-    appointment (+45), asked about 4 different things (+10)" makes it checkable.
-    """
-    score = 0
-    reasons = []
-
-    def add(key, text):
-        nonlocal score
-        pts = SCORE_WEIGHTS[key]
-        score += pts
-        reasons.append("%s (%+d)" % (text, pts))
-
-    # Do-not-call is absolute: no pile of positive signals can override somebody
-    # explicitly asking not to be contacted again.
+def _score_appointment(booked: bool, callback: bool, analysis: dict, contact) -> int:
+    """Appointment / Conversion Intent — 25%."""
     if contact.status == "DoNotCall":
-        return 0, ["asked not to be contacted"]
-
+        return 0
     if booked:
-        add("booked_appointment", "booked an appointment")
+        return 100
+    # Check for explicit campus visit / appointment request in analysis
+    next_step = (analysis.get("recommended_next_step") or "").lower() if analysis else ""
+    synopsis = (analysis.get("call_synopsis") or "").lower() if analysis else ""
+    combined = next_step + " " + synopsis
+    if any(kw in combined for kw in ("visit", "appointment", "campus tour", "schedule a visit")):
+        return 90
     if callback:
-        add("requested_callback", "asked to be called back")
-
+        return 75
+    # Check for admission info requests in analysis
     if analysis:
-        engagement = (analysis.get("engagement_quality") or "").strip()
-        if engagement == "Serious":
-            add("engagement_serious", "engaged seriously")
-        elif engagement == "Casual":
-            add("engagement_casual", "engaged only casually")
-        elif engagement == "NotInterested":
-            add("engagement_none", "said they are not interested")
-
+        topics = (analysis.get("topics_discussed") or "").lower()
+        if any(kw in topics for kw in ("admissions", "fees", "curriculum")):
+            return 65
         interest = (analysis.get("interest_level") or "").strip()
-        if interest == "Hot":
-            add("interest_hot", "sounded very interested")
-        elif interest == "Warm":
-            add("interest_warm", "sounded fairly interested")
-        elif interest == "Cold":
-            add("interest_cold", "sounded uninterested")
+        if interest in ("Hot", "Warm"):
+            return 50
+        engagement = (analysis.get("engagement_quality") or "").strip()
+        if engagement in ("Serious", "Casual"):
+            return 35
+    # Wrong number or caller not available
+    caller_type = (analysis.get("caller_type") or "").strip() if analysis else ""
+    if caller_type == "WrongNumber":
+        return 0
+    return 15
 
+
+def _score_engagement(analysis: dict) -> int:
+    """Engagement Quality — 20%."""
+    if not analysis:
+        return None  # missing signal
+    engagement = (analysis.get("engagement_quality") or "").strip()
+    return {"Serious": 100, "Casual": 50, "Unclear": 30, "NotInterested": 0}.get(engagement, 30)
+
+
+def _score_interest(analysis: dict) -> int:
+    """Interest Level — 15%."""
+    if not analysis:
+        return None  # missing signal
+    interest = (analysis.get("interest_level") or "").strip()
+    return {"Hot": 100, "Warm": 65, "Cold": 20, "Unclear": 30}.get(interest, 30)
+
+
+def _score_conversation_depth(analysis: dict, duration: float, detected_topics: str) -> int:
+    """Conversation Depth — 10%. Combines topics + duration."""
+    # Topic count from both LLM analysis and keyword detection
+    topic_count = 0
+    if analysis:
         topics = [x for x in (analysis.get("topics_discussed") or "").split(",")
                   if x.strip() and x.strip().lower() != "none"]
-        if len(topics) >= 3:
-            add("asked_many_topics", "asked about %d different things" % len(topics))
-        elif topics:
-            add("asked_some_topics", "asked about %d thing(s)" % len(topics))
+        topic_count = max(topic_count, len(topics))
+    if detected_topics:
+        kw_topics = [x for x in detected_topics.split(",") if x.strip()]
+        topic_count = max(topic_count, len(kw_topics))
 
-        caller_type = (analysis.get("caller_type") or "").strip()
-        if caller_type == "Parent":
-            add("is_parent", "spoke to the parent")
-        elif caller_type == "WrongNumber":
-            add("wrong_number", "wrong number")
+    if topic_count >= 4:
+        topic_score = 100
+    elif topic_count == 3:
+        topic_score = 85
+    elif topic_count >= 1:
+        topic_score = 65
+    else:
+        topic_score = 20
 
-    if duration:
-        if duration >= 120:
-            add("long_conversation", "talked for %ds" % int(duration))
-        elif duration >= 45:
-            add("medium_conversation", "talked for %ds" % int(duration))
-        elif duration < 20:
-            add("very_short_call", "call lasted seconds")
+    # Duration adjusts the score — supportive, not dominant
+    if duration and duration >= 120:
+        duration_factor = 1.0      # strong support
+    elif duration and duration >= 45:
+        duration_factor = 0.85     # moderate
+    elif duration and duration >= 20:
+        duration_factor = 0.65     # low
+    else:
+        duration_factor = 0.40     # very low — but doesn't zero out good topics
 
-    return max(0, min(100, score)), reasons
+    # Blend: topics are primary (70%), duration shapes it (30%)
+    return int(topic_score * 0.70 + (duration_factor * 100) * 0.30)
 
 
-def _band(score: int, has_signal: bool, analysis: dict, booked: bool, callback: bool, answered: bool):
-    """
-    Score -> the label people actually read.
+def _score_caller_relevance(analysis: dict) -> int:
+    """Caller Relevance — 10%."""
+    if not analysis:
+        return None  # missing signal
+    caller_type = (analysis.get("caller_type") or "").strip()
+    return {"Parent": 100, "Student": 75, "Other": 40,
+            "NotAvailable": 20, "WrongNumber": 0}.get(caller_type, 40)
 
-    The score alone is not allowed to decide this, for three reasons found by
-    running it over real data:
 
-    1. A BOOKED APPOINTMENT IS ALWAYS HOT. Someone who commits to a time is the
-       best lead you have, whatever else is missing. Scored purely on points, a
-       booking with no analysis attached came to 55 and was labelled Warm --
-       demoting a real commitment because a machine had not got round to
-       listening to the call.
+def _score_admission_intent(contact) -> int:
+    """Admission Intent — 10%. Uses the 20-point profile captured mid-call."""
+    score = 0
+    signals = 0
 
-    2. NO ANALYSIS MEANS NO VERDICT, not a bad one. Every call made before
-       analysis was switched on has no engagement or interest data, so it loses
-       ~40 points it never had the chance to earn. Banding those on score alone
-       labelled three-minute conversations "Not Interested" -- the exact
-       mistake that buries a good lead. They are Unclassified until a real call
-       is analysed.
+    # decision_timeline
+    timeline = getattr(contact, "decision_timeline", None)
+    if timeline:
+        signals += 1
+        score += {"Immediate": 100, "ThisMonth": 85, "ThisQuarter": 70,
+                  "NextYear": 45, "Unknown": 30}.get(timeline, 30)
 
-    3. TIME PASS IS ABOUT ENGAGEMENT, NOT POINTS. A chatty caller who asks lots
-       of questions can out-score a brief serious one, and calling them a Warm
-       Lead is precisely what this feature exists to prevent.
-    """
-    if not has_signal:
-        return "Not Reached"
+    # admission_urgency
+    urgency = getattr(contact, "admission_urgency", None)
+    if urgency:
+        signals += 1
+        score += {"Urgent": 100, "Planned": 70, "JustExploring": 45,
+                  "Unknown": 30}.get(urgency, 30)
 
-    # Deeds first, and they are not overridable by the arithmetic.
-    if booked:
-        return "Hot Lead"
+    # campus_visit_interest — positive signal
+    visit = getattr(contact, "campus_visit_interest", None)
+    if visit:
+        signals += 1
+        score += {"Yes": 90, "AlreadyVisited": 80, "No": 20,
+                  "Unknown": 30}.get(visit, 30)
+
+    # decision_maker — Self/Both means they can act
+    dm = getattr(contact, "decision_maker", None)
+    if dm:
+        signals += 1
+        score += {"Self": 90, "Both": 80, "Spouse": 50,
+                  "ExtendedFamily": 40, "Unknown": 30}.get(dm, 30)
+
+    # competition_considered — actively comparing = serious
+    comp = getattr(contact, "competition_considered", None)
+    if comp and comp.lower() not in ("none", "n/a", "na", ""):
+        signals += 1
+        score += 75  # actively comparing schools is a positive signal
+
+    if signals == 0:
+        return None  # no profile data yet — missing signal
+    return min(100, score // signals)
+
+
+def _score_requirement_fit(contact) -> int:
+    """Requirement / Fit — 5%. How much useful family info was established."""
+    fit_fields = [
+        "grade_sought", "academic_year", "board_preference", "locality",
+        "current_school", "transport_needed", "boarding_needed",
+        "special_requirements", "budget_band",
+    ]
+    filled = sum(1 for f in fit_fields
+                 if getattr(contact, f, None) and str(getattr(contact, f)).lower() not in
+                 ("unknown", "n/a", "na", "none"))
+
+    if filled >= 7:
+        return 100
+    elif filled >= 5:
+        return 75
+    elif filled >= 3:
+        return 50
+    elif filled >= 1:
+        return 25
+    return None  # no info at all — missing signal
+
+
+def _score_follow_up(callback: bool, contact, analysis: dict) -> int:
+    """Follow-up Intent — 5%."""
+    score = 0
+    signals = 0
+
+    if callback:
+        signals += 1
+        score += 100  # clear next action
+
+    pref_time = getattr(contact, "preferred_contact_time", None)
+    if pref_time and pref_time.lower() not in ("unknown", "n/a", "na", "none"):
+        signals += 1
+        score += 80  # willing to set a time
+
+    pref_lang = getattr(contact, "language_preference", None)
+    if pref_lang and pref_lang not in ("Unknown",):
+        signals += 1
+        score += 60  # shared language preference
 
     if analysis:
-        if (analysis.get("engagement_quality") or "") == "Casual" and score < 60:
-            return "Time Pass"
-        if score >= 60:
-            return "Hot Lead"
-        if score >= 30:
-            return "Warm Lead"
-        return "Not Interested"
+        next_step = (analysis.get("recommended_next_step") or "").strip()
+        if next_step and next_step.lower() not in ("none", "n/a", ""):
+            signals += 1
+            score += 80
 
-    # No analysis: judge only on what we can actually observe.
-    if callback:
-        return "Warm Lead"
-    if answered:
-        return "Unclassified"
-    return "Not Reached"
+    if signals == 0:
+        return None  # missing signal
+    return min(100, score // signals)
+
+
+def _classify(score: float) -> str:
+    """Final classification from the weighted score — the ONLY rule."""
+    if score >= 75:
+        return "HOT"
+    elif score >= 50:
+        return "WARM"
+    return "COLD"
+
+
+def _generate_reason(param_scores: dict, weighted_breakdown: dict,
+                     classification: str, missing_params: list) -> str:
+    """Human-readable explanation of why this lead got its classification."""
+    parts = []
+
+    # Highlight the strongest contributors
+    sorted_params = sorted(weighted_breakdown.items(), key=lambda x: x[1], reverse=True)
+    top = [p for p, w in sorted_params[:3] if w > 0]
+
+    label_map = {
+        "appointment_conversion_intent": "conversion intent",
+        "engagement_quality": "engagement",
+        "interest_level": "interest",
+        "conversation_depth": "conversation depth",
+        "caller_relevance": "caller relevance",
+        "admission_intent": "admission intent",
+        "requirement_fit": "requirement fit",
+        "follow_up_intent": "follow-up intent",
+    }
+
+    if top:
+        strengths = [label_map.get(p, p) for p in top]
+        parts.append("Strong in: " + ", ".join(strengths))
+
+    # Note weak areas
+    weak = [label_map.get(p, p) for p, s in param_scores.items() if s is not None and s < 30]
+    if weak:
+        parts.append("Weak in: " + ", ".join(weak[:2]))
+
+    if missing_params:
+        parts.append(f"{len(missing_params)} parameter(s) had no data")
+
+    if not parts:
+        if classification == "COLD":
+            parts.append("Limited engagement and conversion signals")
+        elif classification == "WARM":
+            parts.append("Moderate engagement and interest signals")
+        else:
+            parts.append("Strong engagement, interest, and conversion signals")
+
+    return ". ".join(parts) + "."
 
 
 def compute_interest_levels(db: Session, contacts: list) -> dict:
@@ -562,9 +681,14 @@ def compute_interest_levels(db: Session, contacts: list) -> dict:
 
 def compute_lead_scores(db: Session, contacts: list) -> dict:
     """
-    {contact_id: {score, classification, reasons}} for a page of contacts.
+    {contact_id: {lead_score, classification, parameter_scores,
+                   weighted_score_breakdown, classification_reason}}
 
-    Four batched queries for the whole page regardless of size, never per row.
+    Eight parameters, each scored 0–100 independently, combined via fixed
+    weights. Missing analysis fields are handled by redistributing their
+    weight across available parameters so the final score stays 0–100.
+
+    Batched queries for the whole page — never one query per contact.
     """
     import json as _json
     from src.db import Appointment
@@ -578,9 +702,8 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
             Appointment.contact_id.in_(ids), Appointment.status == "Booked"
         ).all()
     }
-    # ONLY callbacks the caller asked for. The system schedules its own
-    # auto-retries when a call goes unanswered (call_type "Reminder"), and
-    # scoring those would reward somebody for never picking up the phone.
+    # ONLY callbacks the caller asked for. Auto-retries (call_type "Reminder")
+    # don't count — they reward not picking up the phone.
     callbacks = {
         r[0] for r in db.query(ScheduledCallback.contact_id).filter(
             ScheduledCallback.contact_id.in_(ids),
@@ -589,18 +712,23 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
         ).all()
     }
 
-    latest_analysis, longest_call, answered = {}, {}, set()
+    latest_analysis = {}
+    longest_call = {}
+    latest_detected_topics = {}
     rows = (
-        db.query(CallAttempt.contact_id, CallAttempt.analysis_json, CallAttempt.duration_sec)
+        db.query(
+            CallAttempt.contact_id, CallAttempt.analysis_json,
+            CallAttempt.duration_sec, CallAttempt.detected_topics,
+        )
         .filter(CallAttempt.contact_id.in_(ids))
         .order_by(CallAttempt.started_at.asc())
         .all()
     )
-    for contact_id, raw, duration in rows:
+    for contact_id, raw, duration, det_topics in rows:
         if duration and duration > longest_call.get(contact_id, 0):
             longest_call[contact_id] = duration
-        if duration and duration > 5:
-            answered.add(contact_id)
+        if det_topics:
+            latest_detected_topics[contact_id] = det_topics
         if raw:
             try:
                 parsed = _json.loads(raw)
@@ -613,18 +741,63 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
     for c in contacts:
         analysis = latest_analysis.get(c.id)
         duration = longest_call.get(c.id, 0)
-        has_signal = bool(analysis) or c.id in booked or c.id in callbacks or c.id in answered
-        if not has_signal:
-            out[c.id] = {"score": 0, "classification": "Not Reached", "reasons": ["not reached yet"]}
-            continue
-        score, reasons = _score_contact(c, c.id in booked, c.id in callbacks, analysis, duration)
+        det_topics = latest_detected_topics.get(c.id, "")
+        is_booked = c.id in booked
+        is_callback = c.id in callbacks
+
+        # Compute each parameter (None = missing signal)
+        raw_scores = {
+            "appointment_conversion_intent": _score_appointment(is_booked, is_callback, analysis, c),
+            "engagement_quality":            _score_engagement(analysis),
+            "interest_level":                _score_interest(analysis),
+            "conversation_depth":            _score_conversation_depth(analysis, duration, det_topics),
+            "caller_relevance":              _score_caller_relevance(analysis),
+            "admission_intent":              _score_admission_intent(c),
+            "requirement_fit":               _score_requirement_fit(c),
+            "follow_up_intent":              _score_follow_up(is_callback, c, analysis),
+        }
+
+        # Separate available vs missing
+        available = {k: v for k, v in raw_scores.items() if v is not None}
+        missing = [k for k, v in raw_scores.items() if v is None]
+
+        # Normalize weights so available parameters sum to 1.0
+        if available:
+            total_available_weight = sum(PARAM_WEIGHTS[k] for k in available)
+            if total_available_weight > 0:
+                scale = 1.0 / total_available_weight
+            else:
+                scale = 1.0
+
+            weighted_breakdown = {}
+            for k, v in available.items():
+                weighted_breakdown[k] = round(v * PARAM_WEIGHTS[k] * scale, 2)
+            # Fill missing with 0 for display
+            for k in missing:
+                weighted_breakdown[k] = 0.0
+
+            final_score = round(sum(weighted_breakdown.values()), 2)
+        else:
+            # No data at all — score is 0
+            weighted_breakdown = {k: 0.0 for k in PARAM_WEIGHTS}
+            final_score = 0.0
+
+        final_score = max(0.0, min(100.0, final_score))
+        classification = _classify(final_score)
+
+        # Parameter scores for display (None → 0 in output)
+        param_scores = {k: (v if v is not None else 0) for k, v in raw_scores.items()}
+
+        reason = _generate_reason(param_scores, weighted_breakdown, classification, missing)
+
         out[c.id] = {
-            "score": score,
-            "classification": _band(
-                score, has_signal, analysis,
-                c.id in booked, c.id in callbacks, c.id in answered,
-            ),
-            "reasons": reasons,
+            "score": final_score,
+            "classification": classification,
+            "reasons": [reason],
+            "parameter_scores": param_scores,
+            "weighted_score_breakdown": weighted_breakdown,
+            "classification_reason": reason,
+            "missing_params": missing,
         }
     return out
 
@@ -730,9 +903,12 @@ def get_contacts(
             "email": c.email,
             "notes": c.notes,
             "status": c.status,
-            "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "Not Reached"),
+            "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "COLD"),
             "lead_score": scored.get(c.id, {}).get("score", c.lead_score or 0),
             "score_reasons": scored.get(c.id, {}).get("reasons", []),
+            "parameter_scores": scored.get(c.id, {}).get("parameter_scores", {}),
+            "weighted_score_breakdown": scored.get(c.id, {}).get("weighted_score_breakdown", {}),
+            "classification_reason": scored.get(c.id, {}).get("classification_reason", ""),
             # Only the points actually learned, plus the count — a counselor
             # scanning the queue wants "14/20 known", not twenty nulls.
             "profile": profile_dict(c),
@@ -972,8 +1148,11 @@ def get_contact_history(
     return {
         "contact": contact,
         "lead_score": scored.get("score", 0),
-        "classification": scored.get("classification", "Not Reached"),
+        "classification": scored.get("classification", "COLD"),
         "score_reasons": scored.get("reasons", []),
+        "parameter_scores": scored.get("parameter_scores", {}),
+        "weighted_score_breakdown": scored.get("weighted_score_breakdown", {}),
+        "classification_reason": scored.get("classification_reason", ""),
         # What the agent learned about the family, mid-call. Only the points
         # actually captured — see profile.py.
         "profile": profile_dict(contact),

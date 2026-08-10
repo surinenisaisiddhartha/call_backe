@@ -10,9 +10,12 @@ interface Contact {
   email: string | null;
   notes: string | null;
   status: 'Pending' | 'Calling' | 'Completed' | 'NeedsReschedule' | 'Scheduled' | 'Failed';
-  interest_level: 'Hot Lead' | 'Warm Lead' | 'Time Pass' | 'Not Interested' | 'Unclassified' | 'Not Reached';
+  interest_level: 'HOT' | 'WARM' | 'COLD';
   lead_score: number;
   score_reasons: string[];
+  parameter_scores?: Record<string, number>;
+  weighted_score_breakdown?: Record<string, number>;
+  classification_reason?: string;
   created_at: string;
 }
 
@@ -64,41 +67,20 @@ interface ContactsProps {
 }
 
 /**
- * How interested a caller looked, in three levels.
+ * Lead classification badge: HOT / WARM / COLD.
  *
- * Derived on the server from what the lead actually DID — booked an
- * appointment, asked for a callback, or neither — rather than from a rating
- * the voice agent had to remember to give. "Unrated" is deliberately its own
- * case rather than being lumped in with Cold: an unanswered call or a wrong
- * number says nothing about interest, and showing those as Cold would bury
- * parents nobody has managed to speak to yet.
- */
-/**
- * One label per caller: is this person worth another call?
- *
- * "Time Pass" is the one that earns its place — those callers answer, chat
- * politely, and often accept a callback just to end the conversation, so in
- * every other view they look identical to a good lead. Only the conversation
- * itself separates them.
- *
- * Computed on the server from the same rule the Insights page uses, so the
- * two screens can never disagree.
+ * Classification is purely score-driven using an 8-parameter weighted model.
+ * 75–100 = HOT, 50–74.99 = WARM, 0–49.99 = COLD.
  */
 function InterestBadge({ level, score, reasons }: { level: Contact['interest_level']; score?: number; reasons?: string[] }) {
   const styles: Record<string, { bg: string; fg: string; label: string; title: string }> = {
-    'Hot Lead':       { bg: 'rgba(239, 68, 68, 0.12)',   fg: 'var(--accent-error)',   label: '🔥 Hot Lead',   title: 'Booked, or sounded genuinely ready' },
-    'Warm Lead':      { bg: 'rgba(245, 158, 11, 0.14)',  fg: 'var(--accent-warning)', label: '🟡 Warm Lead',  title: 'Real interest, not ready to commit yet' },
-    'Time Pass':      { bg: 'rgba(168, 85, 247, 0.14)',  fg: '#a855f7',               label: '⏳ Time Pass',  title: 'Engaged politely but is not actually pursuing it' },
-    'Not Interested': { bg: 'rgba(100, 116, 139, 0.14)', fg: 'var(--text-secondary)', label: 'Not Interested', title: 'Said no, or asked not to be contacted' },
-    'Unclassified':   { bg: 'rgba(59, 130, 246, 0.10)',  fg: 'var(--accent-primary)', label: 'Unclassified',  title: 'We spoke to them, but this call has no analysis yet — no verdict either way' },
-    'Not Reached':    { bg: 'transparent',               fg: 'var(--text-muted)',     label: '—',             title: 'No real conversation yet — nothing to judge' },
+    'HOT':  { bg: 'rgba(239, 68, 68, 0.12)',   fg: 'var(--accent-error)',   label: 'HOT',  title: 'Score 75–100: Strong conversion, engagement, and interest signals' },
+    'WARM': { bg: 'rgba(245, 158, 11, 0.14)',  fg: 'var(--accent-warning)', label: 'WARM', title: 'Score 50–74: Moderate engagement, potential for conversion' },
+    'COLD': { bg: 'rgba(100, 116, 139, 0.14)', fg: 'var(--text-secondary)', label: 'COLD', title: 'Score 0–49: Low engagement or insufficient conversion signals' },
   };
-  const s = styles[level] || styles['Not Reached'];
-  // The reasons ride along in the tooltip: a bare number invites blind trust
-  // or blanket dismissal, and "booked an appointment (+45)" is checkable.
+  const s = styles[level] || styles['COLD'];
   const detail = reasons && reasons.length
-    ? [s.title, '', `Score ${score}:`, ...reasons.map(r => `• ${r}`)].join(`
-`)
+    ? [s.title, '', `Score ${score}:`, ...reasons.map(r => `• ${r}`)].join(`\n`)
     : s.title;
   return (
     <span
@@ -111,7 +93,7 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
       }}
     >
       {s.label}
-      {typeof score === 'number' && level !== 'Not Reached' && (
+      {typeof score === 'number' && (
         <span style={{ opacity: 0.75, fontWeight: 600 }}>{score}</span>
       )}
     </span>
@@ -239,6 +221,9 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   // reader doesn't have to reconstruct it from a list of calls.
   const [leadSummary, setLeadSummary] = useState<{
     classification: string; score: number; reasons: string[]; topics: string[];
+    parameterScores?: Record<string, number>;
+    weightedBreakdown?: Record<string, number>;
+    classificationReason?: string;
   } | null>(null);
 
   // Changing a filter resets to page 1; the fetch effect below then runs once
@@ -344,6 +329,9 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
         score: res.data.lead_score,
         reasons: res.data.score_reasons || [],
         topics: res.data.topics_asked || [],
+        parameterScores: res.data.parameter_scores || {},
+        weightedBreakdown: res.data.weighted_score_breakdown || {},
+        classificationReason: res.data.classification_reason || '',
       });
     } catch (err) {
       showToast('Failed to load history', 'error');
@@ -366,6 +354,9 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
         score: res.data.lead_score,
         reasons: res.data.score_reasons || [],
         topics: res.data.topics_asked || [],
+        parameterScores: res.data.parameter_scores || {},
+        weightedBreakdown: res.data.weighted_score_breakdown || {},
+        classificationReason: res.data.classification_reason || '',
       });
     } catch (err) {
       showToast('Failed to load contact history', 'error');
@@ -427,15 +418,12 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           onChange={(e) => setInterestFilter(e.target.value)}
           className="form-input"
           style={{ width: '170px' }}
-          title="How interested the caller seemed, based on what they did"
+          title="Lead classification based on weighted scoring"
         >
           <option value="">All Callers</option>
-          <option value="Hot Lead">🔥 Hot Lead</option>
-          <option value="Warm Lead">🟡 Warm Lead</option>
-          <option value="Time Pass">⏳ Time Pass</option>
-          <option value="Not Interested">Not Interested</option>
-          <option value="Unclassified">Unclassified</option>
-          <option value="Not Reached">— Not Reached</option>
+          <option value="HOT">HOT</option>
+          <option value="WARM">WARM</option>
+          <option value="COLD">COLD</option>
         </select>
       </div>
 
@@ -639,6 +627,12 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                 </span>
               </div>
 
+              {leadSummary.classificationReason && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '10px' }}>
+                  {leadSummary.classificationReason}
+                </div>
+              )}
+
               {leadSummary.reasons.length > 0 && (
                 <ul style={{ margin: '14px 0 0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   {leadSummary.reasons.map((r, i) => (
@@ -646,6 +640,29 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                   ))}
                 </ul>
               )}
+
+              {leadSummary.parameterScores && Object.keys(leadSummary.parameterScores).length > 0 && (
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                    Score breakdown
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {Object.entries(leadSummary.parameterScores).map(([key, val]) => {
+                      const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                      const weighted = leadSummary.weightedBreakdown?.[key] || 0;
+                      return (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem' }}>
+                          <span style={{ flex: '1 1 auto', color: 'var(--text-secondary)' }}>{label}</span>
+                          <span style={{ fontWeight: 600, minWidth: '30px', textAlign: 'right' }}>{val as number}</span>
+                          <span style={{ color: 'var(--text-muted)', minWidth: '50px', textAlign: 'right', fontSize: '0.72rem' }}>({weighted as number})</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+
 
               {leadSummary.topics.length > 0 && (
                 <div style={{ marginTop: '14px' }}>

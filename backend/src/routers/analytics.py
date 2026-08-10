@@ -145,7 +145,7 @@ def call_analytics(
     # by this exact label, so each row here links there instead.
     by_class = {label: 0 for label in CLASSIFICATIONS}
     for c in all_contacts:
-        label = per_contact.get(c.id, "Not Reached")
+        label = per_contact.get(c.id, "COLD")
         by_class[label] = by_class.get(label, 0) + 1
 
     total_contacts = len(all_contacts) or 1
