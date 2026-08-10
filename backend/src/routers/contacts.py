@@ -182,10 +182,17 @@ async def upload_excel(
         db.commit()
         db.refresh(batch)
 
-        # Insert contacts
+        # Insert contacts with automatic Round-Robin assignment
+        counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
+        counselor_count = len(counselors)
+        
         success_count = 0
-        for c in contacts:
+        for idx, c in enumerate(contacts):
             try:
+                assigned_id = None
+                if counselor_count > 0:
+                    assigned_id = counselors[idx % counselor_count].id
+
                 new_contact = Contact(
                     school_id=school_id,
                     batch_id=batch.id,
@@ -193,7 +200,8 @@ async def upload_excel(
                     phone_number=c["phone"],
                     email=c["email"],
                     notes=c["notes"],
-                    status="Pending"
+                    status="Pending",
+                    assigned_counselor_id=assigned_id
                 )
                 db.add(new_contact)
                 success_count += 1
@@ -842,6 +850,33 @@ def delete_counselor(
     db.delete(counselor)
     db.commit()
     return {"success": True, "message": "Counselor removed successfully"}
+
+@router.post("/counselors/auto-assign")
+def auto_assign_contacts(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    
+    counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
+    if not counselors:
+        raise HTTPException(status_code=400, detail="No onboarded counselors available for assignment")
+    
+    unassigned_contacts = db.query(Contact).filter(
+        Contact.school_id == school_id,
+        Contact.assigned_counselor_id.is_(None)
+    ).all()
+    
+    if not unassigned_contacts:
+        return {"success": True, "message": "All contacts are already assigned", "assigned_count": 0}
+        
+    counselor_count = len(counselors)
+    for idx, contact in enumerate(unassigned_contacts):
+        contact.assigned_counselor_id = counselors[idx % counselor_count].id
+        
+    db.commit()
+    return {"success": True, "message": f"Successfully auto-assigned {len(unassigned_contacts)} leads", "assigned_count": len(unassigned_contacts)}
+
 
 
 @router.get("/{id}")

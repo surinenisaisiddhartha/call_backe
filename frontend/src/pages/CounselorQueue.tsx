@@ -49,12 +49,26 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
   const [scheduledFor, setScheduledFor] = useState('');
   const [rescheduling, setRescheduling] = useState(false);
 
-  // Counselor Onboarding State
   const [showAddCounselor, setShowAddCounselor] = useState(false);
   const [cName, setCName] = useState('');
   const [cEmail, setCEmail] = useState('');
   const [cPhone, setCPhone] = useState('');
   const [savingCounselor, setSavingCounselor] = useState(false);
+
+  const [autoAssigning, setAutoAssigning] = useState(false);
+
+  const handleAutoAssign = async () => {
+    setAutoAssigning(true);
+    try {
+      const res = await api.post('/contacts/counselors/auto-assign');
+      showToast(res.data.message || 'Auto-assignment complete!', 'success');
+      fetchQueue();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to auto-assign leads'), 'error');
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
 
   const fetchQueue = async () => {
     setLoading(true);
@@ -385,6 +399,17 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                   ))}
                 </select>
               </div>
+
+              <button
+                onClick={handleAutoAssign}
+                className="btn btn-secondary"
+                disabled={autoAssigning || counselors.length === 0}
+                style={{ fontSize: '0.82rem', padding: '8px 14px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}
+                title="Automatically distribute unassigned leads among active counselors"
+              >
+                <RefreshCw size={14} className={autoAssigning ? "animate-spin" : ""} style={{ animation: autoAssigning ? 'spin 2s linear infinite' : 'none' }} />
+                Auto-Assign Leads
+              </button>
 
               <div style={{ display: 'flex', gap: '8px' }}>
                 {(['hot', 'warm', 'callback', 'all'] as const).map(tab => (
