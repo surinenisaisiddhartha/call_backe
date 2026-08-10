@@ -34,12 +34,7 @@ def _get_agent_id(db) -> Optional[str]:
     return get_or_create_local_agent()
 
 
-def _is_working_hours() -> bool:
-    """Return True if the current IST wall-clock time is within 09:00–16:00 (9 AM – 4 PM)."""
-    from datetime import timezone, timedelta
-    ist = timezone(timedelta(hours=5, minutes=30))
-    now_ist = datetime.now(ist)
-    return 9 <= now_ist.hour < 16
+from src.utils import is_working_hours
 
 
 class CampaignDialer:
@@ -70,7 +65,7 @@ class CampaignDialer:
         Can be called from an async or sync context (runs Retell calls in threads).
         Calls are restricted to 9:00 AM – 4:00 PM IST.
         """
-        if not _is_working_hours():
+        if not is_working_hours():
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist)
@@ -206,7 +201,7 @@ class CampaignDialer:
         # Safety guard — re-queue the contact and bail out if we have drifted
         # outside working hours (e.g. a campaign was running near 4 PM and the
         # last webhook-triggered slot freed after 4 PM).
-        if not _is_working_hours():
+        if not is_working_hours():
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist)

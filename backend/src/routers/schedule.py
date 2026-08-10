@@ -52,6 +52,13 @@ async def schedule_callback(
 
     scheduled_for = parse_iso_datetime(scheduled_for_str)
 
+    from src.utils import is_working_hours
+    if not is_working_hours(scheduled_for):
+        raise HTTPException(
+            status_code=400,
+            detail="Callbacks can only be scheduled during working hours (9:00 AM – 4:00 PM IST)."
+        )
+
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
@@ -196,6 +203,13 @@ async def reschedule_callback(
         raise HTTPException(status_code=400, detail="Missing scheduledFor")
 
     scheduled_for = parse_iso_datetime(scheduled_for_str)
+
+    from src.utils import is_working_hours
+    if not is_working_hours(scheduled_for):
+        raise HTTPException(
+            status_code=400,
+            detail="Callbacks can only be scheduled during working hours (9:00 AM – 4:00 PM IST)."
+        )
 
     callback = db.query(ScheduledCallback).filter(ScheduledCallback.id == id).first()
     if not callback:

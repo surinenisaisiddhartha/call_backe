@@ -448,11 +448,12 @@ def trigger_callback_call(contact_id: str):
     from datetime import datetime, timezone, timedelta
     import os, httpx
 
-    # Working hours guard: 9 AM \u2013 4 PM IST
-    ist = timezone(timedelta(hours=5, minutes=30))
-    now_ist = datetime.now(ist)
-    if not (9 <= now_ist.hour < 16):
-        print(f"[SCHEDULER] Skipping callback for {contact_id} \u2014 outside working hours ({now_ist.strftime('%H:%M')} IST). The 1-min sweep will retry when in-window.")
+    from src.utils import is_working_hours
+    if not is_working_hours():
+        # Get current time in IST for cleaner log formatting
+        from src.utils import get_ist_timezone
+        now_ist = datetime.now(get_ist_timezone())
+        print(f"[SCHEDULER] Skipping callback for {contact_id} — outside working hours ({now_ist.strftime('%H:%M')} IST). The 1-min sweep will retry when in-window.")
         return  # Row stays 'Scheduled'; the sweep fires it during business hours.
 
     db = SessionLocal()

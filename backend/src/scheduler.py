@@ -134,11 +134,9 @@ def _fire_pending_callbacks():
     import httpx
     from src.agent_manager import get_or_create_local_agent
 
-    # Working hours guard: 9 AM \u2013 4 PM IST
-    ist = timezone(timedelta(hours=5, minutes=30))
-    now_ist = datetime.now(ist)
-    if not (9 <= now_ist.hour < 16):
-        return  # Silently skip \u2014 rows stay Scheduled and will fire when in-window.
+    from src.utils import is_working_hours
+    if not is_working_hours():
+        return  # Silently skip — rows stay Scheduled and will fire when in-window.
 
     db = SessionLocal()
     try:

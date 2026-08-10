@@ -177,6 +177,13 @@ async def call_now(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    from src.utils import is_working_hours
+    if not is_working_hours():
+        raise HTTPException(
+            status_code=400,
+            detail="Calls can only be placed during working hours (9:00 AM – 4:00 PM IST)."
+        )
+
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
