@@ -825,6 +825,15 @@ def create_counselor(
     if existing:
         raise HTTPException(status_code=400, detail="Counselor with this email already exists")
 
+    temp_password = None
+    from src import cognito
+    if cognito.cognito_enabled():
+        try:
+            temp_password = cognito.create_school_user(payload.email, school_id)
+        except Exception as e:
+            print(f"[COUNSELOR ONBOARD] Cognito account creation failed: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to create login account: {str(e)}")
+
     new_counselor = Counselor(
         school_id=school_id,
         name=payload.name,
@@ -834,7 +843,11 @@ def create_counselor(
     db.add(new_counselor)
     db.commit()
     db.refresh(new_counselor)
-    return {"success": True, "counselor": {"id": new_counselor.id, "name": new_counselor.name, "email": new_counselor.email}}
+    return {
+        "success": True, 
+        "counselor": {"id": new_counselor.id, "name": new_counselor.name, "email": new_counselor.email},
+        "temp_password": temp_password
+    }
 
 @router.delete("/counselors/{id}")
 def delete_counselor(
@@ -847,6 +860,13 @@ def delete_counselor(
     if not counselor:
         raise HTTPException(status_code=404, detail="Counselor not found")
     
+    from src import cognito
+    if cognito.cognito_enabled():
+        try:
+            cognito.delete_school_user(counselor.email)
+        except Exception as e:
+            print(f"[COUNSELOR DELETION] Cognito account deletion failed: {e}")
+
     db.delete(counselor)
     db.commit()
     return {"success": True, "message": "Counselor removed successfully"}

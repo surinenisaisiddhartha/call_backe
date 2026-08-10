@@ -173,6 +173,13 @@ def resolve_school_for_email(db: Session, email: str):
     if school:
         return school
 
+    from src.db import Counselor
+    counselor = db.query(Counselor).filter(func.lower(Counselor.email) == email).first()
+    if counselor:
+        school = db.query(School).filter(School.id == counselor.school_id).first()
+        if school:
+            return school
+
     domain = email.rpartition("@")[2]
     if not domain or domain in _PUBLIC_EMAIL_DOMAINS:
         return None

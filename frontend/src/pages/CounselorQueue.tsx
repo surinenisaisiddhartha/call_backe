@@ -54,6 +54,8 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
   const [cEmail, setCEmail] = useState('');
   const [cPhone, setCPhone] = useState('');
   const [savingCounselor, setSavingCounselor] = useState(false);
+  const [counselorCredentials, setCounselorCredentials] = useState<{ email: string; password?: string | null; name: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const [autoAssigning, setAutoAssigning] = useState(false);
 
@@ -204,12 +206,22 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
     }
     setSavingCounselor(true);
     try {
-      await api.post('/contacts/counselors', {
+      const res = await api.post('/contacts/counselors', {
         name: cName,
         email: cEmail,
         phone_number: cPhone || null
       });
       showToast(`${cName} onboarded successfully!`, 'success');
+      
+      const tempPassword = res.data.temp_password;
+      if (tempPassword) {
+        setCounselorCredentials({
+          email: cEmail,
+          password: tempPassword,
+          name: cName
+        });
+      }
+
       setCName('');
       setCEmail('');
       setCPhone('');
@@ -732,6 +744,49 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Credentials Created Modal */}
+      {counselorCredentials && (
+        <div className="modal-overlay">
+          <div className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '480px', width: '100%', borderLeft: '4px solid var(--accent-success)' }}>
+            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700, marginBottom: '10px', color: 'var(--text-primary)' }}>
+              🎉 Counselor Login Created
+            </h3>
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '18px' }}>
+              An invitation email has been sent to **{counselorCredentials.name}** to set their password. Here are their temporary credentials:
+            </p>
+
+            <div style={{ background: 'var(--bg-tertiary)', padding: '16px', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', border: '1px solid var(--border-color)' }}>
+              <div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Email Address</span>
+                <span style={{ fontSize: '0.92rem', fontWeight: 600 }}>{counselorCredentials.email}</span>
+              </div>
+              {counselorCredentials.password && (
+                <div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Temporary Password</span>
+                  <span style={{ fontSize: '0.92rem', fontWeight: 700, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>{counselorCredentials.password}</span>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              {counselorCredentials.password && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`Email: ${counselorCredentials.email}\nPassword: ${counselorCredentials.password}`);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                >
+                  {copied ? 'Copied!' : 'Copy Credentials'}
+                </button>
+              )}
+              <button className="btn btn-primary" onClick={() => setCounselorCredentials(null)}>Done</button>
+            </div>
+          </div>
         </div>
       )}
 
