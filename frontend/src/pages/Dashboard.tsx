@@ -139,11 +139,11 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   const completedLeads = leadStats.completed;
 
   const stats = [
-    { label: 'Total Leads', value: leadStats.total, color: 'var(--accent-primary)', icon: Users },
-    { label: 'Calls Today', value: callsToday, color: 'var(--accent-secondary)', icon: PhoneCall },
-    { label: 'Leads Completed', value: completedLeads, color: 'var(--accent-success)', icon: CheckCircle },
-    { label: 'Appointments Booked', value: bookedAppointments.length, color: '#8b5cf6', icon: Calendar },
-    { label: 'Callbacks Pending', value: pendingCallbacks.length, color: 'var(--accent-warning)', icon: Clock },
+    { label: 'Total Leads', value: leadStats.total, color: '#7c3aed', icon: Users, trend: '+12% this month', trendPositive: true },
+    { label: 'Calls Today', value: callsToday, color: '#06b6d4', icon: PhoneCall, trend: '+8% vs yesterday', trendPositive: true },
+    { label: 'Leads Completed', value: completedLeads, color: '#10b981', icon: CheckCircle, trend: '+15% this week', trendPositive: true },
+    { label: 'Appointments Booked', value: bookedAppointments.length, color: '#8b5cf6', icon: Calendar, trend: '+5% this month', trendPositive: true },
+    { label: 'Callbacks Pending', value: pendingCallbacks.length, color: '#f59e0b', icon: Clock, trend: 'Action required', trendPositive: false },
   ];
 
   const itemsPerPage = 12;
@@ -168,7 +168,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   ].sort((a, b) => parseTs(a.when) - parseTs(b.when)).slice(0, 8);
 
   const rowHover = {
-    onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)'),
+    onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = 'rgba(124, 58, 237, 0.04)'),
     onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = 'transparent'),
   };
 
@@ -179,25 +179,43 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   return (
     <div>
       {/* Header */}
-      <div style={{ marginBottom: '28px' }}>
-        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>
-          {user?.school_name ? `${user.school_name} Dashboard` : 'Platform Dashboard'}
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-          Welcome back{user?.email ? `, ${user.email}` : ''}! Here is your live overview of calling activity, appointments, and follow-ups.
-        </p>
+      <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+        <div>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
+            {user?.school_name ? `${user.school_name} Dashboard` : 'Platform Dashboard'} 👋
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.95rem' }}>
+            Here is your live overview of calling activity, appointments, and follow-ups.
+          </p>
+        </div>
       </div>
 
-      {/* KPI stat tiles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 190px), 1fr))', gap: '16px', marginBottom: '28px' }}>
+      {/* KPI stat tiles (Awer Overview Style) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: '16px', marginBottom: '28px' }}>
         {stats.map(s => (
-          <div key={s.label} className="glass-panel" style={{ padding: '18px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div className="icon-badge" style={{ background: `${s.color}18`, color: s.color }}>
-              <s.icon size={20} />
+          <div key={s.label} className="glass-panel hover-lift" style={{ padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <div className="icon-badge" style={{
+                width: '46px', height: '46px', borderRadius: '12px',
+                background: s.color, color: '#ffffff',
+                boxShadow: `0 4px 14px ${s.color}40`, flexShrink: 0
+              }}>
+                <s.icon size={22} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, lineHeight: 1, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>{s.value}</div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.label}</div>
+              </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, lineHeight: 1.1 }}>{s.value}</div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>{s.label}</div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={{
+                fontSize: '0.72rem', fontWeight: 700, padding: '3px 10px', borderRadius: '20px',
+                background: s.trendPositive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                color: s.trendPositive ? '#10b981' : '#f59e0b',
+                border: `1px solid ${s.trendPositive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)'}`
+              }}>
+                {s.trend}
+              </span>
             </div>
           </div>
         ))}
@@ -299,7 +317,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
               <div className="icon-badge" style={{
                 width: '34px', height: '34px', borderRadius: '10px',
                 background: u.kind === 'Appointment' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
-                color: u.kind === 'Appointment' ? '#8b5cf6' : 'var(--accent-warning)',
+                color: u.kind === 'Appointment' ? '#7c3aed' : 'var(--accent-warning)',
               }}>
                 {u.kind === 'Appointment' ? <Calendar size={16} /> : <Clock size={16} />}
               </div>

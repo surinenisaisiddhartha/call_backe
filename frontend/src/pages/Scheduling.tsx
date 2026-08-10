@@ -457,7 +457,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
             const hasItems = itemsOnDay.length > 0;
             const isSelected = selectedDateFilter === dateStr;
             const isToday = new Date().toISOString().split('T')[0] === dateStr;
-            const dotColor = subTab === 'callbacks' ? '#8b5cf6' : '#f59e0b';
+            const dotColor = subTab === 'callbacks' ? '#7c3aed' : '#f59e0b';
 
             return (
               <div
@@ -578,7 +578,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
             const d = new Date(dayDrawerDate + 'T12:00:00');
             const headerStr = d.toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' });
             return (
-              <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px', borderLeft: `4px solid ${subTab === 'callbacks' ? '#8b5cf6' : '#f59e0b'}` }}>
+              <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px', borderLeft: `4px solid ${subTab === 'callbacks' ? '#7c3aed' : '#f59e0b'}` }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h4 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: '1.1rem' }}>{headerStr}</h4>
                   <button onClick={() => { setDayDrawerOpen(false); setDayDrawerDate(null); setSelectedDateFilter(null); }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={18} /></button>

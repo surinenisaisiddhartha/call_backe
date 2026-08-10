@@ -44,7 +44,7 @@ export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setTheme] = useState<'dark' | 'light'>(
-    (localStorage.getItem('theme') as 'dark' | 'light') || 'light'
+    (localStorage.getItem('theme') as 'dark' | 'light') || 'dark'
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
     localStorage.getItem('sidebar_collapsed') === '1'
@@ -359,7 +359,7 @@ export default function App() {
         pointerEvents: 'none',
         userSelect: 'none'
       }}>
-        <div style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', padding: '6px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(59, 130, 246, 0.25)', opacity: 0.8 }}>
+        <div style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', padding: '6px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(124, 58, 237, 0.25)', opacity: 0.8 }}>
           <MessageSquare style={{ color: '#fff', flexShrink: 0 }} size={18} />
         </div>
         <span style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>EnquiryCall</span>

@@ -162,8 +162,8 @@ function CallAnalysisPanel({ a, sentiment }: { a: CallAnalysis; sentiment?: stri
 
   return (
     <div style={{
-      background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.18)',
-      padding: '12px 14px', borderRadius: '8px', marginBottom: '12px',
+      background: 'rgba(124, 58, 237, 0.04)', border: '1px solid rgba(124, 58, 237, 0.12)',
+      padding: '14px 16px', borderRadius: '12px', marginBottom: '12px',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         <strong style={{ fontSize: '0.85rem' }}>Call analysis</strong>
@@ -176,11 +176,11 @@ function CallAnalysisPanel({ a, sentiment }: { a: CallAnalysis; sentiment?: stri
                 title="How seriously they engaged — Casual means pleasant but not actually pursuing it" />
         )}
         {a.caller_type && (
-          <span style={{ padding: '2px 9px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600, background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}
+          <span style={{ padding: '2px 9px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600, background: 'rgba(124, 58, 237, 0.06)', color: 'var(--text-secondary)' }}
                 title="Who we actually reached">{a.caller_type}</span>
         )}
         {a.primary_topic && a.primary_topic !== 'NoQuestions' && (
-          <span style={{ padding: '2px 9px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600, background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}
+          <span style={{ padding: '2px 9px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600, background: 'rgba(124, 58, 237, 0.06)', color: 'var(--text-secondary)' }}
                 title="What they mainly came to ask about">{a.primary_topic}</span>
         )}
         {sentiment && (
@@ -591,13 +591,13 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             top: 0,
             right: 0,
             bottom: 0,
-            width: '500px',
-            background: 'var(--sidebar-bg)',
-            backdropFilter: 'blur(30px)',
-            borderLeft: '1px solid var(--border-color)',
-            boxShadow: '-10px 0 30px rgba(0,0,0,0.5)',
+            width: '520px',
+            background: 'var(--glass-bg)',
+            backdropFilter: 'blur(20px)',
+            borderLeft: '1px solid rgba(124, 58, 237, 0.12)',
+            boxShadow: '-8px 0 40px rgba(124, 58, 237, 0.08)',
             zIndex: 1050,
-            padding: '30px',
+            padding: '32px',
             overflowY: 'auto',
             transition: 'var(--transition-smooth)'
           }}
@@ -614,7 +614,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             </button>
           </div>
 
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '30px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '28px', borderBottom: '1px solid rgba(124, 58, 237, 0.10)', paddingBottom: '18px', lineHeight: 1.7 }}>
             <div>Phone: {selectedContact.phone_number}</div>
             <div>Email: {selectedContact.email || 'None'}</div>
             <div style={{ marginTop: '8px' }}>Notes: {selectedContact.notes || 'No custom notes.'}</div>
@@ -628,35 +628,36 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
               checked at a glance. */}
           {!loadingHistory && leadSummary && (
             <div style={{
-              background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.18)',
-              borderRadius: '10px', padding: '14px', marginBottom: '18px',
+              background: 'rgba(124, 58, 237, 0.04)', border: '1px solid rgba(124, 58, 237, 0.12)',
+              borderRadius: '14px', padding: '18px', marginBottom: '20px',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                 <InterestBadge level={leadSummary.classification as Contact['interest_level']} />
-                <span style={{ fontSize: '1.6rem', fontWeight: 800, lineHeight: 1 }}>
+                <span style={{ fontSize: '1.8rem', fontWeight: 800, lineHeight: 1, color: 'var(--accent-primary)' }}>
                   {leadSummary.score}
                   <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)' }}> /100</span>
                 </span>
               </div>
 
               {leadSummary.reasons.length > 0 && (
-                <ul style={{ margin: '12px 0 0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <ul style={{ margin: '14px 0 0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   {leadSummary.reasons.map((r, i) => (
-                    <li key={i} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{r}</li>
+                    <li key={i} style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{r}</li>
                   ))}
                 </ul>
               )}
 
               {leadSummary.topics.length > 0 && (
-                <div style={{ marginTop: '12px' }}>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '5px' }}>
+                <div style={{ marginTop: '14px' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
                     Has asked about
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     {leadSummary.topics.map(topic => (
                       <span key={topic} style={{
-                        padding: '2px 9px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600,
-                        background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)',
+                        padding: '3px 10px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600,
+                        background: 'rgba(124, 58, 237, 0.06)', color: 'var(--accent-primary)',
+                        border: '1px solid rgba(124, 58, 237, 0.12)',
                       }}>{topic}</span>
                     ))}
                   </div>
@@ -715,21 +716,22 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Asked about:</span>
                         {attempt.detected_topics.map(topic => (
                           <span key={topic} style={{
-                            padding: '2px 8px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600,
-                            background: 'rgba(59,130,246,0.12)', color: 'var(--accent-primary)',
+                            padding: '3px 9px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600,
+                            background: 'rgba(124, 58, 237, 0.08)', color: 'var(--accent-primary)',
+                            border: '1px solid rgba(124, 58, 237, 0.12)',
                           }}>{topic}</span>
                         ))}
                       </div>
                     )}
 
                     {attempt.summary && (
-                      <div style={{ background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '6px', fontSize: '0.85rem', marginBottom: '12px', borderLeft: '3px solid var(--accent-primary)' }}>
+                      <div style={{ background: 'rgba(124, 58, 237, 0.03)', padding: '12px', borderRadius: '10px', fontSize: '0.85rem', marginBottom: '12px', borderLeft: '3px solid var(--accent-primary)' }}>
                         <strong>Summary:</strong> {attempt.summary}
                       </div>
                     )}
 
                     {attempt.transcript && (
-                      <div style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '6px', maxHeight: '150px', overflowY: 'auto' }}>
+                      <div style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '10px', maxHeight: '150px', overflowY: 'auto', border: '1px solid var(--border-color)' }}>
                         {attempt.transcript}
                       </div>
                     )}

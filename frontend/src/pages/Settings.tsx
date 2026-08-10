@@ -406,7 +406,7 @@ export default function Settings({ showToast }: SettingsProps) {
           {/* Knowledge Base Panel */}
           <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Database size={18} style={{ color: '#8b5cf6' }} />
+              <Database size={18} style={{ color: '#7c3aed' }} />
               AI Knowledge Base
             </h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', margin: 0 }}>
@@ -473,7 +473,7 @@ export default function Settings({ showToast }: SettingsProps) {
               </div>
               {kbSearchResult && (
                 <div style={{ marginTop: '12px', background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: '10px', padding: '14px', fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-                  <div style={{ fontWeight: 700, color: '#8b5cf6', marginBottom: '6px', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Result</div>
+                  <div style={{ fontWeight: 700, color: '#7c3aed', marginBottom: '6px', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Result</div>
                   {kbSearchResult}
                 </div>
               )}

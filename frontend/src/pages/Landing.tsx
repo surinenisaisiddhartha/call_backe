@@ -171,7 +171,7 @@ export default function Landing({ onLoginClick }: LandingProps) {
               icon: <Globe size={28} />,
               title: "Multi-School Tenancy",
               desc: "Perfect for education groups. Manage multiple campuses securely, each with their own knowledge base, calendar, and dedicated agent.",
-              color: "#3b82f6"
+              color: "#7c3aed"
             }
           ].map((feat, idx) => (
             <div key={idx} className="glass-panel hover-lift" style={{ 

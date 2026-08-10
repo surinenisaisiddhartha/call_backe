@@ -356,10 +356,10 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', flexShrink: 0 }}>
                     {[
                       { label: 'Done', val: s.completed, color: '#10b981' },
-                      { label: 'Calling', val: s.calling, color: '#6366f1' },
+                      { label: 'Calling', val: s.calling, color: '#7c3aed' },
                       { label: 'Pending', val: s.pending, color: '#94a3b8' },
                       { label: 'Reschedule', val: s.needs_reschedule, color: '#f59e0b' },
-                      { label: 'Scheduled', val: s.scheduled, color: '#8b5cf6' },
+                      { label: 'Scheduled', val: s.scheduled, color: '#7c3aed' },
                       { label: 'Failed', val: s.failed, color: '#ef4444' },
                     ].map(stat => stat.val > 0 && (
                       <span key={stat.label} style={{
@@ -413,7 +413,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                         { icon: CheckCircle, label: 'Completed', val: s.completed, color: 'var(--accent-success)' },
                         { icon: Phone, label: 'Calling', val: s.calling, color: 'var(--accent-secondary)' },
                         { icon: AlertCircle, label: 'Needs Action', val: s.needs_reschedule, color: 'var(--accent-warning)' },
-                        { icon: Calendar, label: 'Scheduled', val: s.scheduled, color: '#8b5cf6' },
+                        { icon: Calendar, label: 'Scheduled', val: s.scheduled, color: '#7c3aed' },
                         { icon: BarChart2, label: 'Answer Rate', val: `${Math.round(((s.completed + s.scheduled) / total) * 100)}%`, color: 'var(--accent-primary)' },
                       ].map(({ icon: Icon, label, val, color }) => (
                         <div key={label} style={{ background: 'var(--bg-secondary)', borderRadius: '10px', padding: '12px', textAlign: 'center' }}>
