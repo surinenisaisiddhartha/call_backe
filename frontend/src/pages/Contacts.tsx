@@ -72,11 +72,86 @@ interface ContactsProps {
  * Classification is purely score-driven using an 8-parameter weighted model.
  * 75–100 = HOT, 50–74.99 = WARM, 0–49.99 = COLD.
  */
+/**
+ * Circular SVG arc gauge for lead score — shows Cold/Warm/Hot arcs with
+ * the current score as an animated needle overlay.
+ */
+function ScoreGauge({ score, level }: { score: number; level: string }) {
+  const r = 70;
+  const cx = 90;
+  const cy = 90;
+  const stroke = 12;
+  const full = Math.PI * r;
+  // Score 0-100 → arc fill 0-π (half circle)
+  const fill = (Math.max(0, Math.min(100, score)) / 100) * full;
+
+  const arcColor = level === 'HOT' ? '#f97316' : level === 'WARM' ? '#f59e0b' : '#94a3b8';
+
+  const labelY = { HOT: '#dc2626', WARM: '#d97706', COLD: '#64748b' };
+  const levelColor = labelY[level as keyof typeof labelY] || '#64748b';
+  const levelEmoji = { HOT: '🔥', WARM: '🌡️', COLD: '❄️' }[level] || '';
+
+  return (
+    <div className="score-gauge-wrap">
+      <svg width="180" height="100" viewBox="0 0 180 100">
+        {/* Background arc */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none" stroke="#f1f5f9" strokeWidth={stroke} strokeLinecap="round"
+        />
+        {/* Cold zone (0-40) */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none" stroke="#e2e8f0" strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={`${0.4 * full} ${full}`} strokeDashoffset={0}
+        />
+        {/* Warm zone (40-70) */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none" stroke="#fde68a" strokeWidth={stroke}
+          strokeDasharray={`${0.3 * full} ${full}`} strokeDashoffset={-0.4 * full}
+        />
+        {/* Hot zone (70-100) */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none" stroke="#fed7aa" strokeWidth={stroke}
+          strokeDasharray={`${0.3 * full} ${full}`} strokeDashoffset={-0.7 * full}
+        />
+        {/* Score fill arc */}
+        <path
+          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+          fill="none" stroke={arcColor} strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={`${fill} ${full}`} strokeDashoffset={0}
+          style={{ transition: 'stroke-dasharray 0.8s cubic-bezier(0.4,0,0.2,1)' }}
+        />
+        {/* Score label */}
+        <text x={cx} y={cy - 8} textAnchor="middle" fontSize="28" fontWeight="800"
+          fill={arcColor} fontFamily="Outfit, sans-serif">{score}</text>
+        <text x={cx} y={cy + 6} textAnchor="middle" fontSize="9" fontWeight="600"
+          fill="#94a3b8" letterSpacing="1" fontFamily="Inter, sans-serif">LEAD SCORE</text>
+        {/* Zone labels */}
+        <text x={cx - r + 2} y={cy + 18} fontSize="8" fill="#94a3b8" fontFamily="Inter">Cold</text>
+        <text x={cx - 8} y={cy + 18} fontSize="8" fill="#d97706" fontFamily="Inter">Warm</text>
+        <text x={cx + r - 22} y={cy + 18} fontSize="8" fill="#ea580c" fontFamily="Inter">Hot</text>
+      </svg>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+        <span style={{ fontSize: '1.05rem' }}>{levelEmoji}</span>
+        <span style={{ fontWeight: 700, fontSize: '0.92rem', color: levelColor }}>
+          {level === 'HOT' ? 'Hot Lead' : level === 'WARM' ? 'Warm Lead' : 'Cold Lead'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Lead classification badge: HOT / WARM / COLD.
+ */
 function InterestBadge({ level, score, reasons }: { level: Contact['interest_level']; score?: number; reasons?: string[] }) {
   const styles: Record<string, { bg: string; fg: string; label: string; title: string }> = {
-    'HOT':  { bg: 'rgba(239, 68, 68, 0.12)',   fg: 'var(--accent-error)',   label: 'HOT',  title: 'Score 75–100: Strong conversion, engagement, and interest signals' },
-    'WARM': { bg: 'rgba(245, 158, 11, 0.14)',  fg: 'var(--accent-warning)', label: 'WARM', title: 'Score 50–74: Moderate engagement, potential for conversion' },
-    'COLD': { bg: 'rgba(100, 116, 139, 0.14)', fg: 'var(--text-secondary)', label: 'COLD', title: 'Score 0–49: Low engagement or insufficient conversion signals' },
+    'HOT':  { bg: '#fef2f2', fg: '#dc2626', label: 'HOT',  title: 'Score 75–100: Strong conversion, engagement, and interest signals' },
+    'WARM': { bg: '#fffbeb', fg: '#d97706', label: 'WARM', title: 'Score 50–74: Moderate engagement, potential for conversion' },
+    'COLD': { bg: '#f1f5f9', fg: '#64748b', label: 'COLD', title: 'Score 0–49: Low engagement or insufficient conversion signals' },
   };
   const s = styles[level] || styles['COLD'];
   const detail = reasons && reasons.length
@@ -88,8 +163,8 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
       style={{
         display: 'inline-flex', alignItems: 'center', gap: '6px',
         padding: '3px 10px', borderRadius: '999px',
-        background: s.bg, color: s.fg, fontSize: '0.78rem', fontWeight: 700,
-        whiteSpace: 'nowrap', cursor: 'help',
+        background: s.bg, color: s.fg, fontSize: '0.75rem', fontWeight: 700,
+        whiteSpace: 'nowrap', cursor: 'help', border: `1px solid ${s.bg}`,
       }}
     >
       {s.label}
@@ -590,16 +665,75 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             transition: 'var(--transition-smooth)'
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.4rem', fontWeight: 700 }}>
-              {selectedContact.name}
-            </h3>
-            <button 
-              onClick={() => setSelectedContact(null)} 
-              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+          {/* Response AI CRM style header */}
+          <div style={{ marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid var(--border-color)' }}>
+            {/* Back button */}
+            <button
+              onClick={() => setSelectedContact(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '10px', padding: 0 }}
             >
-              <X size={24} />
+              ← All leads
             </button>
+
+            {/* Title row */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Call with{' '}
+                  <span style={{ color: 'var(--accent-primary)' }}>{selectedContact.name}</span>
+                </h3>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {selectedContact.phone_number}
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedContact(null)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Status pills */}
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px' }}>
+              <span className="call-status-pill" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                <span className="call-status-pill-dot" style={{ background: '#22c55e' }} />
+                Completed
+              </span>
+              {leadSummary && (
+                <span className="call-status-pill" style={{ background: '#f5f3ff', color: '#7c3aed', borderColor: '#ddd6fe' }}>
+                  <span className="call-status-pill-dot" style={{ background: '#7c3aed' }} />
+                  {leadSummary.classification === 'HOT' ? 'Priority Callback' : 'Counselling Callback'}
+                </span>
+              )}
+              {leadSummary && (
+                <span className="call-status-pill" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  {leadSummary.classification === 'HOT' ? '🔥 Hot' : leadSummary.classification === 'WARM' ? '🌡️ Warm' : '❄️ Cold'}
+                </span>
+              )}
+            </div>
+
+            {/* Call meta strip */}
+            {attempts.length > 0 && (
+              <div className="call-meta-row">
+                <div className="call-meta-item">
+                  <label>STARTED</label>
+                  <span>{formatDateTime(attempts[0].started_at)}</span>
+                </div>
+                <div className="call-meta-item">
+                  <label>DURATION</label>
+                  <span>{attempts[0].duration_sec ? `${attempts[0].duration_sec}s` : '—'}</span>
+                </div>
+                <div className="call-meta-item">
+                  <label>DESTINATION</label>
+                  <span>📞 {selectedContact.phone_number}</span>
+                </div>
+                <div className="call-meta-item">
+                  <label>AGENT</label>
+                  <span>AI Agent</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '28px', borderBottom: '1px solid rgba(124, 58, 237, 0.10)', paddingBottom: '18px', lineHeight: 1.7 }}>
@@ -610,78 +744,133 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
 
           <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', marginBottom: '16px' }}>Outbound History</h4>
 
-          {/* The standing judgement for this lead, above the call list. The
-              calls are the evidence; this is the conclusion — and the reasons
-              are spelled out rather than hidden in a tooltip, so it can be
-              checked at a glance. */}
-          {!loadingHistory && leadSummary && (
-            <div style={{
-              background: 'rgba(124, 58, 237, 0.04)', border: '1px solid rgba(124, 58, 237, 0.12)',
-              borderRadius: '14px', padding: '18px', marginBottom: '20px',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-                <InterestBadge level={leadSummary.classification as Contact['interest_level']} />
-                <span style={{ fontSize: '1.8rem', fontWeight: 800, lineHeight: 1, color: 'var(--accent-primary)' }}>
-                  {leadSummary.score}
-                  <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)' }}> /100</span>
-                </span>
-              </div>
+          {/* Call detail: Response AI CRM style */}
+          {!loadingHistory && leadSummary && (() => {
+            const paramScores = leadSummary.parameterScores || {};
+            const weightedBreakdown = leadSummary.weightedBreakdown || {};
+            const totalWeighted = Object.values(weightedBreakdown).reduce((a, b) => a + b, 0);
+            const lastAttempt = attempts[0];
+            const nextAction = lastAttempt?.analysis?.recommended_next_step || leadSummary.classificationReason;
 
-              {leadSummary.classificationReason && (
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '10px' }}>
-                  {leadSummary.classificationReason}
-                </div>
-              )}
+            // Build parameter labels
+            const PARAM_LABELS: Record<string, string> = {
+              stated_interest: 'Stated interest',
+              preference_for_us: 'Preference for us',
+              urgency: 'Urgency',
+              counsellor_requested: 'Counsellor requested',
+              engagement: 'Engagement',
+              application_progress: 'Application progress',
+              sentiment: 'Sentiment',
+              follow_up_intent: 'Follow-up intent',
+            };
 
-              {leadSummary.reasons.length > 0 && (
-                <ul style={{ margin: '14px 0 0', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {leadSummary.reasons.map((r, i) => (
-                    <li key={i} style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{r}</li>
-                  ))}
-                </ul>
-              )}
+            const PARAM_VALUE_LABELS: Record<string, Record<number, string>> = {
+              stated_interest: { 4: 'Interested', 2: 'Curious', 0: 'None' },
+              preference_for_us: { 4: 'First Choice', 2: 'Considering', 0: 'None' },
+              urgency: { 3: 'Within 30 Days', 2: 'Next Semester', 1: 'Exploring', 0: 'None' },
+              counsellor_requested: { 3: 'Yes', 0: 'No' },
+              engagement: { 3: 'Highly Engaged', 2: 'Moderately Engaged', 1: 'Low', 0: 'Not Engaged' },
+              application_progress: { 3: 'Applied', 2: 'In Progress', 1: 'Not Started', 0: 'None' },
+            };
 
-              {leadSummary.parameterScores && Object.keys(leadSummary.parameterScores).length > 0 && (
-                <div style={{ marginTop: '12px' }}>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-                    Score breakdown
+            return (
+              <div style={{ marginBottom: '20px' }}>
+                {/* Two-column: gauge left, bars right */}
+                <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: '16px', alignItems: 'start' }}>
+                  {/* Score gauge */}
+                  <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px 8px' }}>
+                    <ScoreGauge score={leadSummary.score} level={leadSummary.classification} />
+                    {leadSummary.classificationReason && (
+                      <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4, marginTop: '10px', padding: '0 4px', textAlign: 'center' }}>
+                        {leadSummary.classificationReason}
+                      </p>
+                    )}
+                    {/* Cold/Warm/Hot legend pills */}
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginTop: '12px' }}>
+                      {(['Cold', 'Warm', 'Hot'] as const).map(tier => (
+                        <div key={tier} style={{
+                          padding: '4px 8px', borderRadius: '6px', fontSize: '0.68rem', fontWeight: 600, textAlign: 'center', lineHeight: 1.3,
+                          background: tier === 'Hot' && leadSummary.classification === 'HOT' ? '#ea580c'
+                            : tier === 'Warm' && leadSummary.classification === 'WARM' ? '#f59e0b'
+                            : tier === 'Cold' && leadSummary.classification === 'COLD' ? '#64748b' : '#f1f5f9',
+                          color: (
+                            (tier === 'Hot' && leadSummary.classification === 'HOT') ||
+                            (tier === 'Warm' && leadSummary.classification === 'WARM') ||
+                            (tier === 'Cold' && leadSummary.classification === 'COLD')
+                          ) ? 'white' : 'var(--text-muted)',
+                        }}>
+                          {tier}
+                          <div style={{ opacity: 0.8, fontSize: '0.6rem', fontWeight: 400 }}>
+                            {tier === 'Cold' ? 'Low priority' : tier === 'Warm' ? 'Nurture & follow up' : 'Call immediately'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    {Object.entries(leadSummary.parameterScores).map(([key, val]) => {
-                      const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                      const weighted = leadSummary.weightedBreakdown?.[key] || 0;
+
+                  {/* Parameter score bars */}
+                  <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-primary)' }}>What drove this score</span>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>bar width = weight × fill = earned</span>
+                    </div>
+
+                    {Object.keys(paramScores).length > 0 ? Object.entries(paramScores).map(([key, rawVal]) => {
+                      const val = rawVal as number;
+                      const weighted = weightedBreakdown[key] || 0;
+                      const label = PARAM_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                      const paramMax = Math.max(...Object.values(paramScores).map(v => v as number), 1);
+                      const barPct = Math.round((val / paramMax) * 100);
+                      const valueLabel = PARAM_VALUE_LABELS[key]?.[val] ?? String(val);
                       return (
-                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.78rem' }}>
-                          <span style={{ flex: '1 1 auto', color: 'var(--text-secondary)' }}>{label}</span>
-                          <span style={{ fontWeight: 600, minWidth: '30px', textAlign: 'right' }}>{val as number}</span>
-                          <span style={{ color: 'var(--text-muted)', minWidth: '50px', textAlign: 'right', fontSize: '0.72rem' }}>({weighted as number})</span>
+                        <div className="score-param-bar-row" key={key}>
+                          <span className="score-param-label">{label}</span>
+                          <div className="score-param-bar-track">
+                            <div className="score-param-bar-fill" style={{ width: `${barPct}%` }} />
+                          </div>
+                          <span className="score-param-value-label">{valueLabel}</span>
+                          <span className="score-param-points">+{typeof weighted === 'number' ? Math.round(weighted * 10) / 10 : weighted}</span>
                         </div>
                       );
-                    })}
+                    }) : (
+                      leadSummary.reasons.length > 0 && (
+                        <ul style={{ margin: 0, paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {leadSummary.reasons.map((r, i) => (
+                            <li key={i} style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{r}</li>
+                          ))}
+                        </ul>
+                      )
+                    )}
+
+                    {/* Recommended next action */}
+                    {nextAction && (
+                      <div className="rec-action-box">
+                        <div className="rec-action-label">
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><circle cx="5" cy="5" r="5"/></svg>
+                          RECOMMENDED NEXT ACTION
+                        </div>
+                        <div className="rec-action-text">{nextAction}</div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
 
-
-
-              {leadSummary.topics.length > 0 && (
-                <div style={{ marginTop: '14px' }}>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
-                    Has asked about
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {/* Topics asked about */}
+                {leadSummary.topics.length > 0 && (
+                  <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>Has asked about:</span>
                     {leadSummary.topics.map(topic => (
                       <span key={topic} style={{
-                        padding: '3px 10px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600,
-                        background: 'rgba(124, 58, 237, 0.06)', color: 'var(--accent-primary)',
-                        border: '1px solid rgba(124, 58, 237, 0.12)',
+                        padding: '3px 10px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600,
+                        background: 'rgba(34, 197, 94, 0.08)', color: 'var(--accent-primary)',
+                        border: '1px solid rgba(34, 197, 94, 0.2)',
                       }}>{topic}</span>
                     ))}
                   </div>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            );
+          })()}
 
           {loadingHistory ? (
             <div style={{ textAlign: 'center', padding: '20px' }}>

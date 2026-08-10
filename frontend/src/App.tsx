@@ -11,9 +11,10 @@ import Schools from './pages/Schools';
 import Insights from './pages/Insights';
 import CounselorQueue from './pages/CounselorQueue';
 import {
-  Users, Settings as SettingsIcon, LogOut, MessageSquare,
+  Users, Settings as SettingsIcon, LogOut,
   BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard,
-  PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp, Headphones
+  PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp, Headphones,
+  Phone, FileText, ChevronRight
 } from 'lucide-react';
 type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'counselor' | 'scheduling' | 'insights' | 'settings' | 'schools';
 
@@ -230,114 +231,134 @@ export default function App() {
   }
 
   const navItems: { tab: Tab; icon: React.ReactNode; label: string }[] = [
-    { tab: 'dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
-    { tab: 'counselor', icon: <Headphones size={20} />, label: 'Counselor Queue' },
-    { tab: 'campaigns', icon: <BarChart2 size={20} />, label: 'Campaigns' },
-    { tab: 'contacts', icon: <Users size={20} />, label: 'Leads Directory' },
-    { tab: 'scheduling', icon: <CalendarCheck size={20} />, label: 'Scheduling' },
-    { tab: 'insights', icon: <TrendingUp size={20} />, label: 'Call Insights' },
+    { tab: 'dashboard',  icon: <LayoutDashboard size={18} />, label: 'Overview' },
+    { tab: 'counselor',  icon: <Headphones size={18} />,      label: 'Follow-ups' },
+    { tab: 'campaigns',  icon: <BarChart2 size={18} />,       label: 'Campaigns' },
+    { tab: 'contacts',   icon: <Users size={18} />,           label: 'Leads' },
+    { tab: 'scheduling', icon: <CalendarCheck size={18} />,   label: 'Scheduling' },
+    { tab: 'insights',   icon: <TrendingUp size={18} />,      label: 'Reports' },
   ];
 
   if (userRole === 'admin') {
-    navItems.push({ tab: 'schools', icon: <SchoolIcon size={20} />, label: 'Schools' });
-    navItems.push({ tab: 'settings', icon: <SettingsIcon size={20} />, label: 'System Settings' });
+    navItems.push({ tab: 'schools',  icon: <SchoolIcon size={18} />,   label: 'Schools' });
+    navItems.push({ tab: 'settings', icon: <SettingsIcon size={18} />, label: 'Settings' });
   }
+
+  // User initials for avatar
+  const userInitials = (() => {
+    const name = user?.school_name || user?.email || 'U';
+    return name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+  })();
 
   return (
     <div className="app-container">
-      {/* Global Top Header */}
-      <header className="top-header" style={{
-        height: '74px',
-        background: 'var(--bg-primary)',
-        borderBottom: '1px solid var(--border-color)',
-        padding: '0 30px'
-      }}>
-        <div className="left-section" style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <div className="header-brand-label" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', overflow: 'hidden' }}>
-              {schoolLogo ? (
-                <img src={schoolLogo.startsWith('http') ? schoolLogo : `http://localhost:5000${schoolLogo}`} alt="School Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              ) : !schoolName && userRole === 'admin' ? (
-                <img src="https://ui-avatars.com/api/?name=RI&background=4f46e5&color=fff&rounded=true&bold=true" alt="Response Informatics Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              ) : (
-                <SchoolIcon size={20} />
-              )}
+      {/* Global Top Header — Response AI style */}
+      <header className="top-header">
+        <div className="left-section">
+          {/* Response AI brand */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'linear-gradient(135deg,#16a34a,#22c55e)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" fill="white"/>
+              </svg>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', marginBottom: '2px', fontWeight: 600 }}>
-                {schoolName ? 'School Workspace' : 'Platform Access'}
-              </div>
-              <div style={{ fontWeight: 600, fontSize: '1.1rem', color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
-                {schoolName || (userRole === 'admin' ? 'Admin Console' : user?.email || '—')}
-              </div>
+            <div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>Response AI</div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '1px' }}>Admissions CRM</div>
             </div>
           </div>
-
         </div>
 
-        <div className="right-section" style={{ display: 'flex', alignItems: 'center' }}>
-          <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.2, paddingLeft: '24px', borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
-            <span>Delivered by</span>
-            <img src="/ri-logo.png" alt="Response Informatics" style={{ height: '32px', objectFit: 'contain' }} />
+        <div className="right-section">
+          <button
+            onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
+            style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: '7px', padding: '6px 10px', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem' }}
+            title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          >
+            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '12px', borderLeft: '1px solid var(--border-color)' }}>
+            <div className="avatar-circle">{userInitials}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                {user?.school_name || (userRole === 'admin' ? 'Admin' : user?.email?.split('@')[0] || 'User')}
+              </span>
+              <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                {userRole === 'admin' ? 'Platform Admin' : 'Admissions Staff'}
+              </span>
+            </div>
+            <button
+              onClick={handleLogout}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '4px', borderRadius: '5px', display: 'flex' }}
+              title="Sign Out"
+            >
+              <LogOut size={15} />
+            </button>
           </div>
         </div>
       </header>
 
       <div className="main-layout">
-        {/* Sidebar Navigation */}
+        {/* Sidebar Navigation — Response AI CRM style */}
         <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
           <button
             className="sidebar-toggle"
             onClick={toggleSidebar}
             title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            {sidebarCollapsed ? <PanelLeftOpen size={13} /> : <PanelLeftClose size={13} />}
           </button>
 
-          <nav style={{ flexGrow: 1 }}>
-            <ul className="nav-links">
-              {navItems.map(({ tab, icon, label }) => (
-                <li key={tab}>
-                  <a
-                    href={hashFor(tab)}
-                    className={`nav-link ${activeTab === tab ? 'active' : ''}`}
-                    onClick={() => setActiveTab(tab)}
-                    title={sidebarCollapsed ? label : undefined}
-                  >
-                    {icon}
-                    <span className="nav-label">{label}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <div className="sidebar-inner">
+            {/* Workspace info */}
+            <div style={{ marginBottom: '8px' }}>
+              <div className="sidebar-section-label">WORKSPACE</div>
+              <div className="sidebar-school-name">
+                {schoolLogo && (
+                  <img src={schoolLogo.startsWith('http') ? schoolLogo : `http://localhost:5000${schoolLogo}`}
+                    alt="" style={{ height: '14px', objectFit: 'contain', marginRight: '6px', verticalAlign: 'middle' }} />
+                )}
+                {schoolName || (userRole === 'admin' ? 'Platform Admin' : '—')}
+              </div>
+            </div>
 
-          <div className="sidebar-bottom-actions" style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <button
-              onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
-              className="btn btn-secondary"
-              style={{ width: '100%', justifyContent: 'center' }}
-              title={sidebarCollapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : undefined}
-            >
-              {theme === 'dark' ? <Sun size={18} style={{ flexShrink: 0 }} /> : <Moon size={18} style={{ flexShrink: 0 }} />}
-              <span className="nav-label">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
-            </button>
+            {/* Nav links */}
+            <nav style={{ flexGrow: 1 }}>
+              <ul className="nav-links">
+                {navItems.map(({ tab, icon, label }) => (
+                  <li key={tab}>
+                    <a
+                      href={hashFor(tab)}
+                      className={`nav-link ${activeTab === tab ? 'active' : ''}`}
+                      onClick={() => setActiveTab(tab)}
+                      title={sidebarCollapsed ? label : undefined}
+                    >
+                      {icon}
+                      <span className="nav-label">{label}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
 
-            <button
-              onClick={handleLogout}
-              className="btn btn-secondary"
-              style={{ width: '100%', justifyContent: 'center' }}
-              title={sidebarCollapsed ? 'Sign Out' : undefined}
-            >
-              <LogOut size={18} style={{ flexShrink: 0 }} />
-              <span className="nav-label">Sign Out</span>
-            </button>
+            {/* Bottom actions */}
+            <div className="sidebar-bottom-actions">
+              <button
+                onClick={handleLogout}
+                className="btn btn-secondary"
+                style={{ width: '100%', justifyContent: sidebarCollapsed ? 'center' : 'flex-start', fontSize: '0.82rem', padding: '8px 10px' }}
+                title={sidebarCollapsed ? 'Sign Out' : undefined}
+              >
+                <LogOut size={15} style={{ flexShrink: 0 }} />
+                <span className="nav-label">Sign Out</span>
+              </button>
+            </div>
           </div>
-
         </aside>
 
-        {/* Main Content Area */}
-        <main className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
+        {/* Main Content */}
+        <main className="main-content">
           {activeTab === 'dashboard' && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
           {activeTab === 'counselor' && <CounselorQueue showToast={showToast} onViewContact={viewContactFromElsewhere} />}
           {activeTab === 'campaigns' && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
@@ -347,25 +368,6 @@ export default function App() {
           {activeTab === 'schools' && userRole === 'admin' && <Schools showToast={showToast} />}
           {activeTab === 'settings' && userRole === 'admin' && <Settings showToast={showToast} />}
         </main>
-    </div>
-
-      {/* Floating EnquiryCall Watermark */}
-      <div style={{
-        position: 'fixed',
-        bottom: '30px',
-        right: '30px',
-        zIndex: 40,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        opacity: 0.4,
-        pointerEvents: 'none',
-        userSelect: 'none'
-      }}>
-        <div style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', padding: '6px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(124, 58, 237, 0.25)', opacity: 0.8 }}>
-          <MessageSquare style={{ color: '#fff', flexShrink: 0 }} size={18} />
-        </div>
-        <span style={{ fontSize: '1.2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>EnquiryCall</span>
       </div>
 
       <ToastStack toasts={toasts} />
