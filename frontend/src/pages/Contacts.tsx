@@ -89,7 +89,6 @@ function ScoreGauge({ score, level }: { score: number; level: string }) {
 
   const labelY = { HOT: '#dc2626', WARM: '#d97706', COLD: '#64748b' };
   const levelColor = labelY[level as keyof typeof labelY] || '#64748b';
-  const levelEmoji = { HOT: '🔥', WARM: '🌡️', COLD: '❄️' }[level] || '';
 
   return (
     <div className="score-gauge-wrap">
@@ -135,7 +134,6 @@ function ScoreGauge({ score, level }: { score: number; level: string }) {
         <text x={cx + r - 22} y={cy + 18} fontSize="8" fill="#ea580c" fontFamily="Inter">Hot</text>
       </svg>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-        <span style={{ fontSize: '1.05rem' }}>{levelEmoji}</span>
         <span style={{ fontWeight: 700, fontSize: '0.92rem', color: levelColor }}>
           {level === 'HOT' ? 'Hot Lead' : level === 'WARM' ? 'Warm Lead' : 'Cold Lead'}
         </span>
@@ -708,7 +706,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
               )}
               {leadSummary && (
                 <span className="call-status-pill" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}>
-                  {leadSummary.classification === 'HOT' ? '🔥 Hot' : leadSummary.classification === 'WARM' ? '🌡️ Warm' : '❄️ Cold'}
+                  {leadSummary.classification === 'HOT' ? 'Hot' : leadSummary.classification === 'WARM' ? 'Warm' : 'Cold'}
                 </span>
               )}
             </div>
@@ -726,7 +724,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                 </div>
                 <div className="call-meta-item">
                   <label>DESTINATION</label>
-                  <span>📞 {selectedContact.phone_number}</span>
+                  <span>{selectedContact.phone_number}</span>
                 </div>
                 <div className="call-meta-item">
                   <label>AGENT</label>
@@ -960,7 +958,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                     </div>
                     {sched.google_calendar_event_id && (
                       <div style={{ fontSize: '0.8rem', color: 'var(--accent-primary)', marginTop: '8px' }}>
-                        ✓ Google Calendar sync active
+                        Google Calendar sync active
                       </div>
                     )}
                   </div>

@@ -342,21 +342,21 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
             className={`btn ${activeWorkspace === 'queue' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ fontSize: '0.82rem', padding: '6px 14px', border: 'none' }}
           >
-            🎯 Active Queue ({totalActiveCount})
+            Active Queue ({totalActiveCount})
           </button>
           <button
             onClick={() => setActiveWorkspace('completed')}
             className={`btn ${activeWorkspace === 'completed' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ fontSize: '0.82rem', padding: '6px 14px', border: 'none' }}
           >
-            ✅ Completed ({totalCompletedCount})
+            Completed ({totalCompletedCount})
           </button>
           <button
             onClick={() => setActiveWorkspace('roster')}
             className={`btn ${activeWorkspace === 'roster' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ fontSize: '0.82rem', padding: '6px 14px', border: 'none' }}
           >
-            👥 Counselors Roster ({counselors.length})
+            Counselors Roster ({counselors.length})
           </button>
         </div>
       </div>
@@ -374,7 +374,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                🔥 Hot Leads
+                Hot Leads
               </span>
               <Flame size={20} style={{ color: '#ef4444' }} />
             </div>
@@ -393,7 +393,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                🟡 Warm Follow-ups
+                Warm Follow-ups
               </span>
               <Clock size={20} style={{ color: '#f59e0b' }} />
             </div>
@@ -412,7 +412,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                📞 Requested Callbacks
+                Requested Callbacks
               </span>
               <Calendar size={20} style={{ color: '#7c3aed' }} />
             </div>
@@ -431,7 +431,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#06b6d4', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                📋 Active Queue
+                Active Queue
               </span>
               <Filter size={20} style={{ color: '#06b6d4' }} />
             </div>
@@ -500,9 +500,9 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                       className={`btn ${queueFilter === tab ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ fontSize: '0.82rem', padding: '8px 14px' }}
                     >
-                      {tab === 'hot' && '🔥 Hot Leads'}
-                      {tab === 'warm' && '🟡 Warm'}
-                      {tab === 'callback' && '📞 Callbacks'}
+                      {tab === 'hot' && 'Hot Leads'}
+                      {tab === 'warm' && 'Warm'}
+                      {tab === 'callback' && 'Callbacks'}
                       {tab === 'all' && 'All'}
                     </button>
                   ))}
@@ -550,12 +550,12 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                               color: isHot ? '#ef4444' : isWarm ? '#f59e0b' : '#7c3aed',
                               border: `1px solid ${isHot ? 'rgba(239, 68, 68, 0.2)' : isWarm ? 'rgba(245, 158, 11, 0.2)' : 'rgba(124, 58, 237, 0.2)'}`
                             }}>
-                              {isHot ? '🔥 Hot Lead' : isWarm ? '🟡 Warm Lead' : c.interest_level}
+                              {isHot ? 'Hot Lead' : isWarm ? 'Warm Lead' : c.interest_level}
                             </span>
                           </div>
                           <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                            <span>📞 {c.phone_number}</span>
-                            {c.email && <span>✉️ {c.email}</span>}
+                            <span>{c.phone_number}</span>
+                            {c.email && <span>{c.email}</span>}
                           </div>
                         </div>
                       </div>
@@ -875,7 +875,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
         <div className="modal-overlay">
           <div className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '480px', width: '100%', borderLeft: '4px solid var(--accent-success)' }}>
             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700, marginBottom: '10px', color: 'var(--text-primary)' }}>
-              🎉 Counselor Login Created
+              Counselor Login Created
             </h3>
             <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '18px' }}>
               An invitation email has been sent to **{counselorCredentials.name}** to set their password. Here are their temporary credentials:
@@ -926,7 +926,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                   <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700 }}>
                     Complete Follow-up: {completeContact.name}
                   </h3>
-                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>📞 {completeContact.phone_number}</span>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{completeContact.phone_number}</span>
                 </div>
               </div>
               <button type="button" onClick={() => setCompleteContact(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -943,13 +943,13 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                   onChange={(e) => setCompleteOutcome(e.target.value)}
                   style={{ background: 'var(--bg-tertiary)', fontWeight: 600 }}
                 >
-                  <option value="Campus Visit Scheduled">🏫 Campus Visit Scheduled</option>
-                  <option value="Enrollment Discussion In-Progress">📝 Enrollment Discussion In-Progress</option>
-                  <option value="Parent Enrolled / Fee Paid">🎉 Parent Enrolled / Fee Paid</option>
-                  <option value="General Enquiry Resolved">💬 General Enquiry Resolved</option>
-                  <option value="Follow-up Completed (Parent Satisfied)">✅ Follow-up Completed (Parent Satisfied)</option>
-                  <option value="Not Interested / Dropped">❌ Not Interested / Dropped</option>
-                  <option value="Invalid Contact / Wrong Number">⚠️ Invalid Contact / Wrong Number</option>
+                  <option value="Campus Visit Scheduled">Campus Visit Scheduled</option>
+                  <option value="Enrollment Discussion In-Progress">Enrollment Discussion In-Progress</option>
+                  <option value="Parent Enrolled / Fee Paid">Parent Enrolled / Fee Paid</option>
+                  <option value="General Enquiry Resolved">General Enquiry Resolved</option>
+                  <option value="Follow-up Completed (Parent Satisfied)">Follow-up Completed (Parent Satisfied)</option>
+                  <option value="Not Interested / Dropped">Not Interested / Dropped</option>
+                  <option value="Invalid Contact / Wrong Number">Invalid Contact / Wrong Number</option>
                 </select>
               </div>
 
@@ -969,7 +969,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setCompleteContact(null)}>Cancel</button>
               <button type="submit" className="btn btn-primary" style={{ background: '#10b981', borderColor: '#10b981' }} disabled={completing}>
-                {completing ? 'Completing...' : '✓ Mark as Completed'}
+                {completing ? 'Completing...' : 'Mark as Completed'}
               </button>
             </div>
           </form>
