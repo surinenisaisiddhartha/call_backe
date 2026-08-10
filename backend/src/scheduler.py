@@ -123,11 +123,22 @@ def _requeue_or_give_up(cb, contact_label, retry_delay_minutes: int = 2, max_att
 
 
 def _fire_pending_callbacks():
-    """Fire pending ScheduledCallback rows whose time has arrived."""
+    """Fire pending ScheduledCallback rows whose time has arrived.
+    Calls are restricted to 9:00 AM \u2013 4:00 PM IST — outside that window this
+    sweep returns immediately and the rows stay 'Scheduled' until the next
+    in-window sweep picks them up.
+    """
     from src.db import SessionLocal, ScheduledCallback, Contact, Settings
+    from datetime import timezone, timedelta
     import os
     import httpx
     from src.agent_manager import get_or_create_local_agent
+
+    # Working hours guard: 9 AM \u2013 4 PM IST
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    if not (9 <= now_ist.hour < 16):
+        return  # Silently skip \u2014 rows stay Scheduled and will fire when in-window.
 
     db = SessionLocal()
     try:

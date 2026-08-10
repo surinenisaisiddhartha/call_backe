@@ -34,6 +34,14 @@ def _get_agent_id(db) -> Optional[str]:
     return get_or_create_local_agent()
 
 
+def _is_working_hours() -> bool:
+    """Return True if the current IST wall-clock time is within 09:00–16:00 (9 AM – 4 PM)."""
+    from datetime import timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    return 9 <= now_ist.hour < 16
+
+
 class CampaignDialer:
     """
     Thread-safe, slot-based concurrent call manager.
@@ -60,7 +68,17 @@ class CampaignDialer:
         """
         Start dialing a campaign. Fires up to effective_limit calls immediately.
         Can be called from an async or sync context (runs Retell calls in threads).
+        Calls are restricted to 9:00 AM – 4:00 PM IST.
         """
+        if not _is_working_hours():
+            from datetime import timezone, timedelta
+            ist = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist)
+            print(f"[DIALER] Campaign {batch_id} blocked — outside working hours ({now_ist.strftime('%H:%M')} IST). Calls are restricted to 9:00 AM–4:00 PM IST.")
+            return {
+                "queued": 0,
+                "message": f"Outside working hours ({now_ist.strftime('%H:%M')} IST). Calls are only placed between 9:00 AM and 4:00 PM IST."
+            }
         db = SessionLocal()
         try:
             # Mark campaign as running
@@ -185,6 +203,19 @@ class CampaignDialer:
 
     def _fire_call(self, batch_id: str, contact_id: str):
         """Fire a single Retell call in a background thread."""
+        # Safety guard — re-queue the contact and bail out if we have drifted
+        # outside working hours (e.g. a campaign was running near 4 PM and the
+        # last webhook-triggered slot freed after 4 PM).
+        if not _is_working_hours():
+            from datetime import timezone, timedelta
+            ist = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist)
+            print(f"[DIALER] Skipping call for {contact_id} — outside working hours ({now_ist.strftime('%H:%M')} IST). Re-queuing for next in-window slot.")
+            with self._lock:
+                if batch_id in self._queues:
+                    # Put back at the front so it's the first to fire when hours resume
+                    self._queues[batch_id].insert(0, contact_id)
+            return
         db = SessionLocal()
         try:
             contact = db.query(Contact).filter(Contact.id == contact_id).first()

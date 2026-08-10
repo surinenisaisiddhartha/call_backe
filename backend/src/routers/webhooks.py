@@ -438,9 +438,22 @@ def process_webhook_payload(payload: dict):
 
 
 def trigger_callback_call(contact_id: str):
-    """Called by APScheduler at the scheduled callback time. Fires a Retell call."""
+    """Called by APScheduler at the scheduled callback time. Fires a Retell call.
+    Calls are restricted to 9:00 AM \u2013 4:00 PM IST.  If this job fires outside
+    that window (e.g. a callback was booked for 5 PM) we return without claiming
+    the ScheduledCallback row so the 1-minute sweep in scheduler.py picks it up
+    on the next in-window pass.
+    """
     from src.db import SessionLocal, Contact, ScheduledCallback, Settings, CallAttempt
+    from datetime import datetime, timezone, timedelta
     import os, httpx
+
+    # Working hours guard: 9 AM \u2013 4 PM IST
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    if not (9 <= now_ist.hour < 16):
+        print(f"[SCHEDULER] Skipping callback for {contact_id} \u2014 outside working hours ({now_ist.strftime('%H:%M')} IST). The 1-min sweep will retry when in-window.")
+        return  # Row stays 'Scheduled'; the sweep fires it during business hours.
 
     db = SessionLocal()
     try:
