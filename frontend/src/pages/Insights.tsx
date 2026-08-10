@@ -34,11 +34,9 @@ interface Props {
 /** Colours carry meaning here, so they're fixed per label rather than
  *  assigned by position — otherwise "Cold" could come out green. */
 const COLOURS: Record<string, string> = {
-  'Hot Lead': 'var(--accent-error)',
-  'Warm Lead': 'var(--accent-warning)',
-  'Time Pass': '#a855f7',
-  'Not Interested': 'var(--text-secondary)',
-  'Not Reached': 'var(--text-muted)',
+  'HOT': 'var(--accent-error)',
+  'WARM': 'var(--accent-warning)',
+  'COLD': 'var(--text-secondary)',
   Hot: 'var(--accent-error)',
   Warm: 'var(--accent-warning)',
   Cold: 'var(--text-secondary)',

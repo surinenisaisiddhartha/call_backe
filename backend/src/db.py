@@ -156,8 +156,8 @@ class Contact(Base):
     # over an index, against a page of 50 rows — not in Python over the whole
     # table. Recomputed whenever something that feeds the score changes (a call
     # is analysed, an appointment is booked, a callback is requested).
-    lead_score = Column(Integer, default=0)
-    lead_classification = Column(String(30), default="Not Reached")
+    lead_score = Column(Float, default=0.0)
+    lead_classification = Column(String(30), default="COLD")
     lead_scored_at = Column(DateTime, nullable=True)
 
     # ── The 20-point profile, captured mid-call by the save_profile tool ──
@@ -322,8 +322,8 @@ def init_db():
         # Stored lead score on contacts
         contact_cols_now = [c['name'] for c in inspector.get_columns('contacts')]
         for col_name, col_type in (
-            ("lead_score", "INTEGER DEFAULT 0"),
-            ("lead_classification", "VARCHAR(30) DEFAULT 'Not Reached'"),
+            ("lead_score", "REAL DEFAULT 0"),
+            ("lead_classification", "VARCHAR(30) DEFAULT 'COLD'"),
             ("lead_scored_at", "TIMESTAMP"),
         ):
             if col_name not in contact_cols_now:
