@@ -730,6 +730,7 @@ def get_contacts(
             "profile_completeness": completeness(c),
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            "assigned_counselor_id": c.assigned_counselor_id,
         }
         for c in rows
     ]
@@ -876,3 +877,97 @@ def delete_contact(
     db.delete(contact)
     db.commit()
     return {"success": True, "message": "Contact deleted"}
+
+
+from pydantic import BaseModel
+
+class ContactUpdatePayload(BaseModel):
+    notes: str | None = None
+    email: str | None = None
+    name: str | None = None
+    assigned_counselor_id: str | None = None
+
+@router.patch("/{id}")
+def update_contact(
+    id: str,
+    payload: ContactUpdatePayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    contact = db.query(Contact).filter(Contact.id == id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    
+    if payload.notes is not None:
+        contact.notes = payload.notes
+    if payload.email is not None:
+        contact.email = payload.email
+    if payload.name is not None:
+        contact.name = payload.name
+    if payload.assigned_counselor_id is not None:
+        if payload.assigned_counselor_id.lower() in ("none", "", "null"):
+            contact.assigned_counselor_id = None
+        else:
+            contact.assigned_counselor_id = payload.assigned_counselor_id
+
+    db.commit()
+    db.refresh(contact)
+    return {"success": True, "contact": {"id": contact.id, "notes": contact.notes, "email": contact.email, "name": contact.name, "assigned_counselor_id": contact.assigned_counselor_id}}
+
+
+from src.db import Counselor
+
+@router.get("/counselors/all")
+def get_counselors(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
+    return [{"id": c.id, "name": c.name, "email": c.email, "phone_number": c.phone_number} for c in counselors]
+
+class CounselorCreatePayload(BaseModel):
+    name: str
+    email: str
+    phone_number: str | None = None
+
+@router.post("/counselors")
+def create_counselor(
+    payload: CounselorCreatePayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    
+    existing = db.query(Counselor).filter(Counselor.school_id == school_id, Counselor.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Counselor with this email already exists")
+
+    new_counselor = Counselor(
+        school_id=school_id,
+        name=payload.name,
+        email=payload.email,
+        phone_number=payload.phone_number
+    )
+    db.add(new_counselor)
+    db.commit()
+    db.refresh(new_counselor)
+    return {"success": True, "counselor": {"id": new_counselor.id, "name": new_counselor.name, "email": new_counselor.email}}
+
+@router.delete("/counselors/{id}")
+def delete_counselor(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    counselor = db.query(Counselor).filter(Counselor.id == id, Counselor.school_id == school_id).first()
+    if not counselor:
+        raise HTTPException(status_code=404, detail="Counselor not found")
+    
+    db.delete(counselor)
+    db.commit()
+    return {"success": True, "message": "Counselor removed successfully"}
+

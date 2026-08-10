@@ -140,11 +140,21 @@ class UploadBatch(Base):
 
     contacts = relationship("Contact", back_populates="batch", cascade="all, delete-orphan")
 
+class Counselor(Base):
+    __tablename__ = "counselors"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False)
+    phone_number = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class Contact(Base):
     __tablename__ = "contacts"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
     batch_id = Column(String(36), ForeignKey("upload_batches.id", ondelete="SET NULL"), nullable=True)
+    assigned_counselor_id = Column(String(36), ForeignKey("counselors.id", ondelete="SET NULL"), nullable=True)
     name = Column(String(255), nullable=False)
     phone_number = Column(String(255), nullable=False)
     email = Column(String(255), nullable=True)
@@ -331,6 +341,12 @@ def init_db():
                 with engine.connect() as conn:
                     conn.execute(text(f"ALTER TABLE contacts ADD COLUMN {col_name} {col_type};"))
                     conn.commit()
+
+        if 'assigned_counselor_id' not in contact_cols_now:
+            print("[DB] Self-healing migration: adding assigned_counselor_id to contacts table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE contacts ADD COLUMN assigned_counselor_id VARCHAR(36);"))
+                conn.commit()
 
         # ── The 20-point profile ──────────────────────────────────────────
         # Column list is derived from profile.py so the schema cannot drift

@@ -9,12 +9,13 @@ import Campaigns from './pages/Campaigns';
 import Dashboard from './pages/Dashboard';
 import Schools from './pages/Schools';
 import Insights from './pages/Insights';
+import CounselorQueue from './pages/CounselorQueue';
 import {
   Users, Settings as SettingsIcon, LogOut, MessageSquare,
   BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard,
-  PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp
+  PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp, Headphones
 } from 'lucide-react';
-type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'scheduling' | 'insights' | 'settings' | 'schools';
+type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'counselor' | 'scheduling' | 'insights' | 'settings' | 'schools';
 
 interface Toast {
   message: string;
@@ -230,6 +231,7 @@ export default function App() {
 
   const navItems: { tab: Tab; icon: React.ReactNode; label: string }[] = [
     { tab: 'dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
+    { tab: 'counselor', icon: <Headphones size={20} />, label: 'Counselor Queue' },
     { tab: 'campaigns', icon: <BarChart2 size={20} />, label: 'Campaigns' },
     { tab: 'contacts', icon: <Users size={20} />, label: 'Leads Directory' },
     { tab: 'scheduling', icon: <CalendarCheck size={20} />, label: 'Scheduling' },
@@ -337,6 +339,7 @@ export default function App() {
         {/* Main Content Area */}
         <main className={`main-content ${sidebarCollapsed ? 'expanded' : ''}`}>
           {activeTab === 'dashboard' && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+          {activeTab === 'counselor' && <CounselorQueue showToast={showToast} onViewContact={viewContactFromElsewhere} />}
           {activeTab === 'campaigns' && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
           {activeTab === 'contacts' && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} jumpToClassification={jumpToClassification} onClassificationHandled={() => setJumpToClassification(null)} />}
           {activeTab === 'scheduling' && <Scheduling showToast={showToast} />}
