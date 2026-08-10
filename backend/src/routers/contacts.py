@@ -2,6 +2,7 @@ import io
 import csv
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School
 from src.routers.auth import get_current_user
@@ -934,7 +935,6 @@ def delete_contact(
     return {"success": True, "message": "Contact deleted"}
 
 
-from pydantic import BaseModel
 
 class ContactUpdatePayload(BaseModel):
     notes: str | None = None

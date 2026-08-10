@@ -37,6 +37,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [queueFilter, setQueueFilter] = useState<'all' | 'hot' | 'warm' | 'callback'>('hot');
+  const [counselorFilter, setCounselorFilter] = useState<string>('all');
   const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'roster'>('queue');
 
   // Action Modals State
@@ -83,21 +84,62 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
     }
   };
 
+  const loggedInUserEmail = (() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null');
+      return u?.email || null;
+    } catch {
+      return null;
+    }
+  })();
+
   useEffect(() => {
     fetchQueue();
     fetchCounselors();
   }, [search, activeWorkspace]);
 
+  useEffect(() => {
+    if (counselors.length > 0 && loggedInUserEmail) {
+      const matched = counselors.find(c => c.email.toLowerCase() === loggedInUserEmail.toLowerCase());
+      if (matched) {
+        setCounselorFilter(matched.id);
+      }
+    }
+  }, [counselors]);
+
   const filteredContacts = contacts.filter(c => {
-    if (queueFilter === 'hot') return c.interest_level === 'Hot Lead' || c.lead_score >= 60;
-    if (queueFilter === 'warm') return c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60);
-    if (queueFilter === 'callback') return c.status === 'NeedsReschedule' || c.status === 'Scheduled';
+    // 1. Queue filter
+    if (queueFilter === 'hot') {
+      if (!(c.interest_level === 'Hot Lead' || c.lead_score >= 60)) return false;
+    } else if (queueFilter === 'warm') {
+      if (!(c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60))) return false;
+    } else if (queueFilter === 'callback') {
+      if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled')) return false;
+    }
+
+    // 2. Counselor filter
+    if (counselorFilter === 'unassigned') {
+      return !c.assigned_counselor_id;
+    } else if (counselorFilter !== 'all') {
+      return c.assigned_counselor_id === counselorFilter;
+    }
     return true;
   });
 
-  const hotCount = contacts.filter(c => c.interest_level === 'Hot Lead' || c.lead_score >= 60).length;
-  const warmCount = contacts.filter(c => c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60)).length;
-  const callbackCount = contacts.filter(c => c.status === 'NeedsReschedule' || c.status === 'Scheduled').length;
+  const hotCount = contacts.filter(c => {
+    const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
+    return belongs && (c.interest_level === 'Hot Lead' || c.lead_score >= 60);
+  }).length;
+
+  const warmCount = contacts.filter(c => {
+    const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
+    return belongs && (c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60));
+  }).length;
+
+  const callbackCount = contacts.filter(c => {
+    const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
+    return belongs && (c.status === 'NeedsReschedule' || c.status === 'Scheduled');
+  }).length;
 
   const triggerCall = async (contact: Contact) => {
     try {
@@ -322,20 +364,43 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               />
             </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {(['hot', 'warm', 'callback', 'all'] as const).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setQueueFilter(tab)}
-                  className={`btn ${queueFilter === tab ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Assigned To:</span>
+                <select
+                  value={counselorFilter}
+                  onChange={(e) => setCounselorFilter(e.target.value)}
+                  style={{
+                    background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+                    padding: '8px 14px', borderRadius: '8px', color: 'var(--text-primary)',
+                    fontSize: '0.85rem', outline: 'none', cursor: 'pointer', fontWeight: 600
+                  }}
                 >
-                  {tab === 'hot' && '🔥 Hot Leads'}
-                  {tab === 'warm' && '🟡 Warm'}
-                  {tab === 'callback' && '📞 Callbacks'}
-                  {tab === 'all' && 'All'}
-                </button>
-              ))}
+                  <option value="all">All Counselors</option>
+                  <option value="unassigned">Unassigned Only</option>
+                  {counselors.map(cns => (
+                    <option key={cns.id} value={cns.id}>
+                      {cns.email.toLowerCase() === loggedInUserEmail?.toLowerCase() ? `Me (${cns.name})` : cns.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {(['hot', 'warm', 'callback', 'all'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setQueueFilter(tab)}
+                    className={`btn ${queueFilter === tab ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.82rem', padding: '8px 14px' }}
+                  >
+                    {tab === 'hot' && '🔥 Hot Leads'}
+                    {tab === 'warm' && '🟡 Warm'}
+                    {tab === 'callback' && '📞 Callbacks'}
+                    {tab === 'all' && 'All'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
