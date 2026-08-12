@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School
+from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School, CounselorActivity, Appointment, Counselor
 from src.routers.auth import get_current_user
 from src.profile import profile_dict, completeness
 import openpyxl
@@ -326,22 +326,61 @@ def get_batch_stats(
 @router.get("/batches/{batch_id}/history")
 def get_batch_history(
     batch_id: str,
+    page: int = None,
+    page_size: int = 20,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Return all call attempts for contacts in this campaign."""
+    """Return call attempts for contacts in this campaign with optional server-side pagination."""
     contact_q = db.query(Contact.id).filter(Contact.batch_id == batch_id)
     if current_user.get("school_id"):
         contact_q = contact_q.filter(Contact.school_id == current_user["school_id"])
     contact_ids = [c.id for c in contact_q.all()]
     if not contact_ids:
+        if page is not None:
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "pages": 0}
         return []
-    attempts = db.query(CallAttempt, Contact).join(
+    
+    query = db.query(CallAttempt, Contact).join(
         Contact, CallAttempt.contact_id == Contact.id
     ).filter(
         CallAttempt.contact_id.in_(contact_ids)
-    ).order_by(CallAttempt.started_at.desc()).all()
+    ).order_by(CallAttempt.started_at.desc())
 
+    total = query.count()
+    campaign_name = db.query(UploadBatch.file_name).filter(UploadBatch.id == batch_id).scalar()
+
+    if page is not None:
+        p = max(1, page)
+        ps = max(1, min(page_size, 100))
+        attempts = query.offset((p - 1) * ps).limit(ps).all()
+        items = [{
+            "id": a.id,
+            "contact_id": a.contact_id,
+            "contact_name": c.name,
+            "contact_phone": c.phone_number,
+            "retell_call_id": a.retell_call_id,
+            "attempt_number": a.attempt_number,
+            "outcome": a.outcome,
+            "duration_sec": a.duration_sec,
+            "recording_url": a.recording_url,
+            "transcript": a.transcript,
+            "summary": a.summary,
+            "callback_raw_text": a.callback_raw_text,
+            "started_at": a.started_at.isoformat() if a.started_at else None,
+            "ended_at": a.ended_at.isoformat() if a.ended_at else None,
+            "batch_id": batch_id,
+            "campaign_name": campaign_name
+        } for a, c in attempts]
+        return {
+            "items": items,
+            "total": total,
+            "page": p,
+            "page_size": ps,
+            "pages": (total + ps - 1) // ps
+        }
+
+    attempts = query.all()
     return [{
         "id": a.id,
         "contact_id": a.contact_id,
@@ -358,7 +397,7 @@ def get_batch_history(
         "started_at": a.started_at.isoformat() if a.started_at else None,
         "ended_at": a.ended_at.isoformat() if a.ended_at else None,
         "batch_id": batch_id,
-        "campaign_name": db.query(UploadBatch.file_name).filter(UploadBatch.id == batch_id).scalar()
+        "campaign_name": campaign_name
     } for a, c in attempts]
 
 
@@ -366,10 +405,12 @@ def get_batch_history(
 def get_all_call_history(
     status: str = None,
     batch_id: str = None,
+    page: int = None,
+    page_size: int = 20,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Global call history across all campaigns."""
+    """Global call history across all campaigns with server-side pagination."""
     query = db.query(CallAttempt, Contact).join(
         Contact, CallAttempt.contact_id == Contact.id
     )
@@ -380,7 +421,15 @@ def get_all_call_history(
     if batch_id:
         query = query.filter(Contact.batch_id == batch_id)
 
-    results = query.order_by(CallAttempt.started_at.desc()).limit(500).all()
+    total = query.count()
+    query = query.order_by(CallAttempt.started_at.desc())
+
+    if page is not None:
+        p = max(1, page)
+        ps = max(1, min(page_size, 100))
+        results = query.offset((p - 1) * ps).limit(ps).all()
+    else:
+        results = query.limit(500).all()
 
     batch_names = {}
     for a, c in results:
@@ -388,7 +437,7 @@ def get_all_call_history(
             name = db.query(UploadBatch.file_name).filter(UploadBatch.id == c.batch_id).scalar()
             batch_names[c.batch_id] = name or c.batch_id
 
-    return [{
+    items = [{
         "id": a.id,
         "contact_id": a.contact_id,
         "contact_name": c.name,
@@ -406,6 +455,17 @@ def get_all_call_history(
         "batch_id": c.batch_id,
         "campaign_name": batch_names.get(c.batch_id, "")
     } for a, c in results]
+
+    if page is not None:
+        return {
+            "items": items,
+            "total": total,
+            "page": p,
+            "page_size": ps,
+            "pages": (total + ps - 1) // ps
+        }
+
+    return items
 
 
 CLASSIFICATIONS = ["HOT", "WARM", "COLD"]
@@ -435,17 +495,20 @@ PARAM_WEIGHTS = {
 
 
 def _score_appointment(booked: bool, callback: bool, analysis: dict, contact) -> int:
-    """Appointment / Conversion Intent — 25%."""
+    """Appointment Conversion Intent — 15%."""
+    if not contact:
+        return 0
     if contact.status == "DoNotCall":
         return 0
     if booked:
         return 100
     # Check for explicit campus visit / appointment request in analysis
-    next_step = (analysis.get("recommended_next_step") or "").lower() if analysis else ""
-    synopsis = (analysis.get("call_synopsis") or "").lower() if analysis else ""
-    combined = next_step + " " + synopsis
-    if any(kw in combined for kw in ("visit", "appointment", "campus tour", "schedule a visit")):
-        return 90
+    if analysis:
+        next_step = (analysis.get("recommended_next_step") or "").lower()
+        synopsis = (analysis.get("call_synopsis") or "").lower()
+        combined = next_step + " " + synopsis
+        if any(kw in combined for kw in ("visit", "appointment", "campus tour", "schedule a visit")):
+            return 90
     if callback:
         return 75
     # Check for admission info requests in analysis
@@ -459,11 +522,11 @@ def _score_appointment(booked: bool, callback: bool, analysis: dict, contact) ->
         engagement = (analysis.get("engagement_quality") or "").strip()
         if engagement in ("Serious", "Casual"):
             return 35
-    # Wrong number or caller not available
-    caller_type = (analysis.get("caller_type") or "").strip() if analysis else ""
-    if caller_type == "WrongNumber":
-        return 0
-    return 15
+        caller_type = (analysis.get("caller_type") or "").strip()
+        if caller_type == "WrongNumber":
+            return 0
+        return 15
+    return None  # Missing signal if no booking, no callback, and no call analysis yet
 
 
 def _score_engagement(analysis: dict) -> int:
@@ -482,50 +545,50 @@ def _score_interest(analysis: dict) -> int:
     return {"Hot": 100, "Warm": 65, "Cold": 20, "Unclear": 30}.get(interest, 30)
 
 
-def _score_conversation_depth(analysis: dict, duration: float, detected_topics: str) -> int:
-    """Conversation Depth — 10%. Combines topics + duration.
+def _score_conversation_depth(analysis: dict, had_engaged_call: bool, detected_topics: str) -> int:
+    """Conversation Depth — 10%.  Pure question-density scoring.
+
+    Scores by the number of UNIQUE topics/questions the caller raised across
+    ALL their engaged calls.  Duration is used upstream only as a minimum
+    threshold (≥ 10 s) to decide if a call counts as "engaged" — it no longer
+    directly influences the score, because a concise parent who asks 3 sharp
+    questions in 40 seconds is just as valuable as one who takes 5 minutes.
 
     Returns None (missing signal) when there is no evidence of a real
-    conversation — e.g. the user never spoke, all calls were NoAnswer /
-    IncompleteHangup, etc.  The caller-side filtering now happens upstream
-    in compute_lead_scores, so by the time we get here the duration and
-    topics already exclude non-engaged calls.
+    conversation at all.
     """
-    # Topic count from both LLM analysis and keyword detection
-    topic_count = 0
+    # Unique topic count from both LLM analysis and keyword detection
+    all_topics: set[str] = set()
     if analysis:
-        topics = [x for x in (analysis.get("topics_discussed") or "").split(",")
-                  if x.strip() and x.strip().lower() != "none"]
-        topic_count = max(topic_count, len(topics))
+        for t in (analysis.get("topics_discussed") or "").split(","):
+            cleaned = t.strip()
+            if cleaned and cleaned.lower() != "none":
+                all_topics.add(cleaned.lower())
     if detected_topics:
-        kw_topics = [x for x in detected_topics.split(",") if x.strip()]
-        topic_count = max(topic_count, len(kw_topics))
+        for t in detected_topics.split(","):
+            cleaned = t.strip()
+            if cleaned:
+                all_topics.add(cleaned.lower())
 
-    # No topics AND no meaningful duration → missing signal
-    if topic_count == 0 and (not duration or duration < 10):
+    topic_count = len(all_topics)
+
+    # No topics AND no engaged call → missing signal
+    if topic_count == 0 and not had_engaged_call:
         return None
 
-    if topic_count >= 4:
-        topic_score = 100
+    if topic_count >= 5:
+        return 100
+    elif topic_count == 4:
+        return 90
     elif topic_count == 3:
-        topic_score = 85
-    elif topic_count >= 1:
-        topic_score = 65
+        return 80
+    elif topic_count == 2:
+        return 65
+    elif topic_count == 1:
+        return 45
     else:
-        topic_score = 20
-
-    # Duration adjusts the score — supportive, not dominant
-    if duration and duration >= 120:
-        duration_factor = 1.0      # strong support
-    elif duration and duration >= 45:
-        duration_factor = 0.85     # moderate
-    elif duration and duration >= 20:
-        duration_factor = 0.65     # low
-    else:
-        duration_factor = 0.40     # very low — but doesn't zero out good topics
-
-    # Blend: topics are primary (70%), duration shapes it (30%)
-    return int(topic_score * 0.70 + (duration_factor * 100) * 0.30)
+        # Had an engaged call but no topics detected
+        return 20
 
 
 def _score_caller_relevance(analysis: dict) -> int:
@@ -723,11 +786,22 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
         ).all()
     }
 
-    latest_analysis = {}
-    longest_call = {}
-    latest_detected_topics = {}
-    # Outcomes that indicate the user never actually engaged in conversation.
-    # Only "Answered" calls should contribute to scoring signals.
+    # ── Cumulative best-intent aggregation across ALL calls ─────────────
+    # Instead of keeping only the last call's analysis (which let a brief
+    # follow-up call erase rich signals from an earlier conversation), we
+    # now merge the BEST intent signal for each field across all engaged
+    # calls, and UNION all topics.  Duration is only a minimum-threshold
+    # filter (≥ 10 s = "engaged"), not a scoring factor.
+    #
+    # Rankings for "best" per enum field (index 0 = highest intent):
+    _INTEREST_RANK = {"Hot": 0, "Warm": 1, "Cold": 2, "Unclear": 3}
+    _ENGAGEMENT_RANK = {"Serious": 0, "Casual": 1, "Unclear": 2, "NotInterested": 3}
+    _CALLER_RANK = {"Parent": 0, "Student": 1, "Other": 2, "NotAvailable": 3, "WrongNumber": 4}
+
+    merged_analysis: dict[str, dict] = {}   # contact_id → best-of analysis dict
+    merged_topics: dict[str, set] = {}      # contact_id → union of all detected topics
+    had_engaged: dict[str, bool] = {}       # contact_id → True if ≥ 1 engaged call
+
     _NON_ENGAGED = {"NoAnswer", "Busy", "Failed", "IncompleteHangup"}
     rows = (
         db.query(
@@ -739,28 +813,118 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
         .order_by(CallAttempt.started_at.asc())
         .all()
     )
+
+    def _pick_best_enum(current: str | None, new: str | None, ranking: dict) -> str | None:
+        """Return whichever value ranks higher (lower index = higher intent)."""
+        if not new:
+            return current
+        if not current:
+            return new
+        return current if ranking.get(current, 99) <= ranking.get(new, 99) else new
+
+    def _pick_longest(current: str | None, new: str | None) -> str | None:
+        """Keep the longer string (carries more detail)."""
+        if not new:
+            return current
+        if not current:
+            return new
+        return current if len(current) >= len(new) else new
+
     for contact_id, raw, duration, det_topics, outcome in rows:
-        engaged = outcome not in _NON_ENGAGED
-        # Duration & topics only count from calls where the user spoke
-        if engaged and duration and duration > longest_call.get(contact_id, 0):
-            longest_call[contact_id] = duration
+        engaged = outcome not in _NON_ENGAGED and (duration or 0) >= 10
+        if engaged:
+            had_engaged[contact_id] = True
+
+        # Accumulate detected topics (keyword-based) across ALL engaged calls
         if engaged and det_topics:
-            latest_detected_topics[contact_id] = det_topics
-        # Analysis: still use the latest available — even a partial call
-        # may have an LLM analysis (e.g. caller_type = WrongNumber)
+            if contact_id not in merged_topics:
+                merged_topics[contact_id] = set()
+            for t in det_topics.split(","):
+                if t.strip():
+                    merged_topics[contact_id].add(t.strip())
+
+        # Merge LLM analysis: keep the highest-intent value per field
         if raw:
             try:
                 parsed = _json.loads(raw)
-                if isinstance(parsed, dict) and parsed:
-                    latest_analysis[contact_id] = parsed
+                if not isinstance(parsed, dict) or not parsed:
+                    continue
             except (ValueError, TypeError):
-                pass
+                continue
+
+            if contact_id not in merged_analysis:
+                merged_analysis[contact_id] = {}
+            best = merged_analysis[contact_id]
+
+            # Enum fields: keep the highest-intent value
+            best["interest_level"] = _pick_best_enum(
+                best.get("interest_level"), parsed.get("interest_level"), _INTEREST_RANK)
+            best["engagement_quality"] = _pick_best_enum(
+                best.get("engagement_quality"), parsed.get("engagement_quality"), _ENGAGEMENT_RANK)
+            best["caller_type"] = _pick_best_enum(
+                best.get("caller_type"), parsed.get("caller_type"), _CALLER_RANK)
+
+            # String fields: keep the longest (most detailed) value
+            for str_field in ("call_synopsis", "recommended_next_step", "concerns_raised"):
+                best[str_field] = _pick_longest(best.get(str_field), parsed.get(str_field))
+
+            # Topics: union across all calls
+            new_topics = (parsed.get("topics_discussed") or "").split(",")
+            existing = set(
+                t.strip() for t in (best.get("topics_discussed") or "").split(",")
+                if t.strip() and t.strip().lower() != "none"
+            )
+            for t in new_topics:
+                cleaned = t.strip()
+                if cleaned and cleaned.lower() != "none":
+                    existing.add(cleaned)
+            best["topics_discussed"] = ", ".join(sorted(existing)) if existing else ""
+
+            # Primary topic: keep from the call with highest engagement
+            if parsed.get("primary_topic") and not best.get("primary_topic"):
+                best["primary_topic"] = parsed["primary_topic"]
+
+    attempted_contact_ids = {r.contact_id for r in rows}
+    completed_contact_ids = {
+        r.contact_id for r in rows
+        if r.outcome is not None or r.duration_sec is not None or r.analysis_json is not None
+    }
 
     out = {}
     for c in contacts:
-        analysis = latest_analysis.get(c.id)
-        duration = longest_call.get(c.id, 0)
-        det_topics = latest_detected_topics.get(c.id, "")
+        has_completed_interaction = (c.id in completed_contact_ids) or (c.id in booked) or (c.id in callbacks)
+
+        # If call is live right now (Calling) and no completed call has arrived yet:
+        if (c.status == "Calling" or (c.id in attempted_contact_ids and c.id not in completed_contact_ids)) and not (c.id in booked or c.id in callbacks):
+            out[c.id] = {
+                "score": None,
+                "classification": "CALLING",
+                "reasons": ["Call is actively in progress — scoring activates upon call completion."],
+                "parameter_scores": {k: 0 for k in PARAM_WEIGHTS},
+                "weighted_score_breakdown": {k: 0.0 for k in PARAM_WEIGHTS},
+                "classification_reason": "Call is actively in progress — scoring activates upon call completion.",
+                "missing_params": list(PARAM_WEIGHTS.keys()),
+                "uncontacted": True,
+            }
+            continue
+
+        # Leads with NO completed call attempts, NO appointments, and NO callbacks are UNCONTACTED
+        if not has_completed_interaction:
+            out[c.id] = {
+                "score": None,
+                "classification": "UNSCORED",
+                "reasons": ["Uncontacted lead — scoring activates after the first call attempt."],
+                "parameter_scores": {k: 0 for k in PARAM_WEIGHTS},
+                "weighted_score_breakdown": {k: 0.0 for k in PARAM_WEIGHTS},
+                "classification_reason": "Uncontacted lead — scoring activates after the first call attempt.",
+                "missing_params": list(PARAM_WEIGHTS.keys()),
+                "uncontacted": True,
+            }
+            continue
+
+        analysis = merged_analysis.get(c.id)
+        det_topics = ",".join(merged_topics.get(c.id, set()))
+        engaged = had_engaged.get(c.id, False)
         is_booked = c.id in booked
         is_callback = c.id in callbacks
 
@@ -769,7 +933,7 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
             "appointment_conversion_intent": _score_appointment(is_booked, is_callback, analysis, c),
             "engagement_quality":            _score_engagement(analysis),
             "interest_level":                _score_interest(analysis),
-            "conversation_depth":            _score_conversation_depth(analysis, duration, det_topics),
+            "conversation_depth":            _score_conversation_depth(analysis, engaged, det_topics),
             "caller_relevance":              _score_caller_relevance(analysis),
             "admission_intent":              _score_admission_intent(c),
             "requirement_fit":               _score_requirement_fit(c),
@@ -843,10 +1007,16 @@ def persist_lead_scores(db: Session, contacts: list) -> dict:
         s = scored.get(c.id)
         if not s:
             continue
-        if c.lead_score != s["score"] or c.lead_classification != s["classification"]:
-            c.lead_score = s["score"]
-            c.lead_classification = s["classification"]
-            c.lead_scored_at = now
+        if s.get("uncontacted"):
+            if c.lead_score is not None or c.lead_classification != "UNSCORED":
+                c.lead_score = None
+                c.lead_classification = "UNSCORED"
+                c.lead_scored_at = None
+        else:
+            if c.lead_score != s["score"] or c.lead_classification != s["classification"]:
+                c.lead_score = s["score"]
+                c.lead_classification = s["classification"]
+                c.lead_scored_at = now
     db.commit()
     return scored
 
@@ -862,12 +1032,155 @@ def rescore_contact(db: Session, contact_id: str):
         print(f"[SCORING] Could not rescore contact {contact_id}: {e}")
 
 
+class CreateContactPayload(BaseModel):
+    name: str
+    phone_number: str
+    email: str | None = None
+    notes: str | None = None
+    batch_id: str | None = None
+    assigned_counselor_id: str | None = None
+    
+    # Optional profile fields
+    child_name: str | None = None
+    child_age: str | None = None
+    grade_sought: str | None = None
+    academic_year: str | None = None
+    board_preference: str | None = None
+    locality: str | None = None
+    current_school: str | None = None
+    transport_needed: str | None = None
+    budget_band: str | None = None
+    admission_urgency: str | None = None
+    decision_timeline: str | None = None
+
+
+@router.post("")
+def create_contact(
+    payload: CreateContactPayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Manually create a new contact/lead with validation, normalization,
+    and optional initial profile information.
+    """
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Contact name is required.")
+    
+    if not payload.phone_number or not payload.phone_number.strip():
+        raise HTTPException(status_code=400, detail="Phone number is required.")
+    
+    clean_phone = _normalize_phone(payload.phone_number)
+    if not clean_phone:
+        raise HTTPException(status_code=400, detail=f"'{payload.phone_number}' is not a valid phone number. Please enter a valid 10-digit number.")
+
+    school_id = resolve_school_id(db, current_user)
+
+    # Check Do-Not-Call list
+    dnc_exists = db.query(Contact).filter(
+        Contact.phone_number == clean_phone,
+        Contact.status == "DoNotCall",
+        Contact.school_id == school_id if school_id else True
+    ).first()
+    if dnc_exists:
+        raise HTTPException(status_code=400, detail=f"Phone number {clean_phone} is on the Do Not Call list.")
+
+    # Check duplicate in same school
+    existing = db.query(Contact).filter(
+        Contact.phone_number == clean_phone,
+        Contact.school_id == school_id if school_id else True
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"A contact with phone number {clean_phone} already exists ({existing.name}).")
+
+    assigned_cns_id = payload.assigned_counselor_id
+    if assigned_cns_id and assigned_cns_id.lower() in ("none", "", "null"):
+        assigned_cns_id = None
+
+    # If no counselor explicitly selected, try round-robin across available counselors
+    if not assigned_cns_id and school_id:
+        counselors = db.query(Counselor).filter(Counselor.school_id == school_id, Counselor.availability_status == "Available").all()
+        if counselors:
+            from sqlalchemy import func
+            lead_counts = dict(
+                db.query(Contact.assigned_counselor_id, func.count(Contact.id))
+                .filter(
+                    Contact.school_id == school_id,
+                    Contact.assigned_counselor_id.isnot(None),
+                    Contact.status != "Completed"
+                )
+                .group_by(Contact.assigned_counselor_id)
+                .all()
+            )
+            eligible = [c for c in counselors if lead_counts.get(c.id, 0) < (c.max_capacity or 50)]
+            if eligible:
+                best = min(eligible, key=lambda c: lead_counts.get(c.id, 0))
+                assigned_cns_id = best.id
+
+    new_contact = Contact(
+        school_id=school_id,
+        batch_id=payload.batch_id if payload.batch_id else None,
+        name=payload.name.strip(),
+        phone_number=clean_phone,
+        email=payload.email.strip() if payload.email else None,
+        notes=payload.notes.strip() if payload.notes else None,
+        status="Pending",
+        assigned_counselor_id=assigned_cns_id,
+        # Profile fields
+        child_name=payload.child_name.strip() if payload.child_name else None,
+        child_age=payload.child_age.strip() if payload.child_age else None,
+        grade_sought=payload.grade_sought.strip() if payload.grade_sought else None,
+        academic_year=payload.academic_year.strip() if payload.academic_year else None,
+        board_preference=payload.board_preference.strip() if payload.board_preference else None,
+        locality=payload.locality.strip() if payload.locality else None,
+        current_school=payload.current_school.strip() if payload.current_school else None,
+        transport_needed=payload.transport_needed.strip() if payload.transport_needed else None,
+        budget_band=payload.budget_band.strip() if payload.budget_band else None,
+        admission_urgency=payload.admission_urgency.strip() if payload.admission_urgency else None,
+        decision_timeline=payload.decision_timeline.strip() if payload.decision_timeline else None,
+    )
+    db.add(new_contact)
+    db.commit()
+    db.refresh(new_contact)
+
+    # Initial lead score
+    persist_lead_scores(db, [new_contact])
+    db.refresh(new_contact)
+
+    if assigned_cns_id:
+        activity = CounselorActivity(
+            contact_id=new_contact.id,
+            counselor_id=assigned_cns_id,
+            action_type="AutoAssign" if not payload.assigned_counselor_id else "ManualAssign",
+            outcome="Lead Created",
+            notes="Manually entered lead"
+        )
+        db.add(activity)
+        db.commit()
+
+    return {
+        "success": True,
+        "contact": {
+            "id": new_contact.id,
+            "name": new_contact.name,
+            "phone_number": new_contact.phone_number,
+            "email": new_contact.email,
+            "status": new_contact.status,
+            "lead_score": new_contact.lead_score,
+            "lead_classification": new_contact.lead_classification,
+            "assigned_counselor_id": new_contact.assigned_counselor_id,
+        }
+    }
+
+
 @router.get("")
 def get_contacts(
     status: str = None,
     batchId: str = None,
     search: str = None,
     interest: str = None,
+    counselor_id: str = None,
+    admission_urgency: str = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -877,20 +1190,27 @@ def get_contacts(
     A PAGE of leads, ranked best-first.
 
     Filtering, ranking and paging all happen in SQL against the stored
-    lead_score. The previous version returned every lead and sorted them in
-    Python: 8.7 KB for 20 leads, which is roughly 4 MB per page load at 10,000
-    and grows every single day. A school doing 1,000-10,000 calls a day would
-    have made that unusable within a week.
+    lead_score.
     """
     query = db.query(Contact)
     if current_user.get("school_id"):
         query = query.filter(Contact.school_id == current_user["school_id"])
     if status:
-        query = query.filter(Contact.status == status)
+        if status == "active":
+            query = query.filter(Contact.status != "Completed")
+        else:
+            query = query.filter(Contact.status == status)
     if batchId:
         query = query.filter(Contact.batch_id == batchId)
     if interest:
         query = query.filter(Contact.lead_classification == interest.strip())
+    if counselor_id:
+        if counselor_id == "unassigned":
+            query = query.filter(Contact.assigned_counselor_id == None)
+        else:
+            query = query.filter(Contact.assigned_counselor_id == counselor_id)
+    if admission_urgency:
+        query = query.filter(Contact.admission_urgency == admission_urgency)
     if search:
         query = query.filter(
             Contact.name.ilike(f"%{search}%") |
@@ -922,8 +1242,8 @@ def get_contacts(
             "email": c.email,
             "notes": c.notes,
             "status": c.status,
-            "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "COLD"),
-            "lead_score": scored.get(c.id, {}).get("score", c.lead_score or 0),
+            "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "UNSCORED"),
+            "lead_score": scored.get(c.id, {}).get("score", c.lead_score),
             "score_reasons": scored.get(c.id, {}).get("reasons", []),
             "parameter_scores": scored.get(c.id, {}).get("parameter_scores", {}),
             "weighted_score_breakdown": scored.get(c.id, {}).get("weighted_score_breakdown", {}),
@@ -935,6 +1255,7 @@ def get_contacts(
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
             "assigned_counselor_id": c.assigned_counselor_id,
+            "counselor_followup_status": c.counselor_followup_status or "Pending",
         }
         for c in rows
     ]
@@ -999,9 +1320,34 @@ def get_counselors(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    from sqlalchemy import func
     school_id = resolve_school_id(db, current_user)
     counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
-    return [{"id": c.id, "name": c.name, "email": c.email, "phone_number": c.phone_number} for c in counselors]
+
+    # Compute active lead counts per counselor in one query
+    lead_counts = dict(
+        db.query(Contact.assigned_counselor_id, func.count(Contact.id))
+        .filter(
+            Contact.school_id == school_id,
+            Contact.assigned_counselor_id.isnot(None),
+            Contact.status != "Completed"
+        )
+        .group_by(Contact.assigned_counselor_id)
+        .all()
+    )
+
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "email": c.email,
+            "phone_number": c.phone_number,
+            "availability_status": c.availability_status or "Available",
+            "max_capacity": c.max_capacity or 50,
+            "active_lead_count": lead_counts.get(c.id, 0),
+        }
+        for c in counselors
+    ]
 
 class CounselorCreatePayload(BaseModel):
     name: str
@@ -1103,6 +1449,394 @@ def auto_assign_contacts(
     }
 
 
+# ── Counselor Availability Toggle ──────────────────────────────────────
+
+class CounselorUpdatePayload(BaseModel):
+    availability_status: str | None = None  # Available, InConsultation, OnLeave
+    max_capacity: int | None = None
+    name: str | None = None
+    phone_number: str | None = None
+
+@router.patch("/counselors/{counselor_id}")
+def update_counselor(
+    counselor_id: str,
+    payload: CounselorUpdatePayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = resolve_school_id(db, current_user)
+    counselor = db.query(Counselor).filter(Counselor.id == counselor_id, Counselor.school_id == school_id).first()
+    if not counselor:
+        raise HTTPException(status_code=404, detail="Counselor not found")
+    if payload.availability_status is not None:
+        if payload.availability_status not in ("Available", "InConsultation", "OnLeave"):
+            raise HTTPException(status_code=400, detail="availability_status must be Available, InConsultation, or OnLeave")
+        counselor.availability_status = payload.availability_status
+    if payload.max_capacity is not None:
+        counselor.max_capacity = max(1, payload.max_capacity)
+    if payload.name is not None:
+        counselor.name = payload.name
+    if payload.phone_number is not None:
+        counselor.phone_number = payload.phone_number
+    db.commit()
+    return {"success": True, "counselor": {"id": counselor.id, "availability_status": counselor.availability_status, "max_capacity": counselor.max_capacity}}
+
+
+# ── Counselor Performance Analytics ────────────────────────────────────
+
+@router.get("/counselors/analytics")
+def get_counselor_analytics(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    from sqlalchemy import func
+    school_id = resolve_school_id(db, current_user)
+    counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
+    if not counselors:
+        return []
+
+    results = []
+    for c in counselors:
+        total_assigned = db.query(func.count(Contact.id)).filter(
+            Contact.assigned_counselor_id == c.id
+        ).scalar() or 0
+
+        completed_count = db.query(func.count(Contact.id)).filter(
+            Contact.assigned_counselor_id == c.id,
+            Contact.status == "Completed"
+        ).scalar() or 0
+
+        hot_leads = db.query(func.count(Contact.id)).filter(
+            Contact.assigned_counselor_id == c.id,
+            Contact.lead_classification == "HOT"
+        ).scalar() or 0
+
+        active_leads = db.query(func.count(Contact.id)).filter(
+            Contact.assigned_counselor_id == c.id,
+            Contact.status != "Completed"
+        ).scalar() or 0
+
+        # Activity count in last 7 days
+        from datetime import timedelta
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        activity_count_7d = db.query(func.count(CounselorActivity.id)).filter(
+            CounselorActivity.counselor_id == c.id,
+            CounselorActivity.created_at >= seven_days_ago
+        ).scalar() or 0
+
+        # Average response time: first activity per contact by this counselor
+        # vs contact.created_at
+        avg_response_hours = None
+        try:
+            from sqlalchemy import text
+            row = db.execute(text("""
+                SELECT AVG(EXTRACT(EPOCH FROM (first_activity - contact_created)) / 3600.0)
+                FROM (
+                    SELECT ca.contact_id,
+                           MIN(ca.created_at) AS first_activity,
+                           c.created_at AS contact_created
+                    FROM counselor_activities ca
+                    JOIN contacts c ON c.id = ca.contact_id
+                    WHERE ca.counselor_id = :cid
+                    GROUP BY ca.contact_id, c.created_at
+                ) sub
+            """), {"cid": c.id}).fetchone()
+            if row and row[0] is not None:
+                avg_response_hours = round(float(row[0]), 1)
+        except Exception:
+            pass
+
+        conversion_rate = round((completed_count / total_assigned * 100), 1) if total_assigned > 0 else 0.0
+
+        results.append({
+            "counselor_id": c.id,
+            "name": c.name,
+            "email": c.email,
+            "availability_status": c.availability_status or "Available",
+            "total_assigned": total_assigned,
+            "completed_count": completed_count,
+            "conversion_rate": conversion_rate,
+            "hot_leads_assigned": hot_leads,
+            "active_leads": active_leads,
+            "activity_count_7d": activity_count_7d,
+            "avg_response_hours": avg_response_hours,
+        })
+
+    # Sort by conversion rate desc
+    results.sort(key=lambda x: x["conversion_rate"], reverse=True)
+    return results
+
+
+# ── Smart Auto-Assignment Helper ───────────────────────────────────────
+
+def auto_assign_hot_lead_to_available_counselor(db: Session, contact: Contact) -> Counselor | None:
+    """
+    Auto-assigns an unassigned qualified lead (HOT, WARM, or Callback requested)
+    to the available Counselor who currently has the fewest active leads and is not
+    at max capacity.  Returns the assigned Counselor or None.
+    """
+    if contact.assigned_counselor_id:
+        return None
+
+    classification = (contact.lead_classification or "COLD").upper()
+    is_qualified = (
+        classification in ("HOT", "WARM") or 
+        (contact.lead_score or 0) >= 40 or 
+        contact.status in ("NeedsReschedule", "Scheduled")
+    )
+    if not is_qualified:
+        return None
+
+    from sqlalchemy import func
+    counselors = db.query(Counselor).filter(
+        Counselor.school_id == contact.school_id,
+        Counselor.availability_status == "Available"
+    ).all()
+    if not counselors:
+        return None
+
+    # Build active-lead counts (counselor follow-up not completed)
+    lead_counts = dict(
+        db.query(Contact.assigned_counselor_id, func.count(Contact.id))
+        .filter(
+            Contact.school_id == contact.school_id,
+            Contact.assigned_counselor_id.isnot(None),
+            Contact.counselor_followup_status != "Completed"
+        )
+        .group_by(Contact.assigned_counselor_id)
+        .all()
+    )
+
+    # Filter out at-capacity counselors, then pick the one with fewest leads
+    eligible = [
+        c for c in counselors
+        if lead_counts.get(c.id, 0) < (c.max_capacity or 50)
+    ]
+    if not eligible:
+        return None
+
+    best = min(eligible, key=lambda c: lead_counts.get(c.id, 0))
+    contact.assigned_counselor_id = best.id
+    contact.counselor_followup_status = "Pending"
+
+    # Log as activity
+    activity = CounselorActivity(
+        contact_id=contact.id,
+        counselor_id=best.id,
+        action_type="AutoAssign",
+        outcome="HOT lead auto-assigned",
+        notes=f"Auto-assigned to {best.name} (fewest active leads: {lead_counts.get(best.id, 0)})"
+    )
+    db.add(activity)
+
+    try:
+        from src.events import event_manager
+        event_manager.broadcast_sync(
+            "COUNSELOR_ASSIGNED",
+            {"contact_id": contact.id, "counselor_id": best.id, "counselor_name": best.name},
+            school_id=contact.school_id
+        )
+    except Exception:
+        pass
+
+    return best
+
+auto_assign_hot_lead = auto_assign_hot_lead_to_available_counselor
+
+
+# ── Structured Follow-Up Activities ────────────────────────────────────
+
+class ActivityPayload(BaseModel):
+    action_type: str        # Call, WhatsApp, Email, CampusVisit, Note
+    outcome: str | None = None
+    notes: str | None = None
+
+@router.post("/{contact_id}/activities")
+def log_activity(
+    contact_id: str,
+    payload: ActivityPayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    # Resolve the logged-in user's counselor id (if any)
+    counselor_id = None
+    email = current_user.get("email")
+    if email:
+        counselor = db.query(Counselor).filter(
+            Counselor.email == email,
+            Counselor.school_id == contact.school_id
+        ).first()
+        if counselor:
+            counselor_id = counselor.id
+
+    activity = CounselorActivity(
+        contact_id=contact_id,
+        counselor_id=counselor_id,
+        action_type=payload.action_type,
+        outcome=payload.outcome,
+        notes=payload.notes,
+    )
+    db.add(activity)
+    db.commit()
+    db.refresh(activity)
+    return {
+        "success": True,
+        "activity": {
+            "id": activity.id,
+            "contact_id": activity.contact_id,
+            "counselor_id": activity.counselor_id,
+            "action_type": activity.action_type,
+            "outcome": activity.outcome,
+            "notes": activity.notes,
+            "created_at": activity.created_at.isoformat() if activity.created_at else None,
+        }
+    }
+
+@router.get("/{contact_id}/activities")
+def get_activities(
+    contact_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    from sqlalchemy import func
+    total = db.query(func.count(CounselorActivity.id)).filter(
+        CounselorActivity.contact_id == contact_id
+    ).scalar() or 0
+
+    rows = db.query(CounselorActivity).filter(
+        CounselorActivity.contact_id == contact_id
+    ).order_by(CounselorActivity.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    # Resolve counselor names
+    counselor_ids = {a.counselor_id for a in rows if a.counselor_id}
+    name_map = {}
+    if counselor_ids:
+        for c in db.query(Counselor).filter(Counselor.id.in_(counselor_ids)).all():
+            name_map[c.id] = c.name
+
+    return {
+        "items": [
+            {
+                "id": a.id,
+                "contact_id": a.contact_id,
+                "counselor_id": a.counselor_id,
+                "counselor_name": name_map.get(a.counselor_id, "System"),
+                "action_type": a.action_type,
+                "outcome": a.outcome,
+                "notes": a.notes,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": (total + page_size - 1) // page_size,
+    }
+
+
+# ── Bulk Operations ────────────────────────────────────────────────────
+
+class BulkUpdatePayload(BaseModel):
+    contact_ids: list[str]
+    action: str              # assign, status_change, schedule
+    assigned_counselor_id: str | None = None
+    status: str | None = None
+    scheduled_for: str | None = None  # ISO datetime
+
+@router.post("/bulk-update")
+def bulk_update_contacts(
+    payload: BulkUpdatePayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    school_id = current_user.get("school_id")
+    q = db.query(Contact).filter(Contact.id.in_(payload.contact_ids))
+    if school_id:
+        q = q.filter(Contact.school_id == school_id)
+    contacts = q.all()
+
+    if not contacts:
+        raise HTTPException(status_code=404, detail="No matching contacts found")
+
+    updated = 0
+    if payload.action == "assign" and payload.assigned_counselor_id:
+        target_id = None if payload.assigned_counselor_id.lower() in ("none", "", "null") else payload.assigned_counselor_id
+        for c in contacts:
+            c.assigned_counselor_id = target_id
+            c.updated_at = datetime.utcnow()
+            updated += 1
+        db.commit()
+
+    elif payload.action == "status_change" and payload.status:
+        # Resolve counselor for activity logging
+        counselor_id = None
+        email = current_user.get("email")
+        if email and school_id:
+            cns = db.query(Counselor).filter(Counselor.email == email, Counselor.school_id == school_id).first()
+            if cns:
+                counselor_id = cns.id
+
+        for c in contacts:
+            old_status = c.status
+            c.status = payload.status
+            c.updated_at = datetime.utcnow()
+            updated += 1
+            # Log activity
+            activity = CounselorActivity(
+                contact_id=c.id,
+                counselor_id=counselor_id,
+                action_type="StatusChange",
+                outcome=payload.status,
+                notes=f"Bulk status change: {old_status} → {payload.status}"
+            )
+            db.add(activity)
+        db.commit()
+
+    elif payload.action == "schedule" and payload.scheduled_for:
+        from dateutil.parser import isoparse
+        try:
+            schedule_dt = isoparse(payload.scheduled_for)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid scheduled_for datetime")
+
+        for c in contacts:
+            # Avoid duplicates
+            existing = db.query(ScheduledCallback).filter(
+                ScheduledCallback.contact_id == c.id,
+                ScheduledCallback.status == "Scheduled"
+            ).first()
+            if not existing:
+                cb = ScheduledCallback(
+                    contact_id=c.id,
+                    scheduled_for=schedule_dt,
+                    reason="Bulk schedule",
+                    status="Scheduled",
+                    call_type="Follow-up"
+                )
+                db.add(cb)
+                updated += 1
+        db.commit()
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action or missing required fields")
+
+    return {"success": True, "updated": updated, "message": f"{updated} contacts updated"}
+
+
 
 @router.get("/{id}")
 def get_contact_history(
@@ -1118,6 +1852,7 @@ def get_contact_history(
 
     attempts = db.query(CallAttempt).filter(CallAttempt.contact_id == id).order_by(CallAttempt.started_at.desc()).all()
     schedules = db.query(ScheduledCallback).filter(ScheduledCallback.contact_id == id).order_by(ScheduledCallback.scheduled_for.desc()).all()
+    appointments = db.query(Appointment).filter(Appointment.contact_id == id).order_by(Appointment.scheduled_for.desc()).all()
 
     # Serialise attempts explicitly so the post-call analysis comes back as a
     # real object rather than the JSON string it is stored as. A malformed or
@@ -1151,6 +1886,17 @@ def get_contact_history(
             "detected_topics": [x for x in (a.detected_topics or "").split(",") if x],
         }
 
+    def _appointment_dict(apt):
+        return {
+            "id": apt.id,
+            "scheduled_for": apt.scheduled_for.isoformat() if apt.scheduled_for else None,
+            "status": apt.status,
+            "meeting_type": apt.meeting_type,
+            "purpose": apt.purpose,
+            "virtual_meeting_link": apt.virtual_meeting_link,
+            "created_at": apt.created_at.isoformat() if apt.created_at else None,
+        }
+
     # The lead's standing judgement, so the drawer answers "is this person
     # worth my time?" without the reader having to reconstruct it from a list
     # of calls.
@@ -1178,7 +1924,8 @@ def get_contact_history(
         "profile_completeness": completeness(contact),
         "topics_asked": all_topics,
         "attempts": [_attempt_dict(a) for a in attempts],
-        "schedules": schedules
+        "schedules": schedules,
+        "appointments": [_appointment_dict(apt) for apt in appointments],
     }
 
 @router.delete("/{id}")
@@ -1205,6 +1952,7 @@ class ContactUpdatePayload(BaseModel):
     name: str | None = None
     status: str | None = None
     assigned_counselor_id: str | None = None
+    counselor_followup_status: str | None = None
 
 @router.patch("/{id}")
 def update_contact(
@@ -1225,13 +1973,45 @@ def update_contact(
         contact.email = payload.email
     if payload.name is not None:
         contact.name = payload.name
+    if payload.counselor_followup_status is not None:
+        contact.counselor_followup_status = payload.counselor_followup_status
+
+    # Track status changes and assignment changes as structured activities
+    counselor_id = None
+    email_user = current_user.get("email")
+    if email_user and contact.school_id:
+        cns = db.query(Counselor).filter(Counselor.email == email_user, Counselor.school_id == contact.school_id).first()
+        if cns:
+            counselor_id = cns.id
+
     if payload.status is not None:
+        old_status = contact.status
         contact.status = payload.status
+        if old_status != payload.status:
+            activity = CounselorActivity(
+                contact_id=contact.id,
+                counselor_id=counselor_id,
+                action_type="StatusChange",
+                outcome=payload.status,
+                notes=f"{old_status} → {payload.status}"
+            )
+            db.add(activity)
+
     if payload.assigned_counselor_id is not None:
+        old_counselor = contact.assigned_counselor_id
         if payload.assigned_counselor_id.lower() in ("none", "", "null"):
             contact.assigned_counselor_id = None
         else:
             contact.assigned_counselor_id = payload.assigned_counselor_id
+        if old_counselor != contact.assigned_counselor_id:
+            activity = CounselorActivity(
+                contact_id=contact.id,
+                counselor_id=counselor_id,
+                action_type="Assignment",
+                outcome=f"Assigned to {contact.assigned_counselor_id or 'Unassigned'}",
+                notes=f"Reassigned from {old_counselor or 'Unassigned'}"
+            )
+            db.add(activity)
 
     db.commit()
     db.refresh(contact)
@@ -1243,8 +2023,7 @@ def update_contact(
             "email": contact.email, 
             "name": contact.name, 
             "status": contact.status,
-            "assigned_counselor_id": contact.assigned_counselor_id
+            "assigned_counselor_id": contact.assigned_counselor_id,
+            "counselor_followup_status": contact.counselor_followup_status
         }
     }
-
-

@@ -10,6 +10,7 @@ from src.db import get_db, Contact, Settings, UploadBatch
 from src.routers.auth import get_current_user
 from src.school_agent import get_school_agent_id
 from src.dialer import dialer
+from src.events import event_manager
 
 router = APIRouter(prefix="/api/calls", tags=["Calling"])
 
@@ -123,6 +124,12 @@ async def start_campaign(
         _start_dialer_campaign, effective_batch_id, cid_list
     )
 
+    event_manager.broadcast_sync(
+        "CAMPAIGN_UPDATE",
+        {"batch_id": effective_batch_id, "status": "running", "total_contacts": len(contacts_to_call)},
+        school_id=school_id
+    )
+
     # Fetch setting for response message
     concurrency_setting = db.query(Settings).filter(Settings.key == "concurrency_limit").first()
     concurrency_val = (concurrency_setting.value if concurrency_setting else None) or os.getenv('MAX_CONCURRENT_CALLS', '15')
@@ -177,18 +184,44 @@ async def call_now(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    from src.utils import is_working_hours
-    if not is_working_hours():
-        raise HTTPException(
-            status_code=400,
-            detail="Calls can only be placed during working hours (9:00 AM – 4:00 PM IST)."
-        )
-
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Contact not found")
+
+    # Per-school calling window
+    from src.utils import is_working_hours, next_working_day_start
+    start_hour, end_hour = 9, 16
+    if contact.school_id:
+        from src.db import School
+        school = db.query(School).filter(School.id == contact.school_id).first()
+        if school:
+            start_hour = school.calling_start_hour or 9
+            end_hour = school.calling_end_hour or 16
+
+    if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
+        # Auto-schedule for next working day instead of a hard block
+        from src.db import ScheduledCallback
+        retry_time = next_working_day_start(start_hour)
+        existing = db.query(ScheduledCallback).filter(
+            ScheduledCallback.contact_id == contact_id,
+            ScheduledCallback.status == "Scheduled"
+        ).first()
+        if not existing:
+            cb = ScheduledCallback(
+                contact_id=contact_id,
+                scheduled_for=retry_time,
+                reason=f"Auto-scheduled: call-now attempted outside calling hours",
+                status="Scheduled",
+                call_type="Follow-up"
+            )
+            db.add(cb)
+            db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Outside calling hours ({start_hour}:00–{end_hour}:00 IST). This call has been auto-scheduled for {retry_time.strftime('%Y-%m-%d %H:%M')} UTC."
+        )
 
     if contact.status == "Calling":
         raise HTTPException(status_code=409, detail="This contact is already on an active call.")
@@ -250,6 +283,12 @@ async def call_now(
         )
         db.add(attempt)
         db.commit()
+
+        event_manager.broadcast_sync(
+            "CALL_STARTED",
+            {"contact_id": contact_id, "call_id": batch_call_id, "status": "Calling"},
+            school_id=contact.school_id
+        )
 
         return {
             "success": True,

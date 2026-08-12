@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
-import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2, GripVertical } from 'lucide-react';
+import { useSSE } from '../hooks/useSSE';
+import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2, GripVertical, UserPlus, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface Contact {
   id: string;
@@ -16,6 +17,7 @@ interface Contact {
   parameter_scores?: Record<string, number>;
   weighted_score_breakdown?: Record<string, number>;
   classification_reason?: string;
+  counselor_followup_status?: string;
   created_at: string;
 }
 
@@ -54,6 +56,18 @@ interface Callback {
   scheduled_for: string;
   google_calendar_event_id: string | null;
   status: string;
+  call_type?: string;
+  reason?: string;
+}
+
+interface Appointment {
+  id: string;
+  scheduled_for: string;
+  status: string;
+  meeting_type: string;
+  purpose?: string;
+  virtual_meeting_link?: string;
+  created_at?: string;
 }
 
 interface ContactsProps {
@@ -76,19 +90,23 @@ interface ContactsProps {
  * Circular SVG arc gauge for lead score — shows Cold/Warm/Hot arcs with
  * the current score as an animated needle overlay.
  */
-function ScoreGauge({ score, level }: { score: number; level: string }) {
+function ScoreGauge({ score, level }: { score?: number | null; level: string }) {
+  const isUnscored = level === 'UNSCORED' || score === null || score === undefined;
+  const numScore = isUnscored ? 0 : Math.max(0, Math.min(100, score || 0));
+  const displayScore = isUnscored ? "—" : (Number.isInteger(numScore) ? numScore.toString() : numScore.toFixed(1));
+
   const r = 70;
   const cx = 90;
   const cy = 90;
   const stroke = 12;
   const full = Math.PI * r;
   // Score 0-100 → arc fill 0-π (half circle)
-  const fill = (Math.max(0, Math.min(100, score)) / 100) * full;
+  const fill = isUnscored ? 0 : (numScore / 100) * full;
 
-  const arcColor = level === 'HOT' ? '#f97316' : level === 'WARM' ? '#f59e0b' : '#94a3b8';
+  const arcColor = isUnscored ? '#cbd5e1' : level === 'HOT' ? '#f97316' : level === 'WARM' ? '#f59e0b' : '#94a3b8';
 
-  const labelY = { HOT: '#dc2626', WARM: '#d97706', COLD: '#64748b' };
-  const levelColor = labelY[level as keyof typeof labelY] || '#64748b';
+  const labelY = { HOT: '#dc2626', WARM: '#d97706', COLD: '#64748b', UNSCORED: '#94a3b8' };
+  const levelColor = labelY[level as keyof typeof labelY] || '#94a3b8';
 
   return (
     <div className="score-gauge-wrap">
@@ -117,17 +135,19 @@ function ScoreGauge({ score, level }: { score: number; level: string }) {
           strokeDasharray={`${0.3 * full} ${full}`} strokeDashoffset={-0.7 * full}
         />
         {/* Score fill arc */}
-        <path
-          d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
-          fill="none" stroke={arcColor} strokeWidth={stroke} strokeLinecap="round"
-          strokeDasharray={`${fill} ${full}`} strokeDashoffset={0}
-          style={{ transition: 'stroke-dasharray 0.8s cubic-bezier(0.4,0,0.2,1)' }}
-        />
+        {!isUnscored && (
+          <path
+            d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+            fill="none" stroke={arcColor} strokeWidth={stroke} strokeLinecap="round"
+            strokeDasharray={`${fill} ${full}`} strokeDashoffset={0}
+            style={{ transition: 'stroke-dasharray 0.8s cubic-bezier(0.4,0,0.2,1)' }}
+          />
+        )}
         {/* Score label */}
-        <text x={cx} y={cy - 8} textAnchor="middle" fontSize="28" fontWeight="800"
-          fill={arcColor} fontFamily="Outfit, sans-serif">{score}</text>
+        <text x={cx} y={cy - 8} textAnchor="middle" fontSize={isUnscored ? "22" : displayScore.length > 3 ? "24" : "28"} fontWeight="800"
+          fill={arcColor} fontFamily="Outfit, sans-serif">{displayScore}</text>
         <text x={cx} y={cy + 6} textAnchor="middle" fontSize="9" fontWeight="600"
-          fill="#94a3b8" letterSpacing="1" fontFamily="Inter, sans-serif">LEAD SCORE</text>
+          fill="#94a3b8" letterSpacing="1" fontFamily="Inter, sans-serif">{isUnscored ? "UNCONTACTED" : "LEAD SCORE"}</text>
         {/* Zone labels */}
         <text x={cx - r + 2} y={cy + 18} fontSize="8" fill="#94a3b8" fontFamily="Inter">Cold</text>
         <text x={cx - 8} y={cy + 18} fontSize="8" fill="#d97706" fontFamily="Inter">Warm</text>
@@ -135,7 +155,7 @@ function ScoreGauge({ score, level }: { score: number; level: string }) {
       </svg>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
         <span style={{ fontWeight: 700, fontSize: '0.92rem', color: levelColor }}>
-          {level === 'HOT' ? 'Hot Lead' : level === 'WARM' ? 'Warm Lead' : 'Cold Lead'}
+          {isUnscored ? 'Uncontacted Lead' : level === 'HOT' ? 'Hot Lead' : level === 'WARM' ? 'Warm Lead' : 'Cold Lead'}
         </span>
       </div>
     </div>
@@ -143,9 +163,42 @@ function ScoreGauge({ score, level }: { score: number; level: string }) {
 }
 
 /**
- * Lead classification badge: HOT / WARM / COLD.
+ * Lead classification badge: HOT / WARM / COLD / UNSCORED.
  */
-function InterestBadge({ level, score, reasons }: { level: Contact['interest_level']; score?: number; reasons?: string[] }) {
+function InterestBadge({ level, score, reasons }: { level: Contact['interest_level'] | string; score?: number | null; reasons?: string[] }) {
+  if (level === 'CALLING' || level === 'Calling') {
+    return (
+      <span
+        title="Call is actively in progress — lead score will calculate once the conversation ends"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: '6px',
+          padding: '3px 10px', borderRadius: '999px',
+          background: 'rgba(59, 130, 246, 0.08)', color: '#2563eb', fontSize: '0.75rem', fontWeight: 600,
+          whiteSpace: 'nowrap', cursor: 'help', border: '1px solid rgba(59, 130, 246, 0.25)',
+        }}
+      >
+        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#3b82f6', display: 'inline-block' }} />
+        In Call
+      </span>
+    );
+  }
+
+  if (level === 'UNSCORED' || score === null || score === undefined) {
+    return (
+      <span
+        title="Call not triggered yet — scoring will activate after the first call attempt"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: '6px',
+          padding: '3px 10px', borderRadius: '999px',
+          background: 'rgba(148, 163, 184, 0.08)', color: '#94a3b8', fontSize: '0.75rem', fontWeight: 600,
+          whiteSpace: 'nowrap', cursor: 'help', border: '1px solid rgba(148, 163, 184, 0.2)',
+        }}
+      >
+        Uncontacted
+      </span>
+    );
+  }
+
   const styles: Record<string, { bg: string; fg: string; label: string; title: string }> = {
     'HOT':  { bg: '#fef2f2', fg: '#dc2626', label: 'HOT',  title: 'Score 75–100: Strong conversion, engagement, and interest signals' },
     'WARM': { bg: '#fffbeb', fg: '#d97706', label: 'WARM', title: 'Score 50–74: Moderate engagement, potential for conversion' },
@@ -155,6 +208,9 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
   const detail = reasons && reasons.length
     ? [s.title, '', `Score ${score}:`, ...reasons.map(r => `• ${r}`)].join(`\n`)
     : s.title;
+
+  const displayVal = typeof score === 'number' ? (Number.isInteger(score) ? score.toString() : score.toFixed(1)) : '';
+
   return (
     <span
       title={detail}
@@ -166,8 +222,8 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
       }}
     >
       {s.label}
-      {typeof score === 'number' && (
-        <span style={{ opacity: 0.75, fontWeight: 600 }}>{score}</span>
+      {displayVal && (
+        <span style={{ opacity: 0.75, fontWeight: 600 }}>{displayVal}</span>
       )}
     </span>
   );
@@ -283,12 +339,36 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   const [scheduledFor, setScheduledFor] = useState('');
   const [rescheduling, setRescheduling] = useState(false);
 
+  // Manual Add Lead Modal State
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [batches, setBatches] = useState<{ id: string; file_name: string }[]>([]);
+  const [counselors, setCounselors] = useState<{ id: string; name: string; availability_status?: string }[]>([]);
+  const [addingLead, setAddingLead] = useState(false);
+  const [showProfileDetails, setShowProfileDetails] = useState(false);
+  const [newLead, setNewLead] = useState({
+    name: '',
+    phone_number: '',
+    email: '',
+    notes: '',
+    batch_id: '',
+    assigned_counselor_id: '',
+    child_name: '',
+    child_age: '',
+    grade_sought: '',
+    academic_year: '2026-2027',
+    board_preference: '',
+    locality: '',
+    budget_band: '',
+    admission_urgency: '',
+  });
+
 
 
   // History Drawer State
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [attempts, setAttempts] = useState<CallAttempt[]>([]);
   const [schedules, setSchedules] = useState<Callback[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   // The lead's standing judgement, shown at the top of the drawer so the
   // reader doesn't have to reconstruct it from a list of calls.
@@ -414,7 +494,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   // otherwise overwrite newer results with stale ones.
   const fetchSeq = React.useRef(0);
 
-  const fetchContacts = async () => {
+  const fetchContacts = useCallback(async () => {
     const seq = ++fetchSeq.current;
     try {
       const res = await api.get('/contacts', {
@@ -435,7 +515,19 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       console.error('Error fetching contacts:', err);
       setLoading(false);
     }
-  };
+  }, [search, statusFilter, interestFilter, currentPage, pageSize]);
+
+  // Real-time Push via SSE (Instant updates for leads list)
+  useSSE(useCallback((msg) => {
+    fetchContacts();
+  }, [fetchContacts]), [
+    'CALL_STARTED',
+    'CALL_ENDED',
+    'CALL_ANALYZED',
+    'APPOINTMENT_BOOKED',
+    'CALLBACK_SCHEDULED',
+    'CONTACT_UPDATED'
+  ]);
 
 
 
@@ -488,6 +580,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       const res = await api.get(`/contacts/${contact.id}`);
       setAttempts(res.data.attempts || []);
       setSchedules(res.data.schedules || []);
+      setAppointments(res.data.appointments || []);
       setLeadSummary({
         classification: res.data.classification,
         score: res.data.lead_score,
@@ -513,6 +606,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       setSelectedContact(res.data.contact);
       setAttempts(res.data.attempts || []);
       setSchedules(res.data.schedules || []);
+      setAppointments(res.data.appointments || []);
       setLeadSummary({
         classification: res.data.classification,
         score: res.data.lead_score,
@@ -540,13 +634,70 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
     }
   };
 
+  const openAddModal = async () => {
+    setShowAddModal(true);
+    try {
+      const [batchesRes, cnsRes] = await Promise.all([
+        api.get('/contacts/batches').catch(() => ({ data: [] })),
+        api.get('/contacts/counselors/all').catch(() => ({ data: [] }))
+      ]);
+      setBatches(batchesRes.data || []);
+      setCounselors(cnsRes.data || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleAddLead = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLead.name.trim() || !newLead.phone_number.trim()) {
+      showToast('Contact Name and Phone Number are required', 'error');
+      return;
+    }
+    setAddingLead(true);
+    try {
+      await api.post('/contacts', newLead);
+      showToast(`Lead "${newLead.name}" created successfully!`, 'success');
+      setShowAddModal(false);
+      setNewLead({
+        name: '',
+        phone_number: '',
+        email: '',
+        notes: '',
+        batch_id: '',
+        assigned_counselor_id: '',
+        child_name: '',
+        child_age: '',
+        grade_sought: '',
+        academic_year: '2026-2027',
+        board_preference: '',
+        locality: '',
+        budget_band: '',
+        admission_urgency: '',
+      });
+      fetchContacts();
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to create lead'), 'error');
+    } finally {
+      setAddingLead(false);
+    }
+  };
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'between', alignItems: 'center', marginBottom: '32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>Lead Directory</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>Search and manage prospective student outreach actions</p>
         </div>
+        <button
+          className="btn btn-primary"
+          onClick={openAddModal}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 600, fontSize: '0.9rem', boxShadow: '0 4px 14px rgba(124, 58, 237, 0.35)' }}
+        >
+          <UserPlus size={18} />
+          Add Lead
+        </button>
       </div>
 
       {/* Filter and search bar */}
@@ -588,6 +739,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           <option value="HOT">HOT</option>
           <option value="WARM">WARM</option>
           <option value="COLD">COLD</option>
+          <option value="UNSCORED">Uncontacted</option>
         </select>
       </div>
 
@@ -735,6 +887,266 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
         </div>
       )}
 
+      {/* Manual Add Lead Modal */}
+      {showAddModal && (
+        <div className="modal-overlay">
+          <div className="glass-panel modal-content" style={{ padding: '32px', maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
+              <div>
+                <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.35rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <UserPlus size={22} style={{ color: 'var(--accent-primary)' }} />
+                  Enter New Lead
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
+                  Add a prospective parent inquiry directly into the admissions pipeline
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAddModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddLead}>
+              {/* Primary Contact Details */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontWeight: 600 }}>
+                    Parent / Caller Name <span style={{ color: 'var(--accent-danger, #ef4444)' }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Ramesh Reddy"
+                    className="form-input"
+                    value={newLead.name}
+                    onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontWeight: 600 }}>
+                    Phone Number <span style={{ color: 'var(--accent-danger, #ef4444)' }}>*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="e.g. +91 98765 43210"
+                    className="form-input"
+                    value={newLead.phone_number}
+                    onChange={(e) => setNewLead({ ...newLead, phone_number: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Email Address (Optional)</label>
+                  <input
+                    type="email"
+                    placeholder="parent@example.com"
+                    className="form-input"
+                    value={newLead.email}
+                    onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Assign to Counselor</label>
+                  <select
+                    className="form-input"
+                    value={newLead.assigned_counselor_id}
+                    onChange={(e) => setNewLead({ ...newLead, assigned_counselor_id: e.target.value })}
+                  >
+                    <option value="">Auto-Assign (Round Robin)</option>
+                    {counselors.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.availability_status ? `(${c.availability_status})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', marginBottom: '16px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Link to Campaign / Batch (Optional)</label>
+                  <select
+                    className="form-input"
+                    value={newLead.batch_id}
+                    onChange={(e) => setNewLead({ ...newLead, batch_id: e.target.value })}
+                  >
+                    <option value="">Direct Inquiry (Standalone Lead)</option>
+                    {batches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.file_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '18px' }}>
+                <label className="form-label">Initial Notes / Inquiry Summary</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Enquired via walk-in / website for Grade 5 admission..."
+                  className="form-input"
+                  value={newLead.notes}
+                  onChange={(e) => setNewLead({ ...newLead, notes: e.target.value })}
+                />
+              </div>
+
+              {/* Collapsible Family Profile Info */}
+              <div style={{ marginBottom: '24px', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowProfileDetails(!showProfileDetails)}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    background: 'rgba(255,255,255,0.03)',
+                    border: 'none',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    color: 'var(--text-primary)',
+                    fontWeight: 600,
+                    fontSize: '0.88rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span>Student & Admissions Details (Optional)</span>
+                  {showProfileDetails ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                </button>
+
+                {showProfileDetails && (
+                  <div style={{ padding: '16px', background: 'rgba(0,0,0,0.15)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Child Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Aarav Reddy"
+                        className="form-input"
+                        value={newLead.child_name}
+                        onChange={(e) => setNewLead({ ...newLead, child_name: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Child Age</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 10"
+                        className="form-input"
+                        value={newLead.child_age}
+                        onChange={(e) => setNewLead({ ...newLead, child_age: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Grade Sought</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Grade 5 / Nursery"
+                        className="form-input"
+                        value={newLead.grade_sought}
+                        onChange={(e) => setNewLead({ ...newLead, grade_sought: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Academic Year</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 2026-2027"
+                        className="form-input"
+                        value={newLead.academic_year}
+                        onChange={(e) => setNewLead({ ...newLead, academic_year: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Board Preference</label>
+                      <select
+                        className="form-input"
+                        value={newLead.board_preference}
+                        onChange={(e) => setNewLead({ ...newLead, board_preference: e.target.value })}
+                      >
+                        <option value="">Select Board</option>
+                        <option value="CBSE">CBSE</option>
+                        <option value="ICSE">ICSE</option>
+                        <option value="IB">IB</option>
+                        <option value="Cambridge/IGCSE">Cambridge / IGCSE</option>
+                        <option value="State">State Board</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Locality / Area</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Gachibowli, Hyderabad"
+                        className="form-input"
+                        value={newLead.locality}
+                        onChange={(e) => setNewLead({ ...newLead, locality: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Admission Urgency</label>
+                      <select
+                        className="form-input"
+                        value={newLead.admission_urgency}
+                        onChange={(e) => setNewLead({ ...newLead, admission_urgency: e.target.value })}
+                      >
+                        <option value="">Select Urgency</option>
+                        <option value="Urgent">Urgent (Immediate decision)</option>
+                        <option value="Planned">Planned (Within next 1-2 months)</option>
+                        <option value="JustExploring">Just Exploring</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ fontSize: '0.8rem' }}>Budget Band</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 2-3 Lakhs"
+                        className="form-input"
+                        value={newLead.budget_band}
+                        onChange={(e) => setNewLead({ ...newLead, budget_band: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowAddModal(false)}
+                  disabled={addingLead}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={addingLead}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                >
+                  {addingLead ? (
+                    <>
+                      <RefreshCw size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
+                      Saving Lead...
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} />
+                      Save Lead
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* History Slide-out Drawer */}
       {selectedContact && (
         <>
@@ -801,24 +1213,82 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
               </button>
             </div>
 
-            {/* Status pills */}
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px' }}>
-              <span className="call-status-pill" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}>
-                <span className="call-status-pill-dot" style={{ background: '#22c55e' }} />
-                Completed
-              </span>
-              {leadSummary && (
-                <span className="call-status-pill" style={{ background: '#f5f3ff', color: '#7c3aed', borderColor: '#ddd6fe' }}>
-                  <span className="call-status-pill-dot" style={{ background: '#7c3aed' }} />
-                  {leadSummary.classification === 'HOT' ? 'Priority Callback' : 'Counselling Callback'}
-                </span>
-              )}
-              {leadSummary && (
-                <span className="call-status-pill" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}>
-                  {leadSummary.classification === 'HOT' ? 'Hot' : leadSummary.classification === 'WARM' ? 'Warm' : 'Cold'}
-                </span>
-              )}
-            </div>
+            {/* Status pills — completely dynamic based on real DB records */}
+            {(() => {
+              // 1. Contact / Dialing status
+              const contactStatus = selectedContact.status || 'Pending';
+              const statusConfig: Record<string, { label: string; dot: string; color: string; bg: string; border: string }> = {
+                Completed: { label: 'Completed', dot: '#22c55e', color: '#16a34a', bg: 'rgba(34, 197, 94, 0.08)', border: 'rgba(34, 197, 94, 0.25)' },
+                Scheduled: { label: 'Scheduled', dot: '#3b82f6', color: '#2563eb', bg: 'rgba(59, 130, 246, 0.08)', border: 'rgba(59, 130, 246, 0.25)' },
+                Calling: { label: 'Calling...', dot: '#f59e0b', color: '#d97706', bg: 'rgba(245, 158, 11, 0.08)', border: 'rgba(245, 158, 11, 0.25)' },
+                NeedsReschedule: { label: 'Needs Callback', dot: '#8b5cf6', color: '#7c3aed', bg: 'rgba(139, 92, 246, 0.08)', border: 'rgba(139, 92, 246, 0.25)' },
+                Pending: { label: 'Pending', dot: '#94a3b8', color: '#64748b', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.25)' },
+                Failed: { label: 'Failed', dot: '#ef4444', color: '#dc2626', bg: 'rgba(239, 68, 68, 0.08)', border: 'rgba(239, 68, 68, 0.25)' },
+                DoNotCall: { label: 'Do Not Call', dot: '#ef4444', color: '#dc2626', bg: 'rgba(239, 68, 68, 0.08)', border: 'rgba(239, 68, 68, 0.25)' },
+              };
+              const sConf = statusConfig[contactStatus] || statusConfig.Pending;
+
+              // 2. Action / Engagement lifecycle
+              const bookedApt = appointments.find(a => a.status === 'Booked');
+              const completedApt = appointments.find(a => a.status === 'Completed');
+              const pendingCb = schedules.find(s => s.status === 'Scheduled');
+              const latestRecStep = (attempts[0]?.analysis?.recommended_next_step || '').toLowerCase();
+
+              let actionPill = { label: 'Admissions Outreach', dot: '#06b6d4', color: '#0891b2', bg: 'rgba(6, 182, 212, 0.08)', border: 'rgba(6, 182, 212, 0.25)' };
+
+              if (bookedApt) {
+                actionPill = bookedApt.meeting_type === 'virtual'
+                  ? { label: 'Online Session Booked', dot: '#3b82f6', color: '#2563eb', bg: 'rgba(59, 130, 246, 0.08)', border: 'rgba(59, 130, 246, 0.25)' }
+                  : { label: 'Campus Visit Booked', dot: '#10b981', color: '#059669', bg: 'rgba(16, 185, 129, 0.08)', border: 'rgba(16, 185, 129, 0.25)' };
+              } else if (completedApt) {
+                actionPill = { label: 'Campus Visit Completed', dot: '#10b981', color: '#059669', bg: 'rgba(16, 185, 129, 0.08)', border: 'rgba(16, 185, 129, 0.25)' };
+              } else if (pendingCb) {
+                actionPill = (leadSummary?.classification === 'HOT' || selectedContact.lead_classification === 'HOT')
+                  ? { label: 'Priority Callback', dot: '#8b5cf6', color: '#7c3aed', bg: 'rgba(139, 92, 246, 0.08)', border: 'rgba(139, 92, 246, 0.25)' }
+                  : { label: 'Scheduled Callback', dot: '#6366f1', color: '#4f46e5', bg: 'rgba(99, 102, 241, 0.08)', border: 'rgba(99, 102, 241, 0.25)' };
+              } else if (latestRecStep.includes('visit') || latestRecStep.includes('tour') || latestRecStep.includes('appointment')) {
+                actionPill = { label: 'Visit Requested', dot: '#f59e0b', color: '#d97706', bg: 'rgba(245, 158, 11, 0.08)', border: 'rgba(245, 158, 11, 0.25)' };
+              } else if (attempts.length === 0) {
+                actionPill = { label: 'Direct Lead', dot: '#94a3b8', color: '#64748b', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.25)' };
+              }
+
+              // 3. Lead score / intent classification
+              const score = leadSummary?.score ?? selectedContact.lead_score;
+              const classification = leadSummary?.classification ?? selectedContact.lead_classification ?? 'UNSCORED';
+              const isUnscored = classification === 'UNSCORED' || score === null || score === undefined || attempts.length === 0;
+
+              const scoreText = typeof score === 'number' ? (Number.isInteger(score) ? score.toString() : score.toFixed(1)) : '';
+
+              const classConfig: Record<string, { label: string; dot: string; color: string; bg: string; border: string }> = {
+                HOT: { label: `Hot Lead (${scoreText})`, dot: '#ef4444', color: '#dc2626', bg: 'rgba(239, 68, 68, 0.08)', border: 'rgba(239, 68, 68, 0.25)' },
+                WARM: { label: `Warm Lead (${scoreText})`, dot: '#f59e0b', color: '#d97706', bg: 'rgba(245, 158, 11, 0.08)', border: 'rgba(245, 158, 11, 0.25)' },
+                COLD: { label: `Cold Lead (${scoreText})`, dot: '#94a3b8', color: '#64748b', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.25)' },
+                UNSCORED: { label: 'Uncontacted (Awaiting Call)', dot: '#94a3b8', color: '#64748b', bg: 'rgba(148, 163, 184, 0.08)', border: 'rgba(148, 163, 184, 0.25)' },
+              };
+              const cConf = isUnscored ? classConfig.UNSCORED : (classConfig[classification] || classConfig.COLD);
+
+              return (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px' }}>
+                  {/* Pill 1: Dialing / Contact Status */}
+                  <span className="call-status-pill" style={{ background: sConf.bg, color: sConf.color, borderColor: sConf.border }}>
+                    <span className="call-status-pill-dot" style={{ background: sConf.dot }} />
+                    {sConf.label}
+                  </span>
+
+                  {/* Pill 2: Action / Engagement Lifecycle */}
+                  <span className="call-status-pill" style={{ background: actionPill.bg, color: actionPill.color, borderColor: actionPill.border }}>
+                    <span className="call-status-pill-dot" style={{ background: actionPill.dot }} />
+                    {actionPill.label}
+                  </span>
+
+                  {/* Pill 3: Intent Classification & Score */}
+                  <span className="call-status-pill" style={{ background: cConf.bg, color: cConf.color, borderColor: cConf.border }}>
+                    <span className="call-status-pill-dot" style={{ background: cConf.dot }} />
+                    {cConf.label}
+                  </span>
+                </div>
+              );
+            })()}
 
             {/* Call meta strip */}
             {attempts.length > 0 && (
@@ -857,7 +1327,10 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             const weightedBreakdown = leadSummary.weightedBreakdown || {};
             const totalWeighted = Object.values(weightedBreakdown).reduce((a, b) => a + b, 0);
             const lastAttempt = attempts[0];
-            const nextAction = lastAttempt?.analysis?.recommended_next_step || leadSummary.classificationReason;
+            const isUncontacted = leadSummary.classification === 'UNSCORED' || leadSummary.score === null || attempts.length === 0;
+            const nextAction = isUncontacted
+              ? 'Ready for outreach — trigger a call or launch campaign to connect with this parent.'
+              : (lastAttempt?.analysis?.recommended_next_step || leadSummary.classificationReason);
 
             // Build parameter labels
             const PARAM_LABELS: Record<string, string> = {

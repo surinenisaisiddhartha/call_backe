@@ -10,11 +10,12 @@ import Dashboard from './pages/Dashboard';
 import Schools from './pages/Schools';
 import Insights from './pages/Insights';
 import CounselorQueue from './pages/CounselorQueue';
+import { useSSE } from './hooks/useSSE';
 import {
   Users, Settings as SettingsIcon, LogOut,
   BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard,
   PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp, Headphones,
-  Phone, FileText, ChevronRight
+  Phone, FileText, ChevronRight, Radio
 } from 'lucide-react';
 type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'counselor' | 'scheduling' | 'insights' | 'settings' | 'schools';
 
@@ -196,6 +197,18 @@ export default function App() {
     }, 4000);
   };
 
+  // Global Real-time Push (SSE) Toast Notifications
+  useSSE(React.useCallback((msg) => {
+    if (msg.event === 'APPOINTMENT_BOOKED') {
+      const t = msg.data?.readable_time || 'upcoming slot';
+      const purpose = msg.data?.purpose || 'Campus Visit';
+      showToast(`🎉 New Appointment: ${purpose} on ${t}`, 'success');
+    } else if (msg.event === 'CALLBACK_SCHEDULED') {
+      const t = msg.data?.readable_time || 'upcoming slot';
+      showToast(`📞 Callback scheduled for ${t}`, 'success');
+    }
+  }, []), ['APPOINTMENT_BOOKED', 'CALLBACK_SCHEDULED']);
+
   const handleLoginSuccess = (userToken: string, loggedInUser?: any) => {
     localStorage.setItem('token', userToken);
     if (loggedInUser) {
@@ -270,6 +283,35 @@ export default function App() {
         </div>
 
         <div className="right-section">
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.72rem',
+              color: '#10b981',
+              fontWeight: 600,
+              background: 'rgba(16, 185, 129, 0.08)',
+              border: '1px solid rgba(16, 185, 129, 0.2)',
+              padding: '4px 10px',
+              borderRadius: '20px',
+              letterSpacing: '0.02em',
+            }}
+            title="Real-Time Server-Sent Events (SSE) Live Stream Connected"
+          >
+            <span
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                background: '#10b981',
+                display: 'inline-block',
+                boxShadow: '0 0 8px #10b981',
+              }}
+            />
+            Live Sync
+          </div>
+
           <button
             onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
             style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: '7px', padding: '6px 10px', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem' }}

@@ -139,11 +139,11 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   const completedLeads = leadStats.completed;
 
   const stats = [
-    { label: 'Total Leads', value: leadStats.total, color: '#7c3aed', icon: Users, trend: '+12% this month', trendPositive: true },
-    { label: 'Calls Today', value: callsToday, color: '#06b6d4', icon: PhoneCall, trend: '+8% vs yesterday', trendPositive: true },
-    { label: 'Leads Completed', value: completedLeads, color: '#10b981', icon: CheckCircle, trend: '+15% this week', trendPositive: true },
-    { label: 'Appointments Booked', value: bookedAppointments.length, color: '#8b5cf6', icon: Calendar, trend: '+5% this month', trendPositive: true },
-    { label: 'Callbacks Pending', value: pendingCallbacks.length, color: '#f59e0b', icon: Clock, trend: 'Action required', trendPositive: false },
+    { label: 'Total Leads', value: leadStats.total, color: '#7c3aed', icon: Users, trend: `${leadStats.total} total leads`, trendPositive: true },
+    { label: 'Calls Today', value: callsToday, color: '#06b6d4', icon: PhoneCall, trend: callsToday > 0 ? `${callsToday} dialed today` : 'No calls today', trendPositive: callsToday > 0 },
+    { label: 'Leads Completed', value: completedLeads, color: '#10b981', icon: CheckCircle, trend: `${completedLeads} completed`, trendPositive: true },
+    { label: 'Appointments Booked', value: bookedAppointments.length, color: '#8b5cf6', icon: Calendar, trend: `${bookedAppointments.length} confirmed`, trendPositive: true },
+    { label: 'Callbacks Pending', value: pendingCallbacks.length, color: '#f59e0b', icon: Clock, trend: pendingCallbacks.length > 0 ? `${pendingCallbacks.length} pending` : 'All cleared', trendPositive: pendingCallbacks.length === 0 },
   ];
 
   const itemsPerPage = 12;

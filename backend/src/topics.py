@@ -1,129 +1,76 @@
 """
-What callers actually asked about — detected from their own words.
+Dynamic semantic classification of topics and inquiries spoken by callers.
 
-WHY THIS EXISTS ALONGSIDE THE LLM ANALYSIS
-Retell's post-call analysis already returns a primary_topic and a topics list.
-This does not replace that; it does a different job:
-
-  * It is DETERMINISTIC. The same transcript always yields the same topics, so
-    counts across thousands of calls can be trusted and compared month to
-    month. An LLM asked to pick from a list complies most of the time, not
-    every time, and a category that quietly drifts makes a trend line lie.
-  * It works on calls ALREADY MADE. There are 116 transcripts stored that
-    predate the analysis config and can never be re-analysed by Retell. This
-    reads them today.
-  * It is FREE and instant — no API call, no per-call cost at 10,000 a day.
-  * It is auditable: every hit can point at the phrase that caused it.
-
-The two are complementary. The LLM judges intent and nuance; this counts
-subjects reliably.
-
-ONLY THE CALLER'S WORDS COUNT
-Detection runs over the caller's lines alone. The agent says "fees" in
-practically every call while explaining something, and counting that would
-show 100% of callers asking about fees — the opposite of a useful signal.
-
-KEYWORDS ARE INDIAN-ENGLISH ADMISSIONS LANGUAGE
-Grounded in how parents actually phrase things ("what is the rate", "any
-concession", "donation", "TC"), not textbook vocabulary.
+Extracts genuine caller inquiries directly from conversation turns, distinguishing
+specific concepts (e.g. Day Boarding vs. Residential Hostel, Teacher Qualifications vs. generic Staff,
+Alumni & University Placements vs. generic Results) while eliminating false positives
+such as email spellouts ('at the rate') triggering Fees.
 """
 import re
 from typing import Dict, List
 
-# label -> phrases that mean the caller raised it.
-# Multi-word phrases are matched first so "fee structure" doesn't merely count
-# as "fee". Every entry is lowercase; matching is word-boundary aware so
-# "rate" does not fire inside "accurate".
-TOPIC_KEYWORDS: Dict[str, List[str]] = {
-    "Fees": [
-        "fee", "fees", "fee structure", "fees structure", "how much", "cost",
-        "costs", "charges", "charge", "rate", "rates", "tuition", "annual fee",
-        "per year", "per month", "payment", "instalment", "installment", "emi",
-        "donation", "expensive", "affordable", "budget", "price",
+SEMANTIC_TOPIC_PATTERNS: Dict[str, List[str]] = {
+    "Admissions": [
+        r"\b(?:admission|admissions|enrol|enroll|enrollment|enrolment|apply|application|entrance\s+test|seat\s+availability|vacancy|vacancies|eligibility|transfer\s+certificate|\btc\b)\b",
+        r"\b(?:grade|class|nursery|kindergarten|standard)\s+\d+\s+admission\b",
+        r"\blooking\s+for\s+.*admission\b",
+    ],
+    "Day Boarding": [
+        r"\bday[\s-]boarding\b",
+        r"\bextended\s+day\b",
+        r"\bafter\s+school\s+care\b",
+    ],
+    "Hostel & Residential": [
+        r"(?<!day\s)(?<!day-)\b(?:hostel|residential|dormitory|boarding\s+facility|stay\s+in\s+school|night\s+stay|accommodation)\b",
+    ],
+    "Teacher Qualifications": [
+        r"\b(?:teacher|teachers|faculty|staff)\s*(?:qualification|qualifications|quality|experience|ratio|standard)\b",
+        r"\bquality.*(?:required\s+for|of)\s+(?:the\s+)?teachers\b",
+        r"\bstudent[\s-]teacher\s+ratio\b",
+        r"\bprincipal\b",
+    ],
+    "Alumni & Placements": [
+        r"\b(?:alumni|alumnus|past\s+students|batches\s+passed\s+out|celebrities\s+in\s+the\s+alumni)\b",
+        r"\b(?:university|universities|college\s+placement|higher\s+education|placements)\b",
+    ],
+    "Fees & Tuition": [
+        r"(?<!at\s)(?<!the\s)\b(?:fee|fees|fee\s+structure|tuition|cost\s+of\s+study|instalment|installment|donation|per\s+year\s+cost)\b",
+        r"\bhow\s+much\s+(?:is\s+the\s+fee|per\s+year|are\s+the\s+charges)\b",
     ],
     "Scholarships": [
-        "scholarship", "scholarships", "concession", "discount", "sibling discount",
-        "financial aid", "free seat", "rte", "subsidy", "waiver", "fee waiver",
-        "merit", "reduction",
+        r"\b(?:scholarship|scholarships|concession|discount|financial\s+aid|fee\s+waiver|subsidy)\b",
     ],
-    "Admissions": [
-        "admission", "admissions", "apply", "application", "enrol", "enroll",
-        "enrolment", "enrollment", "seat", "seats", "vacancy", "vacancies",
-        "availability", "available", "form", "procedure", "process",
-        "eligibility", "criteria", "entrance", "entrance test", "interview",
-        "age", "age limit", "documents", "document", "certificate",
-        "birth certificate", "transfer certificate", "tc", "deadline",
-        "last date", "registration",
+    "Curriculum & Syllabus": [
+        r"\b(?:curriculum|syllabus|myp|pyp|diploma\s+programme|international\s+baccalaureate|\bib\b|\bcbse\b|\bicse\b|\bigcse\b)\b",
     ],
-    "Curriculum": [
-        "curriculum", "syllabus", "ib", "cbse", "icse", "igcse", "board",
-        "subjects", "subject", "stream", "academics", "academic", "pyp", "myp",
-        "diploma", "programme", "program", "medium", "language",
+    "Campus Facilities": [
+        r"\b(?:campus\s+facilities|infrastructure|laboratories|labs|smart\s+classes|swimming\s+pool|playground|sports\s+complex|campus\s+tour|campus\s+visit)\b",
     ],
-    "Facilities": [
-        "facility", "facilities", "campus", "infrastructure", "lab", "labs",
-        "laboratory", "library", "playground", "swimming", "pool", "classroom",
-        "classrooms", "smart class", "building", "ground",
+    "Transportation": [
+        r"\b(?:transport|transportation|bus\s+facility|bus\s+routes|pick\s+and\s+drop|pickup|van\s+service)\b",
     ],
-    "Activities": [
-        "sports", "games", "activities", "activity", "extracurricular",
-        "extra curricular", "co curricular", "music", "dance", "art", "drama",
-        "club", "clubs", "martial", "karate", "yoga", "coaching", "swimming",
-        "athletics", "competition",
+    "School Timings": [
+        r"\b(?:school\s+hours|timings|working\s+hours|shift\s+timing|what\s+time\s+starts)\b",
     ],
-    "Transport": [
-        "transport", "transportation", "bus", "buses", "van", "pick up",
-        "pickup", "drop", "route", "conveyance", "cab",
+    "Location & Directions": [
+        r"\b(?:location|address|directions|how\s+to\s+reach|distance\s+from|branch\s+address)\b",
     ],
-    "Hostel": [
-        "hostel", "boarding", "residential", "day boarding", "accommodation",
-        "mess", "food", "meals", "canteen", "lunch", "breakfast", "menu",
-    ],
-    "Timings": [
-        "timing", "timings", "school hours", "what time", "start time",
-        "closing time", "shift", "working days", "holidays", "vacation",
-        "half day", "schedule",
-    ],
-    "Location": [
-        "location", "address", "directions", "how to reach", "distance",
-        "nearby", "near by", "area", "branch", "landmark",
-    ],
-    "Staff": [
-        "teacher", "teachers", "faculty", "staff", "qualification",
-        "qualifications", "experience", "ratio", "student teacher ratio",
-        "class size", "strength", "principal",
-    ],
-    "Policies": [
-        "policy", "policies", "rules", "uniform", "dress code", "attendance",
-        "leave", "refund", "withdrawal", "discipline", "safety", "security",
-        "cctv", "medical", "insurance",
-    ],
-    "Results": [
-        "results", "result", "performance", "board results", "university",
-        "placement", "alumni", "ranking", "rank", "accreditation",
-        "affiliation", "recognised", "recognized",
+    "Extracurricular Activities": [
+        r"\b(?:extracurricular|extra-curricular|co-curricular|sports\s+activities|music|dance|martial\s+arts|karate|yoga|drama|robotics)\b",
     ],
 }
 
-# Precompiled, longest phrase first so multi-word terms win over their parts.
-_PATTERNS = {
-    topic: [
-        (kw, re.compile(r"(?<![a-z])" + re.escape(kw) + r"(?![a-z])"))
-        for kw in sorted(keywords, key=len, reverse=True)
-    ]
-    for topic, keywords in TOPIC_KEYWORDS.items()
+_COMPILED_PATTERNS = {
+    topic: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for topic, patterns in SEMANTIC_TOPIC_PATTERNS.items()
 }
 
-ALL_TOPICS = sorted(TOPIC_KEYWORDS.keys())
+ALL_TOPICS = sorted(SEMANTIC_TOPIC_PATTERNS.keys())
 
 
 def caller_utterances(transcript: str) -> str:
     """
-    Just the caller's half of the conversation.
-
-    Retell transcripts are "Agent: ...\\nUser: ..." lines. Counting the agent's
-    words would report that nearly every caller asked about fees, because the
-    agent mentions them while answering.
+    Extracts only genuine caller turns, stripping email spell-outs and affirmations.
     """
     if not transcript:
         return ""
@@ -131,27 +78,29 @@ def caller_utterances(transcript: str) -> str:
     for line in transcript.split("\n"):
         stripped = line.strip()
         if stripped.lower().startswith("user:"):
-            said.append(stripped.split(":", 1)[1])
-    # Fall back to the whole transcript only if it carries no speaker labels at
-    # all, which is better than detecting nothing.
-    return " ".join(said).lower() if said else transcript.lower()
+            val = stripped.split(":", 1)[1].strip()
+            # Strip email spell-outs ('at the rate', '@') so they don't trigger 'rate' -> Fees
+            val = re.sub(r"[\w\s]+at the rate[\w\s\.]+", "", val, flags=re.IGNORECASE).strip()
+            if val and len(val) > 2 and val.lower() not in {"yes", "no", "yeah", "speaking", "hello", "halo", "ok", "okay", "yes of course"}:
+                said.append(val)
+    return " ".join(said) if said else ""
 
 
 def detect_topics(transcript: str, with_evidence: bool = False):
     """
-    Topics the CALLER raised.
-
-    Returns a sorted list of labels, or {label: [matched phrases]} when
-    with_evidence is set — the evidence exists so a surprising count can always
-    be traced back to the words that produced it.
+    Dynamically identifies caller-spoken inquiry topics.
     """
     text = caller_utterances(transcript)
     if not text:
         return {} if with_evidence else []
 
     found = {}
-    for topic, patterns in _PATTERNS.items():
-        hits = [kw for kw, pattern in patterns if pattern.search(text)]
+    for topic, patterns in _COMPILED_PATTERNS.items():
+        hits = []
+        for p in patterns:
+            m = p.search(text)
+            if m:
+                hits.append(m.group(0))
         if hits:
             found[topic] = hits
 
@@ -160,13 +109,7 @@ def detect_topics(transcript: str, with_evidence: bool = False):
 
 def knowledge_coverage(db, school_id: str = None) -> Dict[str, bool]:
     """
-    Which topics this school can actually answer, judged by whether its
-    knowledge base contains the words at all.
-
-    This is the point of the whole exercise. Knowing that 40 parents asked
-    about scholarships is interesting; knowing the agent had nothing to tell
-    any of them is what gets the page written. Checked against the school's own
-    scraped content, so it is specific to that school rather than assumed.
+    Checks knowledge chunk coverage for dynamic topics.
     """
     from src.db import KnowledgeChunk
 
@@ -176,9 +119,7 @@ def knowledge_coverage(db, school_id: str = None) -> Dict[str, bool]:
     corpus = " ".join((row[0] or "") for row in q.all()).lower()
 
     coverage = {}
-    for topic, patterns in _PATTERNS.items():
-        # A topic counts as covered if the knowledge base mentions any of its
-        # terms more than once — a single incidental mention is not an answer.
-        total = sum(len(pattern.findall(corpus)) for _, pattern in patterns)
+    for topic, patterns in _COMPILED_PATTERNS.items():
+        total = sum(len(pattern.findall(corpus)) for pattern in patterns)
         coverage[topic] = total >= 2
     return coverage

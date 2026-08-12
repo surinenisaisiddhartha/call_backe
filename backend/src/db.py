@@ -126,6 +126,11 @@ class School(Base):
     smtp_username = Column(String(255), nullable=True)
     smtp_password = Column(String(255), nullable=True)
     smtp_from_email = Column(String(255), nullable=True)
+    # ── Calling-window per school (IST hours, 0-23) ───────────────────
+    # Defaults match the current global window (9 AM – 4 PM IST).  The
+    # dialer and call-now route read these and pass to is_working_hours().
+    calling_start_hour = Column(Integer, default=9)
+    calling_end_hour = Column(Integer, default=16)
 
 class UploadBatch(Base):
     __tablename__ = "upload_batches"
@@ -147,6 +152,11 @@ class Counselor(Base):
     name = Column(String(255), nullable=False)
     email = Column(String(255), nullable=False)
     phone_number = Column(String(50), nullable=True)
+    # ── Availability & capacity ───────────────────────────────────────
+    # Available = accepting new leads, InConsultation = temporarily busy,
+    # OnLeave = skip entirely in auto-assignment.
+    availability_status = Column(String(30), default="Available")
+    max_capacity = Column(Integer, default=50)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Contact(Base):
@@ -160,6 +170,7 @@ class Contact(Base):
     email = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
     status = Column(String(50), default="Pending")  # Pending, Calling, Completed, NeedsReschedule, Scheduled, Failed
+    counselor_followup_status = Column(String(30), default="Pending")  # Pending, InProgress, Completed
     # ── Lead scoring, stored rather than computed per request ──────────
     # A school doing 1,000-10,000 calls a day cannot have every lead scored on
     # every page load: ranking and filtering by score have to happen in SQL,
@@ -281,6 +292,22 @@ class KnowledgeChunk(Base):
     content_hash = Column(String(64), nullable=False)   # To detect changes
     scraped_at = Column(DateTime, default=datetime.utcnow)
 
+class CounselorActivity(Base):
+    """
+    Structured follow-up history replacing string-concatenated notes.
+    Every counselor interaction — Call, WhatsApp, Email, CampusVisit, Note,
+    StatusChange, AutoAssign — gets its own immutable row.  This makes
+    activity auditable, queryable, and attributable to a specific counselor.
+    """
+    __tablename__ = "counselor_activities"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    contact_id = Column(String(36), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    counselor_id = Column(String(36), ForeignKey("counselors.id", ondelete="SET NULL"), nullable=True)
+    action_type = Column(String(50), nullable=False)      # Call, WhatsApp, Email, CampusVisit, Note, StatusChange, AutoAssign
+    outcome = Column(String(100), nullable=True)           # e.g. "Campus Visit Scheduled", "Interested", "Not Reachable"
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # Self-healing migration for appointments google_calendar_html_link column
@@ -346,6 +373,12 @@ def init_db():
             print("[DB] Self-healing migration: adding assigned_counselor_id to contacts table")
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE contacts ADD COLUMN assigned_counselor_id VARCHAR(36);"))
+                conn.commit()
+
+        if 'counselor_followup_status' not in contact_cols_now:
+            print("[DB] Self-healing migration: adding counselor_followup_status to contacts table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE contacts ADD COLUMN counselor_followup_status VARCHAR(30) DEFAULT 'Pending';"))
                 conn.commit()
 
         # ── The 20-point profile ──────────────────────────────────────────
@@ -485,12 +518,41 @@ def init_db():
             "smtp_password": "VARCHAR(255)",
             "smtp_from_email": "VARCHAR(255)",
         }
+        # Calling-window hours
+        school_override_columns["calling_start_hour"] = "INTEGER DEFAULT 9"
+        school_override_columns["calling_end_hour"] = "INTEGER DEFAULT 16"
+
         for col_name, col_type in school_override_columns.items():
             if col_name not in school_columns:
                 print(f"[DB] Self-healing migration: adding {col_name} to schools table")
                 with engine.connect() as conn:
                     conn.execute(text(f"ALTER TABLE schools ADD COLUMN {col_name} {col_type};"))
                     conn.commit()
+        # ── Counselor availability & capacity ─────────────────────────
+        counselor_columns = [c['name'] for c in inspector.get_columns('counselors')]
+        for col_name, col_type in (
+            ("availability_status", "VARCHAR(30) DEFAULT 'Available'"),
+            ("max_capacity", "INTEGER DEFAULT 50"),
+        ):
+            if col_name not in counselor_columns:
+                print(f"[DB] Self-healing migration: adding {col_name} to counselors table")
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE counselors ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
+
+        # ── CounselorActivity indexes ─────────────────────────────────
+        for index_name, table, columns in (
+            ("ix_counselor_activities_contact", "counselor_activities", "contact_id"),
+            ("ix_counselor_activities_counselor", "counselor_activities", "counselor_id"),
+            ("ix_counselor_activities_created", "counselor_activities", "created_at"),
+        ):
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({columns});"))
+                    conn.commit()
+            except Exception as idx_err:
+                print(f"[DB] Could not create index {index_name}: {idx_err}")
+
     except Exception as e:
         print(f"[DB] Migration warning: {e}")
 

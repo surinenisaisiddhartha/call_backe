@@ -19,6 +19,7 @@ from src.routers.tools import router as tools_router
 from src.routers.appointments import router as appointments_router
 from src.routers.schools import router as schools_router
 from src.routers.analytics import router as analytics_router
+from src.events import router as events_router, event_manager
 
 app = FastAPI(title="EnquiryCall API", version="1.0.0")
 
@@ -44,6 +45,7 @@ app.include_router(tools_router)
 app.include_router(appointments_router)
 app.include_router(schools_router)
 app.include_router(analytics_router)
+app.include_router(events_router)
 
 # Mount static files for uploads (like logos)
 os.makedirs("uploads/logos", exist_ok=True)
@@ -53,8 +55,16 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 @app.get("/health")
 def health_check():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
 @app.on_event("startup")
 def startup_event():
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        event_manager.set_loop(loop)
+    except Exception as e:
+        print(f"[STARTUP] Could not bind event manager loop: {e}")
+
     print("Initializing database...")
     try:
         init_db()

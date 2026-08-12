@@ -11,6 +11,7 @@ from pydantic import BaseModel, model_validator
 from typing import Any, Optional
 from src.db import get_db, Contact, ScheduledCallback, Appointment, CallAttempt, Settings
 from src.knowledge import search_knowledge, smart_truncate
+from src.events import event_manager
 
 router = APIRouter(prefix="/api/webhooks/tools", tags=["Retell Tools"])
 
@@ -440,6 +441,16 @@ def schedule_callback(
             contact.updated_at = datetime.utcnow()
         
         db.commit()
+
+        event_manager.broadcast_sync(
+            "CALLBACK_SCHEDULED",
+            {
+                "contact_id": contact_id,
+                "readable_time": readable_time,
+                "reason": request.reason
+            },
+            school_id=contact.school_id if contact else None
+        )
         
         # Register APScheduler one-shot job to fire the callback at the exact time
         try:
@@ -647,30 +658,20 @@ def book_appointment(
         dt = datetime.fromisoformat(dt_str)
         scheduled_for = dt.astimezone(timezone.utc).replace(tzinfo=None)
         readable_time = dt.strftime('%A, %d %B at %I:%M %p')
-        
+
         contact = resolve_contact(db, req, request)
         if not contact:
             print("[TOOLS] book_appointment: No contact found")
             return {"result": "I couldn't find the contact details to book the appointment. Please try again."}
 
-        # attendee_name/phone are optional from the agent now — fall back to the
-        # resolved contact's own details so the calendar event and email are
-        # still complete.
         attendee_name = (request.attendee_name or "").strip() or contact.name or "Guest"
         attendee_phone = (request.attendee_phone or "").strip() or contact.phone_number or ""
 
-        # Save or update contact email — normalized to recover from common
-        # speech-to-text artifacts (see normalize_email) before it's used
-        # anywhere downstream (Cal.com, calendar invite, confirmation email).
         if request.attendee_email and request.attendee_email.strip():
             request.attendee_email = normalize_email(request.attendee_email)
             contact.email = request.attendee_email
             contact.updated_at = datetime.utcnow()
 
-        # If the caller already has a Booked appointment (e.g. they change their
-        # mind on the date mid-call, or the agent calls this tool twice), update
-        # it in place instead of creating a duplicate row/calendar event/email —
-        # mirrors the existing-callback check in schedule_callback above.
         existing_appointment = db.query(Appointment).filter(
             Appointment.contact_id == contact.id,
             Appointment.status == "Booked"
@@ -702,14 +703,23 @@ def book_appointment(
                 status="Booked"
             )
             db.add(appointment)
-            db.flush()  # Populates appointment.id
+            db.flush()
 
         contact.status = "Completed"
         db.commit()
 
-        # Resolve this contact's school (None for pre-multitenancy contacts)
-        # so calendar/Cal.com/SMTP use that school's OWN configuration if
-        # it has one, falling back to the shared platform config otherwise.
+        event_manager.broadcast_sync(
+            "APPOINTMENT_BOOKED",
+            {
+                "contact_id": contact.id,
+                "appointment_id": appointment.id,
+                "readable_time": readable_time,
+                "meeting_type": meeting_type,
+                "purpose": request.purpose
+            },
+            school_id=contact.school_id if contact else None
+        )
+
         from src.school_settings import get_school_for_contact, get_google_calendar_config, get_smtp_config
         school = get_school_for_contact(db, contact)
         school_name = school.name if school else "TSRA"
@@ -717,8 +727,6 @@ def book_appointment(
         gcal_config = get_google_calendar_config(db, school)
         smtp_config = get_smtp_config(db, school)
 
-        # Enqueue both Google Calendar event creation and email confirmation to run in the background
-        # This completely eliminates any lag/latency during the live phone call.
         background_tasks.add_task(
             process_appointment_booking_async,
             appointment_id=appointment.id,
@@ -746,10 +754,8 @@ def book_appointment(
         if meeting_type == "virtual":
             return {"result": f"Your virtual meeting for {request.purpose} has been booked for {readable_time}. You'll receive the meeting link by email shortly. We look forward to speaking with you!"}
         return {"result": f"Your appointment for {request.purpose} has been booked for {readable_time}. You'll receive a confirmation shortly. We look forward to seeing you!"}
-        
     except Exception as e:
         return {"result": f"There was an issue booking the appointment: {str(e)}. Please call us directly to confirm your slot."}
-
 
 
 @router.post("/mark-outcome")
@@ -769,7 +775,6 @@ def mark_outcome(
         if not contact:
             return {"result": "Outcome recorded."}
         
-        # Map outcome to contact status
         outcome_mapping = {
             "interested_followup_scheduled": "Scheduled",
             "appointment_booked": "Completed",
@@ -783,7 +788,6 @@ def mark_outcome(
         contact.status = outcome_mapping.get(request.outcome, "Pending")
         contact.updated_at = datetime.utcnow()
         
-        # Update the most recent CallAttempt with agent_outcome
         attempt = db.query(CallAttempt).filter(
             CallAttempt.contact_id == contact.id
         ).order_by(CallAttempt.started_at.desc()).first()

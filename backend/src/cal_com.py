@@ -352,15 +352,6 @@ async def cancel_booking(db: Session, booking_uid: str, reason: str = "Reschedul
             return False
 
 def get_mock_slots():
-    """Return mock slots for next 3 days to allow UI preview when Cal.com is not configured."""
-    slots = {}
-    today = datetime.utcnow()
-    for day_offset in range(1, 4):
-        date_str = (today + timedelta(days=day_offset)).strftime("%Y-%m-%d")
-        slots[date_str] = [
-            {"time": f"{date_str}T04:30:00Z"},   # 10:00 AM IST
-            {"time": f"{date_str}T06:00:00Z"},   # 11:30 AM IST
-            {"time": f"{date_str}T08:30:00Z"},   # 2:00 PM IST
-            {"time": f"{date_str}T11:00:00Z"}    # 4:30 PM IST
-        ]
-    return {"data": {"slots": slots}}
+    """Return empty slots when Cal.com is not configured or has no active availability."""
+    return {"data": {"slots": {}}}
+

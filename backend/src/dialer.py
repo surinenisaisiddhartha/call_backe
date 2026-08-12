@@ -19,6 +19,7 @@ import httpx
 from datetime import datetime
 from typing import Dict, Optional
 from src.db import SessionLocal, Contact, UploadBatch, CallAttempt, Settings
+from src.events import event_manager
 
 def _get_concurrency_limit(db) -> int:
     s = db.query(Settings).filter(Settings.key == "concurrency_limit").first()
@@ -34,7 +35,7 @@ def _get_agent_id(db) -> Optional[str]:
     return get_or_create_local_agent()
 
 
-from src.utils import is_working_hours
+from src.utils import is_working_hours, next_working_day_start
 
 
 class CampaignDialer:
@@ -63,16 +64,65 @@ class CampaignDialer:
         """
         Start dialing a campaign. Fires up to effective_limit calls immediately.
         Can be called from an async or sync context (runs Retell calls in threads).
-        Calls are restricted to 9:00 AM – 4:00 PM IST.
+        Calls are restricted to the school's configured calling window (default
+        9:00 AM – 4:00 PM IST).  If outside the window, contacts are auto-
+        scheduled for 9 AM the next working day instead of being dropped.
         """
-        if not is_working_hours():
+        db_check = SessionLocal()
+        try:
+            # Load per-school calling window
+            batch_row = db_check.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
+            start_hour, end_hour = 9, 16
+            if batch_row and batch_row.school_id:
+                from src.db import School
+                school = db_check.query(School).filter(School.id == batch_row.school_id).first()
+                if school:
+                    start_hour = school.calling_start_hour or 9
+                    end_hour = school.calling_end_hour or 16
+        finally:
+            db_check.close()
+
+        if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist)
-            print(f"[DIALER] Campaign {batch_id} blocked — outside working hours ({now_ist.strftime('%H:%M')} IST). Calls are restricted to 9:00 AM–4:00 PM IST.")
+            # Auto-schedule for next working day instead of dropping
+            retry_time = next_working_day_start(start_hour)
+            db_sched = SessionLocal()
+            try:
+                from src.db import ScheduledCallback
+                query = db_sched.query(Contact).filter(
+                    Contact.batch_id == batch_id,
+                    Contact.status.in_(["Pending", "NeedsReschedule", "Failed"])
+                )
+                if contact_ids:
+                    query = query.filter(Contact.id.in_(contact_ids))
+                contacts = query.all()
+                scheduled_count = 0
+                for c in contacts:
+                    existing = db_sched.query(ScheduledCallback).filter(
+                        ScheduledCallback.contact_id == c.id,
+                        ScheduledCallback.status == "Scheduled"
+                    ).first()
+                    if not existing:
+                        cb = ScheduledCallback(
+                            contact_id=c.id,
+                            scheduled_for=retry_time,
+                            reason=f"Auto-scheduled: campaign started outside calling hours ({now_ist.strftime('%H:%M')} IST)",
+                            status="Scheduled",
+                            call_type="Follow-up"
+                        )
+                        db_sched.add(cb)
+                        scheduled_count += 1
+                if scheduled_count:
+                    db_sched.commit()
+                print(f"[DIALER] Campaign {batch_id} outside window ({now_ist.strftime('%H:%M')} IST). Auto-scheduled {scheduled_count} contacts for {retry_time}.")
+            finally:
+                db_sched.close()
             return {
                 "queued": 0,
-                "message": f"Outside working hours ({now_ist.strftime('%H:%M')} IST). Calls are only placed between 9:00 AM and 4:00 PM IST."
+                "scheduled_for_tomorrow": scheduled_count if 'scheduled_count' in dir() else 0,
+                "message": f"Outside calling hours ({now_ist.strftime('%H:%M')} IST, window {start_hour}:00–{end_hour}:00). Contacts auto-scheduled for {retry_time.strftime('%Y-%m-%d %H:%M')} UTC."
             }
         db = SessionLocal()
         try:
@@ -81,6 +131,11 @@ class CampaignDialer:
             if batch:
                 batch.status = "running"
                 db.commit()
+                event_manager.broadcast_sync(
+                    "CAMPAIGN_UPDATE",
+                    {"batch_id": batch_id, "status": "running"},
+                    school_id=batch.school_id
+                )
 
             # Load eligible contacts
             query = db.query(Contact).filter(
@@ -198,18 +253,49 @@ class CampaignDialer:
 
     def _fire_call(self, batch_id: str, contact_id: str):
         """Fire a single Retell call in a background thread."""
+        # Load per-school calling window for this contact
+        start_hour, end_hour = 9, 16
+        db_hrs = SessionLocal()
+        try:
+            c_row = db_hrs.query(Contact).filter(Contact.id == contact_id).first()
+            if c_row and c_row.school_id:
+                from src.db import School
+                school = db_hrs.query(School).filter(School.id == c_row.school_id).first()
+                if school:
+                    start_hour = school.calling_start_hour or 9
+                    end_hour = school.calling_end_hour or 16
+        finally:
+            db_hrs.close()
+
         # Safety guard — re-queue the contact and bail out if we have drifted
         # outside working hours (e.g. a campaign was running near 4 PM and the
         # last webhook-triggered slot freed after 4 PM).
-        if not is_working_hours():
+        if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist)
-            print(f"[DIALER] Skipping call for {contact_id} — outside working hours ({now_ist.strftime('%H:%M')} IST). Re-queuing for next in-window slot.")
-            with self._lock:
-                if batch_id in self._queues:
-                    # Put back at the front so it's the first to fire when hours resume
-                    self._queues[batch_id].insert(0, contact_id)
+            # Instead of re-queuing in memory, auto-schedule for next working day
+            retry_time = next_working_day_start(start_hour)
+            db_sched = SessionLocal()
+            try:
+                from src.db import ScheduledCallback
+                existing = db_sched.query(ScheduledCallback).filter(
+                    ScheduledCallback.contact_id == contact_id,
+                    ScheduledCallback.status == "Scheduled"
+                ).first()
+                if not existing:
+                    cb = ScheduledCallback(
+                        contact_id=contact_id,
+                        scheduled_for=retry_time,
+                        reason=f"Auto-scheduled: call attempt outside calling hours ({now_ist.strftime('%H:%M')} IST)",
+                        status="Scheduled",
+                        call_type="Follow-up"
+                    )
+                    db_sched.add(cb)
+                    db_sched.commit()
+            finally:
+                db_sched.close()
+            print(f"[DIALER] Skipping call for {contact_id} — outside calling hours ({now_ist.strftime('%H:%M')} IST). Auto-scheduled for {retry_time}.")
             return
         db = SessionLocal()
         try:
@@ -262,6 +348,11 @@ class CampaignDialer:
                 contact.status = "Calling"
                 contact.updated_at = datetime.utcnow()
                 db.commit()
+                event_manager.broadcast_sync(
+                    "CALL_STARTED",
+                    {"contact_id": contact_id, "call_id": fake_call_id, "status": "Calling"},
+                    school_id=contact.school_id
+                )
                 with self._lock:
                     self._active[fake_call_id] = contact_id
                     self._active_batch[fake_call_id] = batch_id
@@ -297,6 +388,11 @@ class CampaignDialer:
                 contact.status = "Calling"
                 contact.updated_at = datetime.utcnow()
                 db.commit()
+                event_manager.broadcast_sync(
+                    "CALL_STARTED",
+                    {"contact_id": contact_id, "call_id": stored_call_id, "status": "Calling"},
+                    school_id=contact.school_id
+                )
 
                 with self._lock:
                     self._active[stored_call_id] = contact_id
@@ -307,6 +403,11 @@ class CampaignDialer:
                 contact.status = "Failed"
                 contact.updated_at = datetime.utcnow()
                 db.commit()
+                event_manager.broadcast_sync(
+                    "CALL_ENDED",
+                    {"contact_id": contact_id, "status": "Failed"},
+                    school_id=contact.school_id
+                )
                 self._check_completion()
 
         except Exception as e:
@@ -358,6 +459,11 @@ class CampaignDialer:
                 if batch:
                     batch.status = "completed"
                     db.commit()
+                    event_manager.broadcast_sync(
+                        "CAMPAIGN_UPDATE",
+                        {"batch_id": bid, "status": "completed"},
+                        school_id=batch.school_id
+                    )
             finally:
                 db.close()
 

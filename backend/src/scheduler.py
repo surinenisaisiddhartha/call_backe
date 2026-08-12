@@ -124,7 +124,7 @@ def _requeue_or_give_up(cb, contact_label, retry_delay_minutes: int = 2, max_att
 
 def _fire_pending_callbacks():
     """Fire pending ScheduledCallback rows whose time has arrived.
-    Calls are restricted to 9:00 AM \u2013 4:00 PM IST — outside that window this
+    Calls are restricted to 9:00 AM – 4:00 PM IST — outside that window this
     sweep returns immediately and the rows stay 'Scheduled' until the next
     in-window sweep picks them up.
     """

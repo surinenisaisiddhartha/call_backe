@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, BackgroundTasks, Request, HTTPException
 from sqlalchemy.orm import Session
 from src.db import get_db, Contact, CallAttempt, ScheduledCallback, Settings
+from src.events import event_manager
 
 router = APIRouter(prefix="/api/webhooks", tags=["Webhooks"])
 
@@ -133,6 +134,13 @@ def process_webhook_payload(payload: dict):
                     attempt.started_at = datetime.utcnow()
                     db.commit()
                     print(f"[WEBHOOK] call_started: set started_at for {call_id}")
+
+                if attempt:
+                    event_manager.broadcast_sync(
+                        "CALL_STARTED",
+                        {"call_id": call_id, "contact_id": attempt.contact_id},
+                        school_id=attempt.contact.school_id if attempt.contact else None
+                    )
             return
 
         # ── 1. Find the Contact ────────────────────────────────────────────
@@ -414,12 +422,33 @@ def process_webhook_payload(payload: dict):
         # so refresh the stored value. Scoped to this one contact — never the
         # whole table, which at 10,000 calls a day would be ruinous.
         try:
-            from src.routers.contacts import rescore_contact
+            from src.routers.contacts import rescore_contact, auto_assign_hot_lead
             rescore_contact(db, contact_id)
+            # Smart Real-Time Auto-Assignment: Auto-assign Hot Leads dynamically on call completion
+            if contact:
+                db.refresh(contact)
+                assigned_cns = auto_assign_hot_lead(db, contact)
+                if assigned_cns:
+                    db.commit()
+                    print(f"[WEBHOOK] Dynamically auto-assigned HOT contact {contact_id} to counselor {assigned_cns.name}")
         except Exception as score_err:
-            print(f"[WEBHOOK] Rescore failed for {contact_id}: {score_err}")
+            print(f"[WEBHOOK] Rescore / Auto-assign failed for {contact_id}: {score_err}")
 
         print(f"[WEBHOOK] Contact {contact_id} => {contact_status} | AutoScheduled={auto_scheduled}")
+
+        # Broadcast SSE event for real-time dashboard updates
+        event_manager.broadcast_sync(
+            "CALL_ANALYZED" if event == "call_analyzed" else "CALL_ENDED",
+            {
+                "call_id": call_id,
+                "contact_id": contact_id,
+                "status": contact_status,
+                "outcome": outcome,
+                "duration_sec": duration_sec,
+                "batch_id": contact.batch_id if contact else None
+            },
+            school_id=contact.school_id if contact else None
+        )
 
         # ── 5. Free dialer slot → auto-dial next contact ──────────────────
         # Only fire on call_ended (not call_analyzed) to prevent duplicate dialing.

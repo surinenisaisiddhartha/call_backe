@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
+import { useSSE } from '../hooks/useSSE';
 import {
   BarChart2, Play, RefreshCw, Users, CheckCircle,
   AlertCircle, Calendar, Phone, Clock, FileText, ChevronDown, ChevronRight, Trash2,
-  Plus, X, UploadCloud
+  Plus, X, UploadCloud, Radio
 } from 'lucide-react';
 
 interface BatchStats {
@@ -104,13 +105,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
   const [uploadResult, setUploadResult] = useState<any>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    fetchCampaigns();
-    const interval = setInterval(fetchCampaigns, 8000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const fetchCampaigns = async () => {
+  const fetchCampaigns = useCallback(async () => {
     try {
       const res = await api.get('/contacts/batches');
       setCampaigns(res.data);
@@ -132,7 +127,41 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       console.error('Failed to fetch campaigns', err);
       setLoading(false);
     }
-  };
+  }, []);
+
+  const fetchHistoryForBatch = useCallback(async (batchId: string) => {
+    try {
+      const res = await api.get(`/contacts/batches/${batchId}/history`);
+      const items = Array.isArray(res.data) ? res.data : (res.data?.items || []);
+      setHistoryMap(prev => ({ ...prev, [batchId]: items }));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Real-time Push via SSE (Instant updates on call start/end/analysis/campaign update)
+  const handleSSEMessage = useCallback((msg: any) => {
+    fetchCampaigns();
+    if (expandedId) {
+      fetchHistoryForBatch(expandedId);
+    }
+  }, [expandedId, fetchCampaigns, fetchHistoryForBatch]);
+
+  useSSE(handleSSEMessage, [
+    'CALL_STARTED',
+    'CALL_ENDED',
+    'CALL_ANALYZED',
+    'CAMPAIGN_UPDATE',
+    'APPOINTMENT_BOOKED',
+    'CALLBACK_SCHEDULED',
+  ]);
+
+  useEffect(() => {
+    fetchCampaigns();
+    // Fallback heartbeat (60s instead of aggressive 8s polling)
+    const interval = setInterval(fetchCampaigns, 60000);
+    return () => clearInterval(interval);
+  }, [fetchCampaigns]);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -226,8 +255,7 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
     if (!historyMap[id]) {
       setLoadingHistory(id);
       try {
-        const res = await api.get(`/contacts/batches/${id}/history`);
-        setHistoryMap(prev => ({ ...prev, [id]: res.data }));
+        await fetchHistoryForBatch(id);
       } catch {
         showToast('Failed to load call history', 'error');
       } finally {
