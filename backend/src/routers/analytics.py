@@ -90,6 +90,9 @@ def call_analytics(
     primary_topic = Counter()
     all_topics = Counter()
     concerns = []
+    # Cap to avoid building a huge list at scale — only the most recent 15
+    # are returned anyway, so we keep a bounded buffer.
+    _CONCERNS_CAP = 15
     analysed = 0
 
     for a in attempts:
@@ -114,6 +117,8 @@ def call_analytics(
 
         concern = (data.get("concerns_raised") or "").strip()
         if concern and concern.lower() != "none":
+            if len(concerns) >= _CONCERNS_CAP:
+                concerns.pop(0)
             concerns.append(concern)
 
     def as_rows(counter: Counter):
@@ -162,7 +167,9 @@ def call_analytics(
     # Detected deterministically from the caller's own words, so this covers
     # every call ever recorded — including the ones made before LLM analysis
     # existed — and the same transcript always produces the same answer.
-    from src.topics import detect_topics, knowledge_coverage, ALL_TOPICS
+    # Labels are canonicalized to the LLM vocabulary so "Fees & Tuition"
+    # (keyword detector) and "Fees" (LLM analysis) aggregate together.
+    from src.topics import detect_topics, knowledge_coverage, ALL_TOPICS, canonicalize
 
     asked = Counter()
     for a in attempts:
@@ -170,16 +177,22 @@ def call_analytics(
         if not labels and a.transcript:
             labels = detect_topics(a.transcript)   # not yet backfilled
         for label in labels:
-            asked[label] += 1
+            asked[canonicalize(label)] += 1
 
     coverage = knowledge_coverage(db, current_user.get("school_id"))
+    # Coverage keys are the granular labels — canonicalize them too so the
+    # lookup matches the canonicalized asked keys.
+    canonical_coverage = {}
+    for k, v in coverage.items():
+        ck = canonicalize(k)
+        canonical_coverage[ck] = canonical_coverage.get(ck, False) or v
     total_asked = sum(asked.values()) or 1
     questions_asked = [
         {
             "label": label,
             "count": count,
             "percent": round(count * 100 / total_asked, 1),
-            "covered": coverage.get(label, False),
+            "covered": canonical_coverage.get(label, False),
         }
         for label, count in asked.most_common()
     ]
@@ -212,5 +225,5 @@ def call_analytics(
         "topics_mentioned": as_rows(all_topics),
         # Verbatim, most recent first — the aggregate says how many objected,
         # only the wording says what to actually do about it.
-        "recent_concerns": concerns[-15:][::-1],
+        "recent_concerns": concerns[::-1],
     }

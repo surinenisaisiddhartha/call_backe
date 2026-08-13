@@ -56,7 +56,7 @@ async def schedule_callback(
     if not is_working_hours(scheduled_for):
         raise HTTPException(
             status_code=400,
-            detail="Callbacks can only be scheduled during working hours (9:00 AM – 4:00 PM IST)."
+            detail="Callbacks can only be scheduled during working hours (9:00 AM – 9:00 PM IST)."
         )
 
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
@@ -185,7 +185,8 @@ def get_schedules(
             "google_calendar_event_id": s.google_calendar_event_id,
             "status": s.status,
             "batch_call_id": s.batch_call_id,
-            "call_type": s.call_type,
+            "call_type": s.call_type or "Follow-up",
+            "callback_target": "Counselor Callback" if s.call_type == "Counselor" else "AI Agent Callback",
             "reason": s.reason,
         })
     return results
@@ -208,7 +209,7 @@ async def reschedule_callback(
     if not is_working_hours(scheduled_for):
         raise HTTPException(
             status_code=400,
-            detail="Callbacks can only be scheduled during working hours (9:00 AM – 4:00 PM IST)."
+            detail="Callbacks can only be scheduled during working hours (9:00 AM – 9:00 PM IST)."
         )
 
     callback = db.query(ScheduledCallback).filter(ScheduledCallback.id == id).first()

@@ -417,28 +417,35 @@ def schedule_callback(
             ScheduledCallback.contact_id == contact_id,
             ScheduledCallback.status == "Scheduled"
         ).first()
+        from src.routers.webhooks import classify_callback_target
+        target_type = classify_callback_target(f"{request.reason}")
+
         if existing:
             # Update the existing one instead of creating a duplicate
             existing.scheduled_for = scheduled_for
-            existing.reason = request.reason
+            existing.call_type = target_type
+            existing.reason = f"{target_type} Callback ({request.reason})"
             db.commit()
-            return {"result": f"Callback successfully rescheduled for {readable_time}. We'll call you back then!"}
-        
-        # Create ScheduledCallback
-        callback = ScheduledCallback(
-            contact_id=contact_id,
-            scheduled_for=scheduled_for,
-            reason=request.reason,
-            status="Scheduled",
-            call_type="Follow-up"
-        )
-        db.add(callback)
+        else:
+            # Create ScheduledCallback
+            callback = ScheduledCallback(
+                contact_id=contact_id,
+                scheduled_for=scheduled_for,
+                reason=f"{target_type} Callback ({request.reason})",
+                status="Scheduled",
+                call_type=target_type
+            )
+            db.add(callback)
         
         # Update contact status to Scheduled
         contact = db.query(Contact).filter(Contact.id == contact_id).first()
         if contact:
             contact.status = "Scheduled"
             contact.updated_at = datetime.utcnow()
+            if target_type == "Counselor":
+                contact.counselor_followup_status = "Pending"
+                from src.routers.contacts import auto_assign_hot_lead
+                auto_assign_hot_lead(db, contact)
         
         db.commit()
 
@@ -447,12 +454,17 @@ def schedule_callback(
             {
                 "contact_id": contact_id,
                 "readable_time": readable_time,
-                "reason": request.reason
+                "reason": request.reason,
+                "call_type": target_type
             },
             school_id=contact.school_id if contact else None
         )
         
-        # Register APScheduler one-shot job to fire the callback at the exact time
+        if target_type == "Counselor":
+            print(f"[TOOLS] Classified as Counselor Callback for {contact.name if contact else contact_id} — assigned to counselor, AI auto-dial bypassed.")
+            return {"result": f"Callback for our admissions counselor successfully scheduled for {readable_time}. Our admissions counselor will call you then with all the details!"}
+
+        # Register APScheduler one-shot job ONLY for AI Agent callbacks
         try:
             from src.scheduler import get_scheduler
             from src.routers.webhooks import trigger_callback_call
@@ -463,7 +475,7 @@ def schedule_callback(
                     "date",
                     run_date=scheduled_for,
                     args=[contact_id],
-                    id=f"tool_cb_{contact_id}_{int(scheduled_for.timestamp())}",
+                    id=f"cb_{contact_id}_{int(scheduled_for.timestamp())}",
                     replace_existing=True
                 )
                 print(f"[TOOLS] Registered APScheduler callback for {contact_id} at {scheduled_for} UTC")

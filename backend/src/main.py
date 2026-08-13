@@ -180,6 +180,20 @@ def startup_event():
 
     threading.Thread(target=_rescore_all_contacts_on_startup, daemon=True).start()
 
+    # Backfill detected_topics for old CallAttempt rows that have transcripts
+    # but were created before the keyword topic detector was added. Without
+    # this, analytics.py falls back to re-running regex on every page load.
+    def _backfill_topics_on_startup():
+        try:
+            from src.topics import backfill_detected_topics
+            count = backfill_detected_topics()
+            if count:
+                print(f"[STARTUP] Backfilled detected_topics for {count} call(s).")
+        except Exception as e:
+            print(f"[STARTUP] Topic backfill failed (non-fatal): {e}")
+
+    threading.Thread(target=_backfill_topics_on_startup, daemon=True).start()
+
     # Auto-configure the shared Retell agent to point at THIS deployment.
     # Permanent fix for "every new deployment needs someone to manually run
     # setup_retell_agent.py" — the agent/llm ids are persisted in the DB

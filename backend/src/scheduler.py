@@ -124,7 +124,7 @@ def _requeue_or_give_up(cb, contact_label, retry_delay_minutes: int = 2, max_att
 
 def _fire_pending_callbacks():
     """Fire pending ScheduledCallback rows whose time has arrived.
-    Calls are restricted to 9:00 AM – 4:00 PM IST — outside that window this
+    Calls are restricted to 9:00 AM – 9:00 PM IST — outside that window this
     sweep returns immediately and the rows stay 'Scheduled' until the next
     in-window sweep picks them up.
     """
@@ -143,7 +143,8 @@ def _fire_pending_callbacks():
         now = datetime.utcnow()
         pending = db.query(ScheduledCallback).filter(
             ScheduledCallback.status == "Scheduled",
-            ScheduledCallback.scheduled_for <= now
+            ScheduledCallback.scheduled_for <= now,
+            ScheduledCallback.call_type != "Counselor"
         ).all()
 
         if not pending:
@@ -260,10 +261,31 @@ def _fire_pending_callbacks():
                 )
 
                 if r.status_code < 400:
+                    retell_data = r.json()
+                    batch_call_id = retell_data.get("batch_call_id", f"batch_cb_{contact.id[:8]}")
+
+                    # ── Create CallAttempt immediately with the batch_call_id ─
+                    # Without this, mid-call tools (save_profile, book_appointment,
+                    # schedule_callback) cannot resolve the contact via call_id —
+                    # the call_started webhook upgrades the batch_call_id to the
+                    # real call_id, but that only works if the row already exists.
+                    # This matches what trigger_callback_call() in webhooks.py does.
+                    from src.db import CallAttempt
+                    attempt_count = db.query(CallAttempt).filter(
+                        CallAttempt.contact_id == contact.id
+                    ).count()
+                    attempt = CallAttempt(
+                        contact_id=contact.id,
+                        retell_call_id=batch_call_id,
+                        attempt_number=attempt_count + 1,
+                        started_at=datetime.utcnow(),
+                    )
+                    db.add(attempt)
+
                     contact.status = "Calling"
                     contact.updated_at = datetime.utcnow()
                     cb.status = "Triggered"
-                    print(f"[SCHEDULER] Callback call fired for {contact.name}")
+                    print(f"[SCHEDULER] Callback call fired for {contact.name} | batch_call_id={batch_call_id}")
                 else:
                     print(f"[SCHEDULER] Retell error {r.status_code} for {contact.name}: {r.text[:200]}")
                     _requeue_or_give_up(cb, contact.name)

@@ -127,10 +127,10 @@ class School(Base):
     smtp_password = Column(String(255), nullable=True)
     smtp_from_email = Column(String(255), nullable=True)
     # ── Calling-window per school (IST hours, 0-23) ───────────────────
-    # Defaults match the current global window (9 AM – 4 PM IST).  The
+    # Defaults match the current global window (9 AM – 9 PM IST).  The
     # dialer and call-now route read these and pass to is_working_hours().
     calling_start_hour = Column(Integer, default=9)
-    calling_end_hour = Column(Integer, default=16)
+    calling_end_hour = Column(Integer, default=21)
 
 class UploadBatch(Base):
     __tablename__ = "upload_batches"
@@ -584,7 +584,7 @@ def init_db():
         }
         # Calling-window hours
         school_override_columns["calling_start_hour"] = "INTEGER DEFAULT 9"
-        school_override_columns["calling_end_hour"] = "INTEGER DEFAULT 16"
+        school_override_columns["calling_end_hour"] = "INTEGER DEFAULT 21"
 
         for col_name, col_type in school_override_columns.items():
             if col_name not in school_columns:

@@ -3,9 +3,9 @@ from datetime import datetime, timezone, timedelta
 def get_ist_timezone() -> timezone:
     return timezone(timedelta(hours=5, minutes=30))
 
-def is_working_hours(dt: datetime = None, start_hour: int = 9, end_hour: int = 16) -> bool:
+def is_working_hours(dt: datetime = None, start_hour: int = 9, end_hour: int = 21) -> bool:
     """
-    Check if the given datetime is within working hours (default 09:00 - 16:00 IST / 4:00 PM).
+    Check if the given datetime is within working hours (default 09:00 - 21:00 IST / 9:00 PM).
     start_hour and end_hour can be overridden per school.
     If dt is None, checks the current time.
     """

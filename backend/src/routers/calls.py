@@ -192,13 +192,13 @@ async def call_now(
 
     # Per-school calling window
     from src.utils import is_working_hours, next_working_day_start
-    start_hour, end_hour = 9, 16
+    start_hour, end_hour = 9, 21
     if contact.school_id:
         from src.db import School
         school = db.query(School).filter(School.id == contact.school_id).first()
         if school:
             start_hour = school.calling_start_hour or 9
-            end_hour = school.calling_end_hour or 16
+            end_hour = school.calling_end_hour or 21
 
     if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
         # Auto-schedule for next working day instead of a hard block

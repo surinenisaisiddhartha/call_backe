@@ -50,6 +50,27 @@ async def retell_webhook(
     return {"received": True}
 
 
+COUNSELOR_CALLBACK_KEYWORDS = [
+    "fee", "fees", "cost", "pricing", "tuition", "discount", "waiver", "scholarship",
+    "counselor", "counselour", "admissions team", "human", "officer", "executive",
+    "special request", "approval", "transfer certificate", "tc document", "syllabus"
+]
+
+
+def classify_callback_target(combined_text: str) -> str:
+    """
+    Classifies a callback request into:
+      - "Counselor": Human admissions counselor callback (requires human authority e.g. fee structures, waivers, counselor consultation).
+      - "Follow-up": AI Agent automated callback (general timing retry e.g. "call me back in 2 minutes", "busy right now").
+    """
+    if not combined_text:
+        return "Follow-up"
+    lower = combined_text.lower()
+    if any(kw in lower for kw in COUNSELOR_CALLBACK_KEYWORDS):
+        return "Counselor"
+    return "Follow-up"
+
+
 def process_webhook_payload(payload: dict):
     from src.db import SessionLocal
     from src.callback_parser import has_callback_intent, extract_callback_phrase, parse_callback_time
@@ -273,14 +294,8 @@ def process_webhook_payload(payload: dict):
                         callback_raw_text = phrase
                         scheduled_utc = parse_callback_time(phrase)
                         if scheduled_utc:
-                            # A callback is an outbound phone call WE promised to
-                            # make — not a meeting the parent booked. It used to
-                            # get its own Google Calendar event, which put
-                            # "meeting"-looking entries on the calendar for what
-                            # is just an internal reminder. The 1-minute
-                            # scheduler sweep is what actually guarantees the
-                            # callback fires, so no calendar entry is needed.
                             c_event_id = None
+                            target_type = classify_callback_target(combined_text)
 
                             # Idempotent: update if already exists (e.g. tool created one mid-call)
                             existing_cb = db.query(ScheduledCallback).filter(
@@ -290,39 +305,52 @@ def process_webhook_payload(payload: dict):
 
                             if existing_cb:
                                 existing_cb.scheduled_for = scheduled_utc
+                                existing_cb.call_type = target_type
+                                existing_cb.reason = f"{target_type} Callback ({phrase})"
                                 if c_event_id:
                                     existing_cb.google_calendar_event_id = c_event_id
                                 if batch_call_id:
                                     existing_cb.batch_call_id = batch_call_id
-                                print(f"[WEBHOOK] Updated existing ScheduledCallback for {contact_id}")
+                                print(f"[WEBHOOK] Updated existing ScheduledCallback ({target_type}) for {contact_id}")
                             else:
                                 cb = ScheduledCallback(
                                     contact_id=contact_id,
                                     scheduled_for=scheduled_utc,
                                     status="Scheduled",
+                                    call_type=target_type,
+                                    reason=f"{target_type} Callback ({phrase})",
                                     batch_call_id=batch_call_id,
                                     google_calendar_event_id=c_event_id
                                 )
                                 db.add(cb)
+
                             contact_status = "Scheduled"
                             auto_scheduled = True
 
-                            # Register APScheduler one-shot job (only on call_analyzed)
-                            try:
-                                from src.scheduler import get_scheduler
-                                sched = get_scheduler()
-                                if sched and sched.running:
-                                    sched.add_job(
-                                        trigger_callback_call,
-                                        "date",
-                                        run_date=scheduled_utc,
-                                        args=[contact_id],
-                                        id=f"cb_{contact_id}_{int(scheduled_utc.timestamp())}",
-                                        replace_existing=True
-                                    )
-                                    print(f"[WEBHOOK] Auto-scheduled callback for {contact_id} at {scheduled_utc} UTC")
-                            except Exception as sched_err:
-                                print(f"[WEBHOOK] Scheduler error: {sched_err}")
+                            # If it's a Counselor Callback (e.g. fee details, human officer requested),
+                            # auto-assign contact to available counselor and set status to Pending
+                            # so human counselor calls manually — DO NOT register AI auto-dialer.
+                            if target_type == "Counselor":
+                                contact.counselor_followup_status = "Pending"
+                                from src.routers.contacts import auto_assign_hot_lead
+                                auto_assign_hot_lead(db, contact)
+                                print(f"[WEBHOOK] Classified as Counselor Callback for {contact.name} — assigned to admissions counselor, AI auto-dial bypassed.")
+                            else:
+                                try:
+                                    from src.scheduler import get_scheduler
+                                    sched = get_scheduler()
+                                    if sched and sched.running:
+                                        sched.add_job(
+                                            trigger_callback_call,
+                                            "date",
+                                            run_date=scheduled_utc,
+                                            args=[contact_id],
+                                            id=f"cb_{contact_id}_{int(scheduled_utc.timestamp())}",
+                                            replace_existing=True
+                                        )
+                                        print(f"[WEBHOOK] Auto-scheduled AI callback for {contact_id} at {scheduled_utc} UTC")
+                                except Exception as sched_err:
+                                    print(f"[WEBHOOK] Could not register callback job: {sched_err}")
 
         # ── 3. Upsert CallAttempt ──────────────────────────────────────────
         attempt = None
@@ -468,8 +496,8 @@ def process_webhook_payload(payload: dict):
 
 def trigger_callback_call(contact_id: str):
     """Called by APScheduler at the scheduled callback time. Fires a Retell call.
-    Calls are restricted to 9:00 AM \u2013 4:00 PM IST.  If this job fires outside
-    that window (e.g. a callback was booked for 5 PM) we return without claiming
+    Calls are restricted to 9:00 AM – 9:00 PM IST.  If this job fires outside
+    that window (e.g. a callback was booked for 10 PM) we return without claiming
     the ScheduledCallback row so the 1-minute sweep in scheduler.py picks it up
     on the next in-window pass.
     """

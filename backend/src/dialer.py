@@ -65,20 +65,20 @@ class CampaignDialer:
         Start dialing a campaign. Fires up to effective_limit calls immediately.
         Can be called from an async or sync context (runs Retell calls in threads).
         Calls are restricted to the school's configured calling window (default
-        9:00 AM – 4:00 PM IST).  If outside the window, contacts are auto-
+        9:00 AM – 9:00 PM IST).  If outside the window, contacts are auto-
         scheduled for 9 AM the next working day instead of being dropped.
         """
         db_check = SessionLocal()
         try:
             # Load per-school calling window
             batch_row = db_check.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
-            start_hour, end_hour = 9, 16
+            start_hour, end_hour = 9, 21
             if batch_row and batch_row.school_id:
                 from src.db import School
                 school = db_check.query(School).filter(School.id == batch_row.school_id).first()
                 if school:
                     start_hour = school.calling_start_hour or 9
-                    end_hour = school.calling_end_hour or 16
+                    end_hour = school.calling_end_hour or 21
         finally:
             db_check.close()
 
@@ -254,7 +254,7 @@ class CampaignDialer:
     def _fire_call(self, batch_id: str, contact_id: str):
         """Fire a single Retell call in a background thread."""
         # Load per-school calling window for this contact
-        start_hour, end_hour = 9, 16
+        start_hour, end_hour = 9, 21
         db_hrs = SessionLocal()
         try:
             c_row = db_hrs.query(Contact).filter(Contact.id == contact_id).first()
@@ -263,13 +263,13 @@ class CampaignDialer:
                 school = db_hrs.query(School).filter(School.id == c_row.school_id).first()
                 if school:
                     start_hour = school.calling_start_hour or 9
-                    end_hour = school.calling_end_hour or 16
+                    end_hour = school.calling_end_hour or 21
         finally:
             db_hrs.close()
 
         # Safety guard — re-queue the contact and bail out if we have drifted
-        # outside working hours (e.g. a campaign was running near 4 PM and the
-        # last webhook-triggered slot freed after 4 PM).
+        # outside working hours (e.g. a campaign was running near 9 PM and the
+        # last webhook-triggered slot freed after 9 PM).
         if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))

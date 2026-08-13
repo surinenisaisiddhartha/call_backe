@@ -718,9 +718,23 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                               <td style={{ fontWeight: 600 }}>{s.contact_name}</td>
                               <td>{s.contact_phone}</td>
                               <td>
-                                <span className={`badge badge-${s.call_type.toLowerCase().replace('-', '')}`}>
-                                  {s.call_type}
-                                </span>
+                                {s.call_type === 'Counselor' ? (
+                                  <span style={{
+                                    padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700,
+                                    background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)',
+                                    display: 'inline-flex', alignItems: 'center', gap: '4px'
+                                  }}>
+                                    👤 Counselor Callback
+                                  </span>
+                                ) : (
+                                  <span style={{
+                                    padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700,
+                                    background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.3)',
+                                    display: 'inline-flex', alignItems: 'center', gap: '4px'
+                                  }}>
+                                    🤖 AI Agent Callback
+                                  </span>
+                                )}
                               </td>
                               <td>{new Date(s.scheduled_for).toLocaleString()}</td>
                               <td>

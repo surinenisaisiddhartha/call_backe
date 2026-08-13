@@ -509,6 +509,17 @@ def get_all_call_history(
             name = db.query(UploadBatch.file_name).filter(UploadBatch.id == c.batch_id).scalar()
             batch_names[c.batch_id] = name or c.batch_id
 
+    import json as _json_ser
+
+    def _parse_analysis_json(raw):
+        if not raw:
+            return None
+        try:
+            parsed = _json_ser.loads(raw)
+            return parsed if isinstance(parsed, dict) and parsed else None
+        except (ValueError, TypeError):
+            return None
+
     items = [{
         "id": a.id,
         "contact_id": a.contact_id,
@@ -522,6 +533,10 @@ def get_all_call_history(
         "transcript": a.transcript,
         "summary": a.summary,
         "callback_raw_text": a.callback_raw_text,
+        "user_sentiment": a.user_sentiment,
+        "call_successful": a.call_successful,
+        "detected_topics": [x for x in (a.detected_topics or "").split(",") if x],
+        "analysis": _parse_analysis_json(a.analysis_json),
         "started_at": a.started_at.isoformat() if a.started_at else None,
         "ended_at": a.ended_at.isoformat() if a.ended_at else None,
         "batch_id": c.batch_id,
@@ -538,6 +553,89 @@ def get_all_call_history(
         }
 
     return items
+
+
+# ── LLM Enum Normalization ───────────────────────────────────────────────
+# Retell's post-call analysis LLM is instructed to output exact enum values
+# (e.g. "Hot", "Serious", "Parent"), but LLMs occasionally drift to synonyms
+# like "High", "Very Interested", "Mother". Without normalization, these
+# unmapped values fall through to default scores (typically 30/40), silently
+# under-scoring genuinely interested leads.
+#
+# Each map covers the canonical values (identity-mapped for clarity) plus
+# every observed or plausible synonym. Case-insensitive lookup.
+
+_INTEREST_SYNONYMS: dict[str, str] = {
+    # Canonical
+    "hot": "Hot", "warm": "Warm", "cold": "Cold", "unclear": "Unclear",
+    # Common LLM drift
+    "high": "Hot", "very high": "Hot", "very interested": "Hot",
+    "strong": "Hot", "keen": "Hot", "eager": "Hot",
+    "medium": "Warm", "moderate": "Warm", "somewhat interested": "Warm",
+    "interested": "Warm", "mild": "Warm", "curious": "Warm",
+    "low": "Cold", "none": "Cold", "not interested": "Cold",
+    "no interest": "Cold", "disinterested": "Cold", "negative": "Cold",
+    "unknown": "Unclear", "n/a": "Unclear", "na": "Unclear",
+    "indeterminate": "Unclear", "cannot determine": "Unclear",
+}
+
+_ENGAGEMENT_SYNONYMS: dict[str, str] = {
+    # Canonical
+    "serious": "Serious", "casual": "Casual",
+    "notinterested": "NotInterested", "unclear": "Unclear",
+    # Common LLM drift
+    "engaged": "Serious", "very engaged": "Serious", "highly engaged": "Serious",
+    "active": "Serious", "genuine": "Serious", "substantive": "Serious",
+    "light": "Casual", "brief": "Casual", "superficial": "Casual",
+    "browsing": "Casual", "polite": "Casual", "pleasant": "Casual",
+    "not interested": "NotInterested", "disengaged": "NotInterested",
+    "uninterested": "NotInterested", "hostile": "NotInterested",
+    "unknown": "Unclear", "n/a": "Unclear", "na": "Unclear",
+    "too short": "Unclear", "garbled": "Unclear",
+}
+
+_CALLER_TYPE_SYNONYMS: dict[str, str] = {
+    # Canonical
+    "parent": "Parent", "student": "Student", "other": "Other",
+    "notavailable": "NotAvailable", "wrongnumber": "WrongNumber",
+    # Common LLM drift
+    "mother": "Parent", "father": "Parent", "guardian": "Parent",
+    "mom": "Parent", "dad": "Parent", "uncle": "Parent", "aunt": "Parent",
+    "grandparent": "Parent", "relative": "Parent",
+    "child": "Student", "kid": "Student", "applicant": "Student",
+    "agent": "Other", "consultant": "Other", "teacher": "Other",
+    "staff": "Other", "friend": "Other", "neighbor": "Other",
+    "not available": "NotAvailable", "unavailable": "NotAvailable",
+    "busy": "NotAvailable", "away": "NotAvailable",
+    "wrong number": "WrongNumber", "wrong person": "WrongNumber",
+    "invalid": "WrongNumber",
+    "unknown": "Other", "n/a": "Other", "na": "Other",
+}
+
+
+def normalize_analysis_enums(analysis: dict) -> dict:
+    """Normalize LLM-produced enum values to canonical vocabulary in-place.
+
+    If the LLM drifts (e.g. outputs "High" instead of "Hot", "Mother"
+    instead of "Parent"), this maps the value to its canonical form so
+    scoring functions see the expected keys. Unrecognised values pass
+    through unchanged — the scoring functions' .get() fallback handles them.
+    """
+    if not analysis:
+        return analysis
+
+    for field, synonyms in (
+        ("interest_level",     _INTEREST_SYNONYMS),
+        ("engagement_quality", _ENGAGEMENT_SYNONYMS),
+        ("caller_type",        _CALLER_TYPE_SYNONYMS),
+    ):
+        raw = (analysis.get(field) or "").strip()
+        if raw:
+            canonical = synonyms.get(raw.lower())
+            if canonical:
+                analysis[field] = canonical
+
+    return analysis
 
 
 CLASSIFICATIONS = ["HOT", "WARM", "COLD"]
@@ -601,12 +699,35 @@ def _score_appointment(booked: bool, callback: bool, analysis: dict, contact) ->
     return None  # Missing signal if no booking, no callback, and no call analysis yet
 
 
-def _score_engagement(analysis: dict) -> int:
-    """Engagement Quality — 20%."""
-    if not analysis:
+def _score_engagement(analysis: dict, sentiment: str | None = None) -> int:
+    """Engagement Quality — 20%.
+
+    Uses the LLM's engagement_quality as the base score, then adjusts by
+    Retell's own user_sentiment when available. A "Negative" sentiment
+    caller who the LLM rated as "Serious" was probably serious about their
+    OBJECTIONS, not about enrolling — so the score is penalised. A
+    "Positive" sentiment gives a small boost.
+    """
+    if not analysis and not sentiment:
         return None  # missing signal
-    engagement = (analysis.get("engagement_quality") or "").strip()
-    return {"Serious": 100, "Casual": 50, "Unclear": 30, "NotInterested": 0}.get(engagement, 30)
+
+    if analysis:
+        engagement = (analysis.get("engagement_quality") or "").strip()
+        base = {"Serious": 100, "Casual": 50, "Unclear": 30, "NotInterested": 0}.get(engagement, 30)
+    else:
+        # No LLM analysis, but sentiment alone can still provide a signal
+        base = 50  # neutral baseline
+
+    # Apply sentiment modifier
+    if sentiment:
+        s = sentiment.strip().lower()
+        if s == "negative":
+            base = max(0, base - 20)
+        elif s == "positive":
+            base = min(100, base + 10)
+        # "neutral" → no change
+
+    return base
 
 
 def _score_interest(analysis: dict) -> int:
@@ -873,18 +994,21 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
     merged_analysis: dict[str, dict] = {}   # contact_id → best-of analysis dict
     merged_topics: dict[str, set] = {}      # contact_id → union of all detected topics
     had_engaged: dict[str, bool] = {}       # contact_id → True if ≥ 1 engaged call
+    merged_sentiment: dict[str, str] = {}   # contact_id → best (most positive) sentiment
 
     _NON_ENGAGED = {"NoAnswer", "Busy", "Failed", "IncompleteHangup"}
     rows = (
         db.query(
             CallAttempt.contact_id, CallAttempt.analysis_json,
             CallAttempt.duration_sec, CallAttempt.detected_topics,
-            CallAttempt.outcome,
+            CallAttempt.outcome, CallAttempt.user_sentiment,
         )
         .filter(CallAttempt.contact_id.in_(ids))
         .order_by(CallAttempt.started_at.asc())
         .all()
     )
+
+    _SENTIMENT_RANK = {"Positive": 0, "Neutral": 1, "Negative": 2}
 
     def _pick_best_enum(current: str | None, new: str | None, ranking: dict) -> str | None:
         """Return whichever value ranks higher (lower index = higher intent)."""
@@ -902,8 +1026,14 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
             return new
         return current if len(current) >= len(new) else new
 
-    for contact_id, raw, duration, det_topics, outcome in rows:
+    for contact_id, raw, duration, det_topics, outcome, sentiment_val in rows:
         engaged = outcome not in _NON_ENGAGED and (duration or 0) >= 10
+
+        # Merge sentiment: keep the most positive across all calls
+        if sentiment_val:
+            merged_sentiment[contact_id] = _pick_best_enum(
+                merged_sentiment.get(contact_id), sentiment_val, _SENTIMENT_RANK
+            )
         if engaged:
             had_engaged[contact_id] = True
 
@@ -923,6 +1053,9 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
                     continue
             except (ValueError, TypeError):
                 continue
+
+            # Normalize LLM enum drift BEFORE merging (e.g. "High" → "Hot")
+            normalize_analysis_enums(parsed)
 
             if contact_id not in merged_analysis:
                 merged_analysis[contact_id] = {}
@@ -1003,7 +1136,7 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
         # Compute each parameter (None = missing signal)
         raw_scores = {
             "appointment_conversion_intent": _score_appointment(is_booked, is_callback, analysis, c),
-            "engagement_quality":            _score_engagement(analysis),
+            "engagement_quality":            _score_engagement(analysis, merged_sentiment.get(c.id)),
             "interest_level":                _score_interest(analysis),
             "conversation_depth":            _score_conversation_depth(analysis, engaged, det_topics),
             "caller_relevance":              _score_caller_relevance(analysis),
@@ -2015,6 +2148,18 @@ def get_contact_history(
             if label and label not in all_topics:
                 all_topics.append(label)
 
+    def _schedule_dict(sch):
+        target_label = "Counselor Callback" if sch.call_type == "Counselor" else "AI Agent Callback"
+        return {
+            "id": sch.id,
+            "scheduled_for": sch.scheduled_for.isoformat() if sch.scheduled_for else None,
+            "status": sch.status,
+            "call_type": sch.call_type or "Follow-up",
+            "callback_target": target_label,
+            "reason": sch.reason,
+            "created_at": sch.created_at.isoformat() if sch.created_at else None,
+        }
+
     return {
         "contact": contact,
         "lead_score": scored.get("score", 0),
@@ -2029,7 +2174,7 @@ def get_contact_history(
         "profile_completeness": completeness(contact),
         "topics_asked": all_topics,
         "attempts": [_attempt_dict(a) for a in attempts],
-        "schedules": schedules,
+        "schedules": [_schedule_dict(sch) for sch in schedules],
         "appointments": [_appointment_dict(apt) for apt in appointments],
     }
 

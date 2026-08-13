@@ -255,7 +255,7 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
  * Every field renders only if present — a short or garbled call may produce
  * very little, and empty headings would be worse than nothing.
  */
-function CallAnalysisPanel({ a, sentiment }: { a: CallAnalysis; sentiment?: string | null }) {
+function CallAnalysisPanel({ a, sentiment, callSuccessful }: { a: CallAnalysis; sentiment?: string | null; callSuccessful?: string | null }) {
   const interestColour: Record<string, string> = {
     Hot: 'var(--accent-error)',
     Warm: 'var(--accent-warning)',
@@ -310,6 +310,17 @@ function CallAnalysisPanel({ a, sentiment }: { a: CallAnalysis; sentiment?: stri
         )}
         {sentiment && (
           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>sentiment: {sentiment}</span>
+        )}
+        {callSuccessful && callSuccessful.toLowerCase() !== 'unknown' && (
+          <span style={{
+            padding: '2px 8px', borderRadius: '999px', fontSize: '0.68rem', fontWeight: 700,
+            background: callSuccessful.toLowerCase() === 'true' || callSuccessful.toLowerCase() === 'yes'
+              ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.10)',
+            color: callSuccessful.toLowerCase() === 'true' || callSuccessful.toLowerCase() === 'yes'
+              ? '#10b981' : '#ef4444',
+          }}
+                title="Retell's assessment of whether the call achieved its purpose"
+          >{callSuccessful.toLowerCase() === 'true' || callSuccessful.toLowerCase() === 'yes' ? '✓ Goal met' : '✗ Goal not met'}</span>
         )}
       </div>
 
@@ -1521,6 +1532,50 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             </div>
           </div>
 
+          {/* Pending Callback Banner */}
+          {schedules && schedules.length > 0 && (() => {
+            const activeCb = schedules.find((s: any) => s.status === 'Scheduled');
+            if (!activeCb) return null;
+            const isCounselorCb = activeCb.call_type === 'Counselor';
+            return (
+              <div style={{
+                background: isCounselorCb ? 'rgba(245, 158, 11, 0.12)' : 'rgba(99, 102, 241, 0.12)',
+                border: `1px solid ${isCounselorCb ? 'rgba(245, 158, 11, 0.3)' : 'rgba(99, 102, 241, 0.3)'}`,
+                borderRadius: '12px',
+                padding: '14px 16px',
+                marginBottom: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justify: 'space-between',
+                gap: '12px'
+              }}>
+                <div>
+                  <div style={{
+                    fontSize: '0.82rem',
+                    fontWeight: 700,
+                    color: isCounselorCb ? '#d97706' : '#6366f1',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    marginBottom: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}>
+                    {isCounselorCb ? '👤 Counselor Callback Scheduled' : '🤖 AI Agent Callback Scheduled'}
+                  </div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {formatDateTime(activeCb.scheduled_for)}
+                  </div>
+                  {activeCb.reason && (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      Reason: {activeCb.reason}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', marginBottom: '16px' }}>Outbound History</h4>
 
           {/* Call detail: Response AI CRM style */}
@@ -1694,7 +1749,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                       </div>
                     )}
 
-                    {attempt.analysis && <CallAnalysisPanel a={attempt.analysis} sentiment={attempt.user_sentiment} />}
+                    {attempt.analysis && <CallAnalysisPanel a={attempt.analysis} sentiment={attempt.user_sentiment} callSuccessful={attempt.call_successful} />}
 
                     {/* Detected from the caller's own words. Shown separately
                         from the analysis panel because it exists for every

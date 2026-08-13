@@ -67,6 +67,34 @@ _COMPILED_PATTERNS = {
 
 ALL_TOPICS = sorted(SEMANTIC_TOPIC_PATTERNS.keys())
 
+# ── Canonical label mapping ──────────────────────────────────────────────
+# The keyword detector above uses granular labels ("Fees & Tuition",
+# "Campus Facilities") while the LLM analysis and the analytics charts use
+# a coarser vocabulary ("Fees", "Facilities") defined in school_agent.py.
+# This map normalizes the granular labels to match, so both systems produce
+# the same buckets in aggregate counts. Labels that already match the
+# canonical vocabulary map to themselves.
+CANONICAL_LABEL: dict[str, str] = {
+    "Admissions":               "Admissions",
+    "Day Boarding":             "Hostel",      # Day boarding is a boarding variant
+    "Hostel & Residential":     "Hostel",
+    "Teacher Qualifications":   "Facilities",  # Staff quality is part of facilities
+    "Alumni & Placements":      "Other",
+    "Fees & Tuition":           "Fees",
+    "Scholarships":             "Fees",        # Financial aid is a fees sub-topic
+    "Curriculum & Syllabus":    "Curriculum",
+    "Campus Facilities":        "Facilities",
+    "Transportation":           "Transport",
+    "School Timings":           "Timings",
+    "Location & Directions":    "Location",
+    "Extracurricular Activities": "Facilities",
+}
+
+
+def canonicalize(label: str) -> str:
+    """Map a granular keyword-detector label to the canonical LLM vocabulary."""
+    return CANONICAL_LABEL.get(label, label)
+
 
 def caller_utterances(transcript: str) -> str:
     """
@@ -123,3 +151,46 @@ def knowledge_coverage(db, school_id: str = None) -> Dict[str, bool]:
         total = sum(len(pattern.findall(corpus)) for pattern in patterns)
         coverage[topic] = total >= 2
     return coverage
+
+
+def backfill_detected_topics(batch_size: int = 200) -> int:
+    """
+    One-time backfill: find all CallAttempt rows that have a transcript but
+    no detected_topics, run the keyword detector, and persist the results.
+
+    This eliminates the per-request fallback in analytics.py that was
+    re-running regex matching on every page load for old calls. Safe to call
+    repeatedly — it only touches rows with NULL detected_topics.
+
+    Returns the number of rows backfilled.
+    """
+    from src.db import SessionLocal, CallAttempt
+
+    db = SessionLocal()
+    filled = 0
+    try:
+        while True:
+            rows = (
+                db.query(CallAttempt)
+                .filter(
+                    CallAttempt.transcript.isnot(None),
+                    CallAttempt.transcript != "",
+                    CallAttempt.detected_topics.is_(None),
+                )
+                .limit(batch_size)
+                .all()
+            )
+            if not rows:
+                break
+            for a in rows:
+                labels = detect_topics(a.transcript)
+                a.detected_topics = ",".join(labels) if labels else ""
+                filled += 1
+            db.commit()
+        print(f"[TOPICS] Backfilled detected_topics for {filled} call(s)")
+    except Exception as e:
+        print(f"[TOPICS] Backfill error: {e}")
+        db.rollback()
+    finally:
+        db.close()
+    return filled
