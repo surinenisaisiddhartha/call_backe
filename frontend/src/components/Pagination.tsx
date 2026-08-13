@@ -29,14 +29,14 @@ export default function Pagination({
   };
 
   return (
-    <div className="pagination-container">
-      <div className="pagination-info">
-        Showing <strong>{totalItems === 0 ? 0 : startItem}</strong> to <strong>{endItem}</strong> of <strong>{totalItems}</strong> entries
+    <div className="pagination-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderTop: '1px solid var(--border-color)', background: 'var(--glass-bg)', flexWrap: 'wrap', gap: '14px' }}>
+      <div className="pagination-info" style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+        Showing <strong style={{ color: 'var(--text-primary)' }}>{totalItems === 0 ? 0 : startItem}</strong> to <strong style={{ color: 'var(--text-primary)' }}>{endItem}</strong> of <strong style={{ color: 'var(--text-primary)' }}>{totalItems}</strong> entries
       </div>
       
-      <div className="pagination-controls">
-        <div className="page-size-selector">
-          <label>Rows per page:</label>
+      <div className="pagination-controls" style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+        <div className="page-size-selector" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+          <span>Rows per page:</span>
           <select 
             value={pageSize} 
             onChange={(e) => {
@@ -44,7 +44,7 @@ export default function Pagination({
               onPageChange(1); // Reset to page 1 on resize
             }}
             className="form-input"
-            style={{ padding: '4px 8px', height: 'auto', width: 'auto' }}
+            style={{ padding: '4px 10px', height: 'auto', width: 'auto', borderRadius: '6px', fontSize: '0.8rem', cursor: 'pointer' }}
           >
             <option value={10}>10</option>
             <option value={20}>20</option>
@@ -53,25 +53,29 @@ export default function Pagination({
           </select>
         </div>
 
-        <div className="page-navigation">
+        <div className="page-navigation" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button 
             className="btn btn-secondary icon-btn" 
             onClick={handlePrev} 
             disabled={currentPage === 1}
-            style={{ padding: '6px' }}
+            style={{ padding: '6px 8px', borderRadius: '6px' }}
+            title="Previous page"
           >
-            <ChevronLeft size={18} />
+            <ChevronLeft size={16} />
           </button>
           
-          <span className="page-number">Page {currentPage} of {totalPages}</span>
+          <span className="page-number" style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', minWidth: '90px', textAlign: 'center', background: 'var(--bg-tertiary)', padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+            {currentPage} / {totalPages}
+          </span>
           
           <button 
             className="btn btn-secondary icon-btn" 
             onClick={handleNext} 
             disabled={currentPage === totalPages}
-            style={{ padding: '6px' }}
+            style={{ padding: '6px 8px', borderRadius: '6px' }}
+            title="Next page"
           >
-            <ChevronRight size={18} />
+            <ChevronRight size={16} />
           </button>
         </div>
       </div>

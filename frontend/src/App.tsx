@@ -10,14 +10,15 @@ import Dashboard from './pages/Dashboard';
 import Schools from './pages/Schools';
 import Insights from './pages/Insights';
 import CounselorQueue from './pages/CounselorQueue';
+import Classes from './pages/Classes';
 import { useSSE } from './hooks/useSSE';
 import {
   Users, Settings as SettingsIcon, LogOut,
   BarChart2, CalendarCheck, Sun, Moon, LayoutDashboard,
   PanelLeftClose, PanelLeftOpen, School as SchoolIcon, TrendingUp, Headphones,
-  Phone, FileText, ChevronRight, Radio
+  Phone, FileText, ChevronRight, Radio, BookOpen, GraduationCap, CalendarDays
 } from 'lucide-react';
-type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'counselor' | 'scheduling' | 'insights' | 'settings' | 'schools';
+type Tab = 'dashboard' | 'campaigns' | 'contacts' | 'classes' | 'counselor' | 'counselors' | 'scheduling' | 'insights' | 'settings' | 'schools';
 
 interface Toast {
   message: string;
@@ -29,14 +30,25 @@ interface Toast {
  *  `if (!token)` early return below. */
 function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
-    <div style={{ position: 'fixed', bottom: '100px', right: '30px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999 }}>
+    <div style={{ position: 'fixed', bottom: '24px', right: '24px', display: 'flex', flexDirection: 'column', gap: '10px', zIndex: 9999, pointerEvents: 'none' }}>
       {toasts.map(t => (
         <div
           key={t.id}
-          className="toast"
-          style={{ borderLeft: `4px solid ${t.type === 'success' ? 'var(--accent-success)' : 'var(--accent-error)'}` }}
+          className="toast hover-lift"
+          style={{
+            pointerEvents: 'auto',
+            borderLeft: `4px solid ${t.type === 'success' ? 'var(--accent-success)' : 'var(--accent-error)'}`,
+            background: 'var(--glass-bg)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            boxShadow: 'var(--shadow-lg)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}
         >
-          <span>{t.message}</span>
+          <span style={{ fontSize: '1rem' }}>{t.type === 'success' ? '✨' : '⚠️'}</span>
+          <span style={{ fontWeight: 500 }}>{t.message}</span>
         </div>
       ))}
     </div>
@@ -116,7 +128,7 @@ export default function App() {
   const schoolSlug = user?.school_slug || (userRole === 'admin' ? 'platform' : null);
 
   const allowedTabsFor = (role: string): Tab[] => {
-    const tabs: Tab[] = ['dashboard', 'campaigns', 'contacts', 'scheduling', 'insights'];
+    const tabs: Tab[] = ['dashboard', 'classes', 'counselors', 'counselor', 'campaigns', 'contacts', 'scheduling', 'insights'];
     if (role === 'admin') tabs.push('settings', 'schools');
     return tabs;
   };
@@ -187,7 +199,7 @@ export default function App() {
     }
   }, [activeTab, userRole]);
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = React.useCallback((message: string, type: 'success' | 'error' = 'success') => {
     // Date.now() alone collides when two toasts fire in the same millisecond
     // (e.g. several pages erroring at once), producing duplicate React keys.
     const id = Date.now() + Math.random();
@@ -195,7 +207,7 @@ export default function App() {
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
-  };
+  }, []);
 
   // Global Real-time Push (SSE) Toast Notifications
   useSSE(React.useCallback((msg) => {
@@ -248,6 +260,7 @@ export default function App() {
     { tab: 'counselor',  icon: <Headphones size={18} />,      label: 'Follow-ups' },
     { tab: 'campaigns',  icon: <BarChart2 size={18} />,       label: 'Campaigns' },
     { tab: 'contacts',   icon: <Users size={18} />,           label: 'Leads' },
+    { tab: 'classes',    icon: <BookOpen size={18} />,        label: 'Classes' },
     { tab: 'scheduling', icon: <CalendarCheck size={18} />,   label: 'Scheduling' },
     { tab: 'insights',   icon: <TrendingUp size={18} />,      label: 'Reports' },
   ];
@@ -270,54 +283,34 @@ export default function App() {
         <div className="left-section">
           {/* Response AI brand */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'linear-gradient(135deg,#16a34a,#22c55e)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <div className="sidebar-brand-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" fill="white"/>
               </svg>
             </div>
             <div>
-              <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>Response AI</div>
-              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '1px' }}>Admissions CRM</div>
+              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1, letterSpacing: '-0.01em' }}>Response AI</div>
+              <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '2px', fontWeight: 500 }}>Admissions CRM</div>
             </div>
           </div>
         </div>
 
         <div className="right-section">
           <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '0.72rem',
-              color: '#10b981',
-              fontWeight: 600,
-              background: 'rgba(16, 185, 129, 0.08)',
-              border: '1px solid rgba(16, 185, 129, 0.2)',
-              padding: '4px 10px',
-              borderRadius: '20px',
-              letterSpacing: '0.02em',
-            }}
+            className="live-sync-pill"
             title="Real-Time Server-Sent Events (SSE) Live Stream Connected"
           >
-            <span
-              style={{
-                width: '6px',
-                height: '6px',
-                borderRadius: '50%',
-                background: '#10b981',
-                display: 'inline-block',
-                boxShadow: '0 0 8px #10b981',
-              }}
-            />
+            <span className="live-sync-dot" />
             Live Sync
           </div>
 
           <button
             onClick={() => setTheme(prev => prev === 'dark' ? 'light' : 'dark')}
-            style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: '7px', padding: '6px 10px', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem' }}
-            title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+            className="btn btn-secondary btn-icon"
+            style={{ borderRadius: '8px', padding: '7px 9px' }}
+            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           >
-            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            {theme === 'dark' ? <Sun size={15} style={{ color: '#f59e0b' }} /> : <Moon size={15} style={{ color: '#6366f1' }} />}
           </button>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '12px', borderLeft: '1px solid var(--border-color)' }}>
@@ -332,10 +325,11 @@ export default function App() {
             </div>
             <button
               onClick={handleLogout}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '4px', borderRadius: '5px', display: 'flex' }}
+              className="btn-icon"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '5px', borderRadius: '6px', display: 'flex', transition: 'var(--transition-smooth)' }}
               title="Sign Out"
             >
-              <LogOut size={15} />
+              <LogOut size={16} />
             </button>
           </div>
         </div>
@@ -404,16 +398,20 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Main Content */}
+        {/* Main Content with smooth animated container */}
         <main className="main-content">
-          {activeTab === 'dashboard' && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
-          {activeTab === 'counselor' && <CounselorQueue showToast={showToast} onViewContact={viewContactFromElsewhere} />}
-          {activeTab === 'campaigns' && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
-          {activeTab === 'contacts' && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} jumpToClassification={jumpToClassification} onClassificationHandled={() => setJumpToClassification(null)} />}
-          {activeTab === 'scheduling' && <Scheduling showToast={showToast} />}
-          {activeTab === 'insights' && <Insights showToast={showToast} onViewClassification={viewClassificationFromInsights} />}
-          {activeTab === 'schools' && userRole === 'admin' && <Schools showToast={showToast} />}
-          {activeTab === 'settings' && userRole === 'admin' && <Settings showToast={showToast} />}
+          <div key={activeTab} className="page-transition-enter">
+            {activeTab === 'dashboard' && <Dashboard showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+            {activeTab === 'counselors' && <CounselorQueue key="roster" initialWorkspace="roster" showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+            {activeTab === 'counselor' && <CounselorQueue key="queue" initialWorkspace="queue" showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+            {activeTab === 'campaigns' && <Campaigns showToast={showToast} onViewContact={viewContactFromElsewhere} />}
+            {activeTab === 'contacts' && <Contacts showToast={showToast} jumpToContactId={jumpToContactId} onJumpHandled={() => setJumpToContactId(null)} jumpToClassification={jumpToClassification} onClassificationHandled={() => setJumpToClassification(null)} />}
+            {activeTab === 'classes' && <Classes showToast={showToast} />}
+            {activeTab === 'scheduling' && <Scheduling showToast={showToast} />}
+            {activeTab === 'insights' && <Insights showToast={showToast} onViewClassification={viewClassificationFromInsights} />}
+            {activeTab === 'schools' && userRole === 'admin' && <Schools showToast={showToast} />}
+            {activeTab === 'settings' && userRole === 'admin' && <Settings showToast={showToast} />}
+          </div>
         </main>
       </div>
 

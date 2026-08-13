@@ -1,7 +1,7 @@
 import os
 import uuid
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from dotenv import load_dotenv
@@ -157,6 +157,51 @@ class Counselor(Base):
     # OnLeave = skip entirely in auto-assignment.
     availability_status = Column(String(30), default="Available")
     max_capacity = Column(Integer, default=50)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Course(Base):
+    __tablename__ = "courses"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    name = Column(String(255), nullable=False)
+    code = Column(String(50), nullable=True)
+    target_grade = Column(String(100), nullable=True)
+    stream = Column(String(100), nullable=True)
+    fee_structure = Column(String(255), nullable=True)
+    duration = Column(String(50), default="1 Year")
+    status = Column(String(30), default="Active")  # Active, Upcoming, Archived
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ClassType(Base):
+    __tablename__ = "class_types"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    name = Column(String(100), nullable=False)
+    description = Column(String(255), nullable=True)
+    icon = Column(String(50), default="book")          # music, dance, art, coding, book, etc.
+    color = Column(String(50), default="indigo")       # indigo, pink, amber, green, blue, purple
+    fee = Column(Integer, default=500)
+    duration_minutes = Column(Integer, default=60)
+    max_per_slot = Column(Integer, default=4)
+    is_active = Column(Boolean, default=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ClassBooking(Base):
+    __tablename__ = "class_bookings"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    class_type_id = Column(String(36), ForeignKey("class_types.id", ondelete="SET NULL"), nullable=True)
+    class_type = Column(String(100), nullable=False)  # snapshot of class name at booking time
+    booked_date = Column(String(20), nullable=False)   # YYYY-MM-DD
+    booked_time = Column(String(10), nullable=False)   # e.g. "18:00"
+    student_name = Column(String(255), nullable=False)
+    phone_number = Column(String(50), nullable=False)
+    email = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
+    fee = Column(Integer, default=500)
+    status = Column(String(30), default="upcoming")   # upcoming, completed, cancelled
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Contact(Base):
@@ -380,6 +425,25 @@ def init_db():
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE contacts ADD COLUMN counselor_followup_status VARCHAR(30) DEFAULT 'Pending';"))
                 conn.commit()
+
+        # ── Classes & Bookings self-healing ──────────────────────────────
+        if 'class_bookings' in inspector.get_table_names():
+            booking_cols = [c['name'] for c in inspector.get_columns('class_bookings')]
+            if 'class_type_id' not in booking_cols:
+                print("[DB] Self-healing migration: adding class_type_id to class_bookings table")
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE class_bookings ADD COLUMN class_type_id VARCHAR(36);"))
+                    conn.commit()
+            if 'class_type' not in booking_cols:
+                print("[DB] Self-healing migration: adding class_type to class_bookings table")
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE class_bookings ADD COLUMN class_type VARCHAR(100) DEFAULT 'General';"))
+                    conn.commit()
+            if 'fee' not in booking_cols:
+                print("[DB] Self-healing migration: adding fee to class_bookings table")
+                with engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE class_bookings ADD COLUMN fee INTEGER DEFAULT 500;"))
+                    conn.commit()
 
         # ── The 20-point profile ──────────────────────────────────────────
         # Column list is derived from profile.py so the schema cannot drift

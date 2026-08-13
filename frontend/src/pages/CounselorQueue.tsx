@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { getErrorMessage } from '../api';
 import { useSSE } from '../hooks/useSSE';
+import { LeadJourneyStepper, LeadStepBadge, calculateLeadJourney } from '../components/LeadJourneyStepper';
+import { exportToExcel } from '../utils/exportToExcel';
 import {
   Headphones, Flame, Clock, CheckCircle, Phone, Calendar,
   Search, Filter, History, MessageSquare, AlertCircle, RefreshCw, X, ChevronRight, User, UserPlus, Trash2, Mail,
-  RotateCcw, CheckCircle2, Check, BarChart2, Award, Zap, Layers, Send, ArrowRight, ShieldAlert, CheckSquare, Square
+  RotateCcw, CheckCircle2, Check, BarChart2, Award, Zap, Layers, Send, ArrowRight, ShieldAlert, CheckSquare, Square, FileSpreadsheet
 } from 'lucide-react';
 
 interface Contact {
@@ -14,7 +16,7 @@ interface Contact {
   email: string | null;
   notes: string | null;
   status: 'Pending' | 'Calling' | 'Completed' | 'NeedsReschedule' | 'Scheduled' | 'Failed';
-  interest_level: 'Hot Lead' | 'Warm Lead' | 'Time Pass' | 'Not Interested' | 'Unclassified' | 'Not Reached';
+  interest_level: 'HOT' | 'WARM' | 'COLD' | 'UNSCORED' | string;
   lead_score: number;
   score_reasons: string[];
   assigned_counselor_id: string | null;
@@ -60,16 +62,18 @@ interface CounselorAnalytics {
 interface CounselorQueueProps {
   showToast: (msg: string, type?: 'success' | 'error') => void;
   onViewContact?: (contactId: string) => void;
+  initialWorkspace?: 'queue' | 'completed' | 'roster' | 'analytics';
 }
 
-export default function CounselorQueue({ showToast, onViewContact }: CounselorQueueProps) {
+export default function CounselorQueue({ showToast, onViewContact, initialWorkspace = 'queue' }: CounselorQueueProps) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [counselors, setCounselors] = useState<Counselor[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [queueFilter, setQueueFilter] = useState<'all' | 'hot' | 'warm' | 'callback'>('hot');
   const [counselorFilter, setCounselorFilter] = useState<string>('all');
-  const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'completed' | 'roster' | 'analytics'>('queue');
+  const [hasDefaultedFilter, setHasDefaultedFilter] = useState(false);
+  const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'completed' | 'roster' | 'analytics'>(initialWorkspace);
 
   // Bulk Operations State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -153,7 +157,16 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
   const fetchCounselors = async () => {
     try {
       const res = await api.get('/contacts/counselors/all');
-      setCounselors(res.data || []);
+      const loaded: Counselor[] = res.data || [];
+      setCounselors(loaded);
+
+      if (!hasDefaultedFilter && loggedInUserEmail) {
+        const mine = loaded.find(c => c.email.toLowerCase() === loggedInUserEmail.toLowerCase());
+        if (mine) {
+          setCounselorFilter(mine.id);
+        }
+        setHasDefaultedFilter(true);
+      }
     } catch (err) {
       console.error('Failed to fetch counselors roster:', err);
     }
@@ -199,21 +212,18 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
   })();
 
   useEffect(() => {
+    if (initialWorkspace) {
+      setActiveWorkspace(initialWorkspace);
+    }
+  }, [initialWorkspace]);
+
+  useEffect(() => {
     fetchQueue();
     fetchCounselors();
     if (activeWorkspace === 'analytics') {
       fetchAnalytics();
     }
   }, [fetchQueue, activeWorkspace]);
-
-  useEffect(() => {
-    if (counselors.length > 0 && loggedInUserEmail && counselorFilter === 'all') {
-      const matched = counselors.find(c => c.email.toLowerCase() === loggedInUserEmail.toLowerCase());
-      if (matched) {
-        setCounselorFilter(matched.id);
-      }
-    }
-  }, [counselors]);
 
   // Activity History Drawer Logic
   const openActivityHistory = async (contact: Contact) => {
@@ -275,9 +285,9 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
     // 1. Queue priority filter (only applied on active queue)
     if (activeWorkspace === 'queue') {
       if (queueFilter === 'hot') {
-        if (!(c.interest_level === 'Hot Lead' || c.lead_score >= 60)) return false;
+        if (!(c.interest_level === 'HOT' || c.lead_score >= 75)) return false;
       } else if (queueFilter === 'warm') {
-        if (!(c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60))) return false;
+        if (!(c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75))) return false;
       } else if (queueFilter === 'callback') {
         if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled')) return false;
       }
@@ -294,12 +304,12 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
   const hotCount = activeContacts.filter(c => {
     const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-    return belongs && (c.interest_level === 'Hot Lead' || c.lead_score >= 60);
+    return belongs && (c.interest_level === 'HOT' || c.lead_score >= 75);
   }).length;
 
   const warmCount = activeContacts.filter(c => {
     const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-    return belongs && (c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60));
+    return belongs && (c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75));
   }).length;
 
   const callbackCount = activeContacts.filter(c => {
@@ -502,6 +512,18 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
     }
   };
 
+  const handleUpdateCapacity = async (counselorId: string, capacity: number) => {
+    try {
+      await api.patch(`/contacts/counselors/${counselorId}`, {
+        max_capacity: capacity,
+      });
+      showToast(`Workload capacity updated to ${capacity}`, 'success');
+      fetchCounselors();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to update capacity'), 'error');
+    }
+  };
+
   const handleRemoveCounselor = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to remove counselor ${name}?`)) return;
     try {
@@ -684,18 +706,64 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                   value={counselorFilter}
                   onChange={(e) => setCounselorFilter(e.target.value)}
                   className="form-input"
-                  style={{ fontSize: '0.85rem', padding: '8px 12px', minWidth: '160px' }}
+                  style={{ fontSize: '0.85rem', padding: '8px 12px', minWidth: '170px', fontWeight: 600 }}
                 >
-                  <option value="all">All Counselors</option>
-                  <option value="unassigned">Unassigned Only</option>
-                  {counselors.map(cns => (
-                    <option key={cns.id} value={cns.id}>{cns.name}</option>
-                  ))}
+                  {(() => {
+                    const mine = counselors.find(c => c.email.toLowerCase() === (loggedInUserEmail || '').toLowerCase());
+                    return (
+                      <>
+                        {mine && <option value={mine.id}>My Queue ({mine.name})</option>}
+                        <option value="all">All Counselors (Entire Team)</option>
+                        <option value="unassigned">Unassigned Only</option>
+                        {counselors
+                          .filter(cns => !mine || cns.id !== mine.id)
+                          .map(cns => (
+                            <option key={cns.id} value={cns.id}>{cns.name}</option>
+                          ))
+                        }
+                      </>
+                    );
+                  })()}
                 </select>
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  const filename = activeWorkspace === 'completed' ? 'Completed_Leads_Report' : 'Active_Counselor_Queue_Report';
+                  exportToExcel(
+                    filteredContacts,
+                    [
+                      { header: 'Lead Name', key: 'name' },
+                      { header: 'Phone Number', key: 'phone_number' },
+                      { header: 'Email', key: 'email' },
+                      { header: 'Admissions Pipeline Stage', key: (c: any) => calculateLeadJourney(c).stepName },
+                      { header: 'Priority Classification', key: (c: any) => c.interest_level || 'UNSCORED' },
+                      { header: 'Lead Score', key: (c: any) => c.lead_score || 0 },
+                      { header: 'Assigned Counselor', key: (c: any) => counselors.find(cns => cns.id === c.assigned_counselor_id)?.name || 'Unassigned' },
+                      { header: 'Follow-up Status', key: (c: any) => c.counselor_followup_status || 'Pending' },
+                      { header: 'AI Call Status', key: 'status' },
+                      { header: 'Notes', key: (c: any) => c.notes || '' },
+                      { header: 'Date Added', key: (c: any) => c.created_at || '' }
+                    ],
+                    filename
+                  );
+                }}
+                style={{
+                  fontSize: '0.82rem', padding: '8px 14px',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  color: '#10b981',
+                  background: 'rgba(16, 185, 129, 0.08)'
+                }}
+                title="Export currently displayed leads to Excel CSV file"
+              >
+                <FileSpreadsheet size={15} />
+                Export Excel
+              </button>
+
               {activeWorkspace === 'queue' && (
                 <button
                   onClick={handleAutoAssign}
@@ -853,16 +921,35 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               <div>Loading prioritized leads...</div>
             </div>
           ) : filteredContacts.length === 0 ? (
-            <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
-              <Headphones size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
-              <h3>No leads found in this view</h3>
-              <p style={{ marginTop: '4px', fontSize: '0.9rem' }}>Try clearing your search query or switching the priority filter.</p>
+            <div className="glass-panel" style={{ padding: '60px 30px', textAlign: 'center', color: 'var(--text-muted)' }}>
+              {activeWorkspace === 'completed' ? (
+                <>
+                  <CheckCircle2 size={44} style={{ margin: '0 auto 12px', color: '#10b981', opacity: 0.8 }} />
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', color: 'var(--text-primary)' }}>No Completed Follow-ups Yet</h3>
+                  <p style={{ marginTop: '6px', fontSize: '0.88rem', color: 'var(--text-secondary)', maxWidth: '480px', margin: '6px auto 18px auto', lineHeight: 1.5 }}>
+                    When counselors finish following up on a lead or schedule a campus visit, clicking <strong>"Mark Completed"</strong> moves the lead here to the completed archive.
+                  </p>
+                  <button
+                    onClick={() => setActiveWorkspace('queue')}
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.85rem', padding: '8px 18px', margin: '0 auto' }}
+                  >
+                    View Active Queue ({totalActiveCount} Leads)
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Headphones size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', color: 'var(--text-primary)' }}>No leads found in this view</h3>
+                  <p style={{ marginTop: '4px', fontSize: '0.9rem' }}>Try clearing your search query or switching the priority filter.</p>
+                </>
+              )}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {filteredContacts.map(c => {
-                const isHot = c.interest_level === 'Hot Lead' || c.lead_score >= 60;
-                const isWarm = c.interest_level === 'Warm Lead' || (c.lead_score >= 30 && c.lead_score < 60);
+                const isHot = c.interest_level === 'HOT' || c.lead_score >= 75;
+                const isWarm = c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75);
                 const isSelected = selectedIds.has(c.id);
 
                 return (
@@ -873,7 +960,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                       padding: '22px 24px',
                       display: 'flex', flexDirection: 'column', gap: '16px',
                       borderLeft: isHot ? '4px solid #ef4444' : isWarm ? '4px solid #f59e0b' : '4px solid var(--border-color)',
-                      background: isSelected ? 'rgba(124, 58, 237, 0.04)' : undefined
+                      background: isSelected ? 'rgba(16, 185, 129, 0.04)' : undefined
                     }}
                   >
                     {/* Top Row: Checkbox, Lead info & Score */}
@@ -901,12 +988,16 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.15rem', fontWeight: 700 }}>{c.name}</h3>
                             <span style={{
                               padding: '3px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 700,
-                              background: isHot ? 'rgba(239, 68, 68, 0.12)' : isWarm ? 'rgba(245, 158, 11, 0.12)' : 'rgba(124, 58, 237, 0.12)',
-                              color: isHot ? '#ef4444' : isWarm ? '#f59e0b' : '#7c3aed',
-                              border: `1px solid ${isHot ? 'rgba(239, 68, 68, 0.2)' : isWarm ? 'rgba(245, 158, 11, 0.2)' : 'rgba(124, 58, 237, 0.2)'}`
+                              background: isHot ? 'rgba(239, 68, 68, 0.12)' : isWarm ? 'rgba(245, 158, 11, 0.12)' : c.interest_level === 'COLD' ? 'rgba(148, 163, 184, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                              color: isHot ? '#ef4444' : isWarm ? '#f59e0b' : c.interest_level === 'COLD' ? 'var(--text-secondary)' : '#10b981',
+                              border: `1px solid ${isHot ? 'rgba(239, 68, 68, 0.3)' : isWarm ? 'rgba(245, 158, 11, 0.3)' : c.interest_level === 'COLD' ? 'rgba(148, 163, 184, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`
                             }}>
-                              {isHot ? 'Hot Lead' : isWarm ? 'Warm Lead' : c.interest_level}
+                              {isHot ? 'HOT LEAD' : isWarm ? 'WARM LEAD' : c.interest_level === 'COLD' ? 'COLD LEAD' : 'UNCONTACTED'}
                             </span>
+                            <LeadStepBadge
+                              contact={c}
+                              counselorName={counselors.find(cns => cns.id === c.assigned_counselor_id)?.name}
+                            />
                           </div>
                           <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '4px', flexWrap: 'wrap' }}>
                             <span>{c.phone_number}</span>
@@ -950,6 +1041,12 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                         </div>
                       </div>
                     </div>
+
+                    {/* Admissions Pipeline Journey Stepper */}
+                    <LeadJourneyStepper
+                      contact={c}
+                      counselorName={counselors.find(cns => cns.id === c.assigned_counselor_id)?.name}
+                    />
 
                     {/* Key Indicators */}
                     {c.score_reasons && c.score_reasons.length > 0 && (
@@ -1040,7 +1137,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
                               background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)'
                             }}>
                               <CheckCircle2 size={16} />
-                              Follow-up Completed
+                              Completed by {counselors.find(cns => cns.id === c.assigned_counselor_id)?.name || 'Counselor'}
                             </span>
 
                             <button
@@ -1233,58 +1330,69 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
           ) : (
             <>
               {/* Top Leaderboard Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '16px' }}>
-                {analytics.map((item, idx) => (
-                  <div key={item.counselor_id} className="glass-panel hover-lift" style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{
-                          width: '42px', height: '42px', borderRadius: '50%',
-                          background: idx === 0 ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'rgba(124, 58, 237, 0.12)',
-                          color: idx === 0 ? '#fff' : 'var(--accent-primary)',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800
-                        }}>
-                          {idx === 0 ? <Award size={20} /> : item.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', fontWeight: 700 }}>{item.name}</h4>
-                            {idx === 0 && <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', fontWeight: 700 }}>Top Performer</span>}
+              {(() => {
+                const maxConv = Math.max(...analytics.map(a => a.conversion_rate || 0), 0);
+                const maxComp = Math.max(...analytics.map(a => a.completed_count || 0), 0);
+
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: '16px' }}>
+                    {analytics.map((item) => {
+                      const isTop = (maxConv > 0 || maxComp > 0) && item.conversion_rate === maxConv && item.completed_count > 0;
+
+                      return (
+                        <div key={item.counselor_id} className="glass-panel hover-lift" style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <div style={{
+                                width: '42px', height: '42px', borderRadius: '50%',
+                                background: isTop ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'rgba(124, 58, 237, 0.12)',
+                                color: isTop ? '#fff' : 'var(--accent-primary)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800
+                              }}>
+                                {isTop ? <Award size={20} /> : item.name.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', fontWeight: 700 }}>{item.name}</h4>
+                                  {isTop && <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', fontWeight: 700 }}>Top Performer</span>}
+                                </div>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{item.email}</span>
+                              </div>
+                            </div>
+
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-primary)', fontFamily: 'var(--font-display)' }}>
+                                {item.conversion_rate}%
+                              </div>
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Conversion</span>
+                            </div>
                           </div>
-                          <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{item.email}</span>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>{item.completed_count}</div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>Completed</div>
+                            </div>
+                            <div style={{ textAlign: 'center', borderLeft: '1px solid var(--border-color)', borderRight: '1px solid var(--border-color)' }}>
+                              <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>{item.activity_count_7d}</div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>7d Actions</div>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>{item.avg_response_hours !== null ? `${item.avg_response_hours}h` : '—'}</div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>Avg Response</div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            <span>Active Leads: <strong>{item.active_leads}</strong></span>
+                            <span>Hot Leads Handled: <strong>{item.hot_leads_assigned}</strong></span>
+                          </div>
                         </div>
-                      </div>
-
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-primary)', fontFamily: 'var(--font-display)' }}>
-                          {item.conversion_rate}%
-                        </div>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Conversion</span>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>{item.completed_count}</div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>Completed</div>
-                      </div>
-                      <div style={{ textAlign: 'center', borderLeft: '1px solid var(--border-color)', borderRight: '1px solid var(--border-color)' }}>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>{item.activity_count_7d}</div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>7d Actions</div>
-                      </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 800 }}>{item.avg_response_hours !== null ? `${item.avg_response_hours}h` : '—'}</div>
-                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>Avg Response</div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                      <span>Active Leads: <strong>{item.active_leads}</strong></span>
-                      <span>Hot Leads Handled: <strong>{item.hot_leads_assigned}</strong></span>
-                    </div>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </>
           )}
         </div>
@@ -1292,8 +1400,8 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
       {/* Activity History Modal / Drawer */}
       {activeHistoryContact && (
-        <div className="modal-overlay">
-          <div className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div className="modal-overlay" onClick={() => setActiveHistoryContact(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '28px', maxWidth: '640px', width: '100%', maxHeight: '90vh', overflowY: 'auto', background: 'var(--bg-secondary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px' }}>
               <div>
                 <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700 }}>
@@ -1393,8 +1501,8 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
       {/* Onboard Counselor Modal */}
       {showAddCounselor && (
-        <div className="modal-overlay">
-          <form onSubmit={handleOnboardCounselor} className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '480px', width: '100%' }}>
+        <div className="modal-overlay" onClick={() => setShowAddCounselor(false)}>
+          <form onSubmit={handleOnboardCounselor} onClick={(e) => e.stopPropagation()} className="modal-content" style={{ padding: '28px', maxWidth: '480px', width: '100%', background: 'var(--bg-secondary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700 }}>
                 Onboard New Counselor
@@ -1453,8 +1561,8 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
       {/* Credentials Created Modal */}
       {counselorCredentials && (
-        <div className="modal-overlay">
-          <div className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '480px', width: '100%', borderLeft: '4px solid var(--accent-success)' }}>
+        <div className="modal-overlay" onClick={() => setCounselorCredentials(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '28px', maxWidth: '480px', width: '100%', borderLeft: '5px solid var(--accent-success)', background: 'var(--bg-secondary)' }}>
             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 700, marginBottom: '10px', color: 'var(--text-primary)' }}>
               Counselor Login Created
             </h3>
@@ -1496,15 +1604,15 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
       {/* Mark Completed Modal */}
       {completeContact && (
-        <div className="modal-overlay">
-          <form onSubmit={handleCompleteFollowUp} className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '520px', width: '100%', borderLeft: '4px solid #10b981' }}>
+        <div className="modal-overlay" onClick={() => setCompleteContact(null)}>
+          <form onSubmit={handleCompleteFollowUp} onClick={(e) => e.stopPropagation()} className="modal-content" style={{ padding: '28px', maxWidth: '520px', width: '100%', borderLeft: '5px solid #10b981', background: 'var(--bg-secondary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '8px', borderRadius: '50%' }}>
                   <CheckCircle size={22} />
                 </div>
                 <div>
-                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700 }}>
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                     Complete Follow-up: {completeContact.name}
                   </h3>
                   <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>{completeContact.phone_number}</span>
@@ -1517,12 +1625,12 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '12px' }}>
               <div className="form-group">
-                <label className="form-label" style={{ fontWeight: 600 }}>Call Outcome / Disposition</label>
+                <label className="form-label" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Call Outcome / Disposition</label>
                 <select
                   className="form-input"
                   value={completeOutcome}
                   onChange={(e) => setCompleteOutcome(e.target.value)}
-                  style={{ background: 'var(--bg-tertiary)', fontWeight: 600 }}
+                  style={{ background: 'var(--bg-tertiary)', fontWeight: 600, color: 'var(--text-primary)' }}
                 >
                   <option value="Campus Visit Scheduled">Campus Visit Scheduled</option>
                   <option value="Enrollment Discussion In-Progress">Enrollment Discussion In-Progress</option>
@@ -1535,21 +1643,21 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
               </div>
 
               <div className="form-group">
-                <label className="form-label" style={{ fontWeight: 600 }}>Counselor Observations / Notes</label>
+                <label className="form-label" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Counselor Observations / Notes</label>
                 <textarea
                   className="form-input"
                   rows={4}
                   value={completeNote}
                   onChange={(e) => setCompleteNote(e.target.value)}
                   placeholder="e.g. Spoke with parent regarding Grade 5 admission. Confirmed campus tour on Saturday at 11 AM with admissions team."
-                  style={{ resize: 'vertical' }}
+                  style={{ resize: 'vertical', color: 'var(--text-primary)' }}
                 />
               </div>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
               <button type="button" className="btn btn-secondary" onClick={() => setCompleteContact(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary" style={{ background: '#10b981', borderColor: '#10b981' }} disabled={completing}>
+              <button type="submit" className="btn btn-primary" style={{ background: '#10b981', borderColor: '#10b981', color: '#ffffff' }} disabled={completing}>
                 {completing ? 'Completing...' : 'Mark as Completed'}
               </button>
             </div>
@@ -1559,10 +1667,10 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
 
       {/* Reschedule Modal */}
       {rescheduleContact && (
-        <div className="modal-overlay">
-          <div className="glass-panel modal-content" style={{ padding: '28px', maxWidth: '500px', width: '100%' }}>
+        <div className="modal-overlay" onClick={() => setRescheduleContact(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '28px', maxWidth: '500px', width: '100%', background: 'var(--bg-secondary)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700 }}>
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                 Schedule Callback: {rescheduleContact.name}
               </h3>
               <button onClick={() => setRescheduleContact(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -1571,7 +1679,7 @@ export default function CounselorQueue({ showToast, onViewContact }: CounselorQu
             </div>
 
             <div className="form-group">
-              <label className="form-label">Callback Date & Time</label>
+              <label className="form-label" style={{ color: 'var(--text-primary)' }}>Callback Date & Time</label>
               <input
                 type="datetime-local"
                 className="form-input"

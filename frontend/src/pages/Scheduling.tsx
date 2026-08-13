@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
+import { exportToExcel } from '../utils/exportToExcel';
 import {
   Calendar, Trash2, Edit2, CalendarRange, RefreshCw, Plus, X, Search, Phone,
-  CalendarCheck, CheckCircle, Clock, XCircle, User
+  CalendarCheck, CheckCircle, Clock, XCircle, User, FileSpreadsheet
 } from 'lucide-react';
 
 interface ScheduledCallback {
@@ -539,15 +540,54 @@ export default function Scheduling({ showToast }: SchedulingProps) {
     .sort((a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime())
     .slice(0, 3);
 
+  const handleExportScheduleToExcel = () => {
+    if (subTab === 'callbacks') {
+      exportToExcel(
+        displayedSchedules,
+        [
+          { header: 'Contact Name', key: 'contact_name' },
+          { header: 'Phone Number', key: 'contact_phone' },
+          { header: 'Email', key: 'contact_email' },
+          { header: 'Scheduled Time', key: (s: any) => s.scheduled_for ? new Date(s.scheduled_for).toLocaleString() : '' },
+          { header: 'Call Type', key: 'call_type' },
+          { header: 'Reason / Purpose', key: (s: any) => s.reason || '' },
+          { header: 'Status', key: 'status' },
+          { header: 'Calendar Event ID', key: (s: any) => s.google_calendar_event_id || '' }
+        ],
+        'Scheduled_Callbacks_Report'
+      );
+    } else {
+      exportToExcel(
+        filteredApts,
+        [
+          { header: 'Contact Name', key: 'contact_name' },
+          { header: 'Phone Number', key: 'contact_phone' },
+          { header: 'Scheduled Time', key: (a: any) => a.scheduled_for ? new Date(a.scheduled_for).toLocaleString() : '' },
+          { header: 'Purpose', key: (a: any) => a.purpose || '' },
+          { header: 'Status', key: 'status' }
+        ],
+        'Scheduled_Appointments_Report'
+      );
+    }
+  };
+
   return (
     <div>
       {/* Actions Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#fff', margin: 0 }}>Callbacks</h2>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#fff', margin: 0 }}>Callbacks & Appointments</h2>
         </div>
 
         <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={handleExportScheduleToExcel}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}
+            title="Export schedules to Excel CSV"
+          >
+            <FileSpreadsheet size={16} /> Export to Excel
+          </button>
           <button className="btn btn-secondary" onClick={fetchData} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <RefreshCw size={16} /> Refresh
           </button>

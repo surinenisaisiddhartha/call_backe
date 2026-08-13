@@ -136,32 +136,53 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
       justifyContent: 'center',
       alignItems: 'center',
       minHeight: '100vh',
-      padding: '20px',
+      padding: '24px',
+      position: 'relative',
+      overflow: 'hidden'
     }}>
-      <div className="glass-panel" style={{
+      {/* Ambient background glow orbs */}
+      <div style={{
+        position: 'absolute',
+        top: '20%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '500px',
+        height: '500px',
+        background: 'radial-gradient(circle, rgba(16, 185, 129, 0.12) 0%, rgba(139, 92, 246, 0.05) 50%, transparent 70%)',
+        zIndex: 0,
+        pointerEvents: 'none'
+      }} />
+
+      <div className="glass-panel scale-in" style={{
         width: '100%',
-        maxWidth: '420px',
-        padding: '40px 30px',
+        maxWidth: '430px',
+        padding: '42px 34px',
+        position: 'relative',
+        zIndex: 1,
+        boxShadow: 'var(--shadow-xl)',
+        borderRadius: '16px'
       }}>
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '60px',
-            height: '60px',
-            borderRadius: '50%',
-            background: 'rgba(59, 130, 246, 0.1)',
+            width: '64px',
+            height: '64px',
+            borderRadius: '16px',
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.1) 100%)',
             color: 'var(--accent-primary)',
             marginBottom: '16px',
-            border: '1px solid rgba(59, 130, 246, 0.2)'
+            border: '1px solid rgba(16, 185, 129, 0.25)',
+            boxShadow: '0 4px 16px rgba(16, 185, 129, 0.15)',
+            transition: 'transform 0.3s var(--ease-spring)'
           }}>
-            {inChallenge ? <KeyRound size={28} /> : step === 'email' ? <Mail size={28} /> : <Lock size={28} />}
+            {inChallenge ? <KeyRound size={30} /> : step === 'email' ? <Mail size={30} /> : <Lock size={30} />}
           </div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2.5rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2.2rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px', letterSpacing: '-0.02em' }}>
             EnquiryCall
           </h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '6px' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginTop: '4px' }}>
             {inChallenge
               ? 'Choose a new password for your account'
               : step === 'email'

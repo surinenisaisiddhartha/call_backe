@@ -2,7 +2,9 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
 import { useSSE } from '../hooks/useSSE';
-import { Search, Phone, Calendar, History, X, Check, RefreshCw, CalendarRange, Trash2, GripVertical, UserPlus, ChevronDown, ChevronUp } from 'lucide-react';
+import { LeadJourneyStepper, LeadStepBadge, calculateLeadJourney } from '../components/LeadJourneyStepper';
+import { exportToExcel } from '../utils/exportToExcel';
+import { Search, Phone, Calendar, History, X, Check, RefreshCw, Trash2, GripVertical, UserPlus, ChevronDown, ChevronUp, FileSpreadsheet } from 'lucide-react';
 
 interface Contact {
   id: string;
@@ -17,8 +19,20 @@ interface Contact {
   parameter_scores?: Record<string, number>;
   weighted_score_breakdown?: Record<string, number>;
   classification_reason?: string;
+  lead_classification?: string;
+  assigned_counselor_id?: string | null;
   counselor_followup_status?: string;
   created_at: string;
+}
+
+interface Counselor {
+  id: string;
+  name: string;
+  email: string;
+  phone_number: string | null;
+  availability_status?: string;
+  max_capacity?: number;
+  active_lead_count?: number;
 }
 
 interface CallAttempt {
@@ -199,10 +213,10 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
     );
   }
 
-  const styles: Record<string, { bg: string; fg: string; label: string; title: string }> = {
-    'HOT':  { bg: '#fef2f2', fg: '#dc2626', label: 'HOT',  title: 'Score 75–100: Strong conversion, engagement, and interest signals' },
-    'WARM': { bg: '#fffbeb', fg: '#d97706', label: 'WARM', title: 'Score 50–74: Moderate engagement, potential for conversion' },
-    'COLD': { bg: '#f1f5f9', fg: '#64748b', label: 'COLD', title: 'Score 0–49: Low engagement or insufficient conversion signals' },
+  const styles: Record<string, { bg: string; fg: string; border: string; label: string; title: string }> = {
+    'HOT':  { bg: 'rgba(239, 68, 68, 0.12)', fg: '#ef4444', border: 'rgba(239, 68, 68, 0.3)', label: 'HOT',  title: 'Score 75–100: Strong conversion, engagement, and interest signals' },
+    'WARM': { bg: 'rgba(245, 158, 11, 0.12)', fg: '#f59e0b', border: 'rgba(245, 158, 11, 0.3)', label: 'WARM', title: 'Score 50–74: Moderate engagement, potential for conversion' },
+    'COLD': { bg: 'rgba(148, 163, 184, 0.12)', fg: 'var(--text-secondary)', border: 'rgba(148, 163, 184, 0.25)', label: 'COLD', title: 'Score 0–49: Low engagement or insufficient conversion signals' },
   };
   const s = styles[level] || styles['COLD'];
   const detail = reasons && reasons.length
@@ -218,12 +232,12 @@ function InterestBadge({ level, score, reasons }: { level: Contact['interest_lev
         display: 'inline-flex', alignItems: 'center', gap: '6px',
         padding: '3px 10px', borderRadius: '999px',
         background: s.bg, color: s.fg, fontSize: '0.75rem', fontWeight: 700,
-        whiteSpace: 'nowrap', cursor: 'help', border: `1px solid ${s.bg}`,
+        whiteSpace: 'nowrap', cursor: 'help', border: `1px solid ${s.border}`,
       }}
     >
       {s.label}
       {displayVal && (
-        <span style={{ opacity: 0.75, fontWeight: 600 }}>{displayVal}</span>
+        <span style={{ opacity: 0.85, fontWeight: 700, marginLeft: '2px' }}>{displayVal}</span>
       )}
     </span>
   );
@@ -342,7 +356,9 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   // Manual Add Lead Modal State
   const [showAddModal, setShowAddModal] = useState(false);
   const [batches, setBatches] = useState<{ id: string; file_name: string }[]>([]);
-  const [counselors, setCounselors] = useState<{ id: string; name: string; availability_status?: string }[]>([]);
+  const [counselors, setCounselors] = useState<Counselor[]>([]);
+  const [counselorFilter, setCounselorFilter] = useState('');
+  const [autoAssigning, setAutoAssigning] = useState(false);
   const [addingLead, setAddingLead] = useState(false);
   const [showProfileDetails, setShowProfileDetails] = useState(false);
   const [newLead, setNewLead] = useState({
@@ -475,11 +491,24 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   // twice (once for the filter, once for the page reset).
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, statusFilter, interestFilter]);
+  }, [search, statusFilter, interestFilter, counselorFilter]);
+
+  const fetchCounselors = async () => {
+    try {
+      const res = await api.get('/contacts/counselors/all');
+      setCounselors(res.data || []);
+    } catch (err) {
+      console.error('Failed to fetch counselors in Contacts:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchCounselors();
+  }, []);
 
   useEffect(() => {
     fetchContacts();
-  }, [search, statusFilter, interestFilter, currentPage, pageSize]);
+  }, [search, statusFilter, interestFilter, counselorFilter, currentPage, pageSize]);
 
   useEffect(() => {
     if (jumpToContactId) {
@@ -502,6 +531,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           search,
           status: statusFilter || undefined,
           interest: interestFilter || undefined,
+          counselor_id: counselorFilter || undefined,
           page: currentPage,
           page_size: pageSize,
         },
@@ -515,18 +545,20 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       console.error('Error fetching contacts:', err);
       setLoading(false);
     }
-  }, [search, statusFilter, interestFilter, currentPage, pageSize]);
+  }, [search, statusFilter, interestFilter, counselorFilter, currentPage, pageSize]);
 
   // Real-time Push via SSE (Instant updates for leads list)
   useSSE(useCallback((msg) => {
     fetchContacts();
+    fetchCounselors();
   }, [fetchContacts]), [
     'CALL_STARTED',
     'CALL_ENDED',
     'CALL_ANALYZED',
     'APPOINTMENT_BOOKED',
     'CALLBACK_SCHEDULED',
-    'CONTACT_UPDATED'
+    'CONTACT_UPDATED',
+    'COUNSELOR_ASSIGNED'
   ]);
 
 
@@ -623,6 +655,37 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
     }
   };
 
+  const handleAutoAssign = async () => {
+    setAutoAssigning(true);
+    try {
+      const res = await api.post('/contacts/counselors/auto-assign');
+      showToast(res.data.message || 'Auto-assignment complete!', 'success');
+      fetchContacts();
+      fetchCounselors();
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to auto-assign leads'), 'error');
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
+
+  const handleAssignCounselor = async (contactId: string, counselorId: string) => {
+    try {
+      const val = counselorId === 'none' || counselorId === '' ? null : counselorId;
+      await api.patch(`/contacts/${contactId}`, {
+        assigned_counselor_id: val
+      });
+      showToast('Counselor assignment updated', 'success');
+      fetchContacts();
+      fetchCounselors();
+      if (selectedContact && selectedContact.id === contactId) {
+        setSelectedContact(prev => prev ? { ...prev, assigned_counselor_id: val } : null);
+      }
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to update counselor assignment'), 'error');
+    }
+  };
+
   const deleteContact = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to delete ${name}? This cannot be undone.`)) return;
     try {
@@ -683,6 +746,26 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
     }
   };
 
+  const handleExportExcel = () => {
+    exportToExcel(
+      contacts,
+      [
+        { header: 'Lead Name', key: 'name' },
+        { header: 'Phone Number', key: 'phone_number' },
+        { header: 'Email', key: 'email' },
+        { header: 'Admissions Stage', key: (c: any) => calculateLeadJourney(c).stepName },
+        { header: 'AI Call Status', key: 'status' },
+        { header: 'Counselor Status', key: (c: any) => c.counselor_followup_status || 'Pending' },
+        { header: 'Lead Classification', key: (c: any) => c.interest_level || 'UNSCORED' },
+        { header: 'Lead Score', key: (c: any) => c.lead_score || 0 },
+        { header: 'Assigned Counselor', key: (c: any) => counselors.find(cn => cn.id === c.assigned_counselor_id)?.name || 'Unassigned' },
+        { header: 'Notes', key: (c: any) => c.notes || '' },
+        { header: 'Registered At', key: (c: any) => c.created_at || '' }
+      ],
+      'Lead_Directory_Report'
+    );
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
@@ -690,19 +773,29 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>Lead Directory</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>Search and manage prospective student outreach actions</p>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={openAddModal}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 600, fontSize: '0.9rem', boxShadow: '0 4px 14px rgba(124, 58, 237, 0.35)' }}
-        >
-          <UserPlus size={18} />
-          Add Lead
-        </button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={handleExportExcel}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', fontWeight: 600, fontSize: '0.9rem', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}
+          >
+            <FileSpreadsheet size={18} />
+            Export to Excel
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={openAddModal}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', fontWeight: 600, fontSize: '0.9rem' }}
+          >
+            <UserPlus size={18} />
+            Add Lead
+          </button>
+        </div>
       </div>
 
       {/* Filter and search bar */}
-      <div className="glass-panel" style={{ display: 'flex', gap: '16px', marginBottom: '24px', padding: '16px' }}>
-        <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+      <div className="glass-panel" style={{ display: 'flex', gap: '12px', marginBottom: '24px', padding: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ flexGrow: 1, minWidth: '220px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
           <Search size={18} style={{ color: 'var(--text-secondary)' }} />
           <input 
             type="text" 
@@ -717,7 +810,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="form-input"
-          style={{ width: '180px' }}
+          style={{ width: '160px' }}
         >
           <option value="">All Statuses</option>
           <option value="Pending">Pending</option>
@@ -732,7 +825,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           value={interestFilter}
           onChange={(e) => setInterestFilter(e.target.value)}
           className="form-input"
-          style={{ width: '170px' }}
+          style={{ width: '150px' }}
           title="Lead classification based on weighted scoring"
         >
           <option value="">All Callers</option>
@@ -741,6 +834,30 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
           <option value="COLD">COLD</option>
           <option value="UNSCORED">Uncontacted</option>
         </select>
+
+        <select
+          value={counselorFilter}
+          onChange={(e) => setCounselorFilter(e.target.value)}
+          className="form-input"
+          style={{ width: '170px' }}
+        >
+          <option value="">All Counsellors</option>
+          <option value="unassigned">Unassigned Leads</option>
+          {counselors.map(cns => (
+            <option key={cns.id} value={cns.id}>{cns.name}</option>
+          ))}
+        </select>
+
+        <button
+          className="btn btn-secondary"
+          onClick={handleAutoAssign}
+          disabled={autoAssigning}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', whiteSpace: 'nowrap', padding: '8px 14px' }}
+          title="Auto-assign unassigned leads across available counsellors"
+        >
+          <RefreshCw size={14} className={autoAssigning ? 'spin' : ''} />
+          {autoAssigning ? 'Assigning...' : 'Auto-Assign Leads'}
+        </button>
       </div>
 
       {/* Table grid */}
@@ -765,8 +882,10 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                 <tr>
                   <th>Name</th>
                   <th>Phone Number</th>
-                  <th>Status</th>
+                  <th>Admissions Stage</th>
+                  <th>Call Status</th>
                   <th>Classification</th>
+                  <th>Counsellor</th>
                   <th>Email</th>
                   <th style={{ textAlign: 'center' }}>Actions</th>
                 </tr>
@@ -784,11 +903,42 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                     </td>
                     <td>{c.phone_number}</td>
                     <td>
+                      <LeadStepBadge
+                        contact={c}
+                        counselorName={counselors.find(cn => cn.id === c.assigned_counselor_id)?.name}
+                        onClick={() => viewHistory(c)}
+                      />
+                    </td>
+                    <td>
                       <span className={`badge badge-${c.status.toLowerCase().replace(/\s+/g, '')}`}>
                         {c.status}
                       </span>
                     </td>
                     <td><InterestBadge level={c.interest_level} score={c.lead_score} reasons={c.score_reasons} /></td>
+                    <td>
+                      <select
+                        value={c.assigned_counselor_id || 'none'}
+                        onChange={(e) => handleAssignCounselor(c.id, e.target.value)}
+                        style={{
+                          background: c.assigned_counselor_id ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-tertiary)',
+                          border: `1px solid ${c.assigned_counselor_id ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-color)'}`,
+                          color: c.assigned_counselor_id ? 'var(--accent-primary)' : 'var(--text-muted)',
+                          padding: '5px 10px',
+                          borderRadius: '8px',
+                          fontSize: '0.78rem',
+                          fontWeight: c.assigned_counselor_id ? 700 : 500,
+                          outline: 'none',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="none">Unassigned</option>
+                        {counselors.map(cns => (
+                          <option key={cns.id} value={cns.id}>
+                            {cns.name} {cns.availability_status === 'OnLeave' ? '(On Leave)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
                     <td style={{ color: 'var(--text-secondary)' }}>{c.email || '—'}</td>
                     <td>
                       <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
@@ -1290,6 +1440,14 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
               );
             })()}
 
+            {/* Visual 5-Step Admissions Journey Stepper */}
+            <div style={{ marginTop: '16px' }}>
+              <LeadJourneyStepper
+                contact={selectedContact}
+                counselorName={counselors.find(cn => cn.id === selectedContact.assigned_counselor_id)?.name}
+              />
+            </div>
+
             {/* Call meta strip */}
             {attempts.length > 0 && (
               <div className="call-meta-row">
@@ -1313,10 +1471,54 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             )}
           </div>
 
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '28px', borderBottom: '1px solid rgba(124, 58, 237, 0.10)', paddingBottom: '18px', lineHeight: 1.7 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '20px', borderBottom: '1px solid rgba(124, 58, 237, 0.10)', paddingBottom: '16px', lineHeight: 1.7 }}>
             <div>Phone: {selectedContact.phone_number}</div>
             <div>Email: {selectedContact.email || 'None'}</div>
             <div style={{ marginTop: '8px' }}>Notes: {selectedContact.notes || 'No custom notes.'}</div>
+          </div>
+
+          {/* Assigned Counsellor Section in Drawer */}
+          <div style={{
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '12px',
+            padding: '16px',
+            marginBottom: '24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Assigned Admissions Counsellor
+              </span>
+              <span style={{
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                padding: '2px 8px',
+                borderRadius: '10px',
+                background: selectedContact.counselor_followup_status === 'Completed' ? 'rgba(34, 197, 94, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                color: selectedContact.counselor_followup_status === 'Completed' ? '#16a34a' : '#d97706',
+              }}>
+                Follow-up: {selectedContact.counselor_followup_status || 'Pending'}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <select
+                className="form-input"
+                style={{ fontSize: '0.85rem', padding: '8px 12px', flexGrow: 1 }}
+                value={selectedContact.assigned_counselor_id || 'none'}
+                onChange={(e) => handleAssignCounselor(selectedContact.id, e.target.value)}
+              >
+                <option value="none">Unassigned</option>
+                {counselors.map(cns => (
+                  <option key={cns.id} value={cns.id}>
+                    {cns.name} ({cns.availability_status || 'Available'})
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', marginBottom: '16px' }}>Outbound History</h4>

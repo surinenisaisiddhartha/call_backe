@@ -139,14 +139,14 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
   const completedLeads = leadStats.completed;
 
   const stats = [
-    { label: 'Total Leads', value: leadStats.total, color: '#7c3aed', icon: Users, trend: `${leadStats.total} total leads`, trendPositive: true },
-    { label: 'Calls Today', value: callsToday, color: '#06b6d4', icon: PhoneCall, trend: callsToday > 0 ? `${callsToday} dialed today` : 'No calls today', trendPositive: callsToday > 0 },
+    { label: 'Total Leads', value: leadStats.total, color: '#10b981', icon: Users, trend: `${leadStats.total} registered`, trendPositive: true },
+    { label: 'Calls Today', value: callsToday, color: '#3b82f6', icon: PhoneCall, trend: callsToday > 0 ? `${callsToday} dialed today` : 'No calls today', trendPositive: callsToday > 0 },
     { label: 'Leads Completed', value: completedLeads, color: '#10b981', icon: CheckCircle, trend: `${completedLeads} completed`, trendPositive: true },
     { label: 'Appointments Booked', value: bookedAppointments.length, color: '#8b5cf6', icon: Calendar, trend: `${bookedAppointments.length} confirmed`, trendPositive: true },
-    { label: 'Callbacks Pending', value: pendingCallbacks.length, color: '#f59e0b', icon: Clock, trend: pendingCallbacks.length > 0 ? `${pendingCallbacks.length} pending` : 'All cleared', trendPositive: pendingCallbacks.length === 0 },
+    { label: 'Callbacks Pending', value: pendingCallbacks.length, color: '#f59e0b', icon: Clock, trend: pendingCallbacks.length > 0 ? `${pendingCallbacks.length} scheduled` : 'All cleared', trendPositive: pendingCallbacks.length === 0 },
   ];
 
-  const itemsPerPage = 12;
+  const itemsPerPage = 10;
   const totalPages = Math.ceil(history.length / itemsPerPage);
   const recentCalls = history.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -156,63 +156,60 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
       .map(a => ({
         id: a.id, contact_id: a.contact_id, contact_name: a.contact_name,
         when: a.scheduled_for, kind: 'Appointment' as const,
-        detail: a.purpose || 'campus visit',
+        detail: a.purpose || 'Campus Visit',
       })),
     ...pendingCallbacks
       .filter(c => parseTs(c.scheduled_for) >= now)
       .map(c => ({
         id: c.id, contact_id: c.contact_id, contact_name: c.contact_name,
         when: c.scheduled_for, kind: 'Callback' as const,
-        detail: 'automatic follow-up call',
+        detail: 'Automatic follow-up call',
       })),
   ].sort((a, b) => parseTs(a.when) - parseTs(b.when)).slice(0, 8);
-
-  const rowHover = {
-    onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = 'rgba(124, 58, 237, 0.04)'),
-    onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => (e.currentTarget.style.background = 'transparent'),
-  };
 
   const user = (() => {
     try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
   })();
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       {/* Header */}
-      <div style={{ marginBottom: '28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
-            {user?.school_name ? `${user.school_name} Dashboard` : 'Platform Dashboard'} 👋
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
+            {user?.school_name ? `${user.school_name} Overview` : 'Admissions Overview'}
           </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.95rem' }}>
-            Here is your live overview of calling activity, appointments, and follow-ups.
+          <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.92rem' }}>
+            Real-time telemetry on calling activity, student intent, and admissions conversion.
           </p>
         </div>
       </div>
 
-      {/* KPI stat tiles (Awer Overview Style) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: '16px', marginBottom: '28px' }}>
+      {/* KPI Stat Cards */}
+      <div className="stats-grid">
         {stats.map(s => (
-          <div key={s.label} className="glass-panel hover-lift" style={{ padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-              <div className="icon-badge" style={{
-                width: '46px', height: '46px', borderRadius: '12px',
-                background: s.color, color: '#ffffff',
-                boxShadow: `0 4px 14px ${s.color}40`, flexShrink: 0
-              }}>
-                <s.icon size={22} />
+          <div key={s.label} className="glass-panel stat-card hover-lift" style={{ padding: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+              <div>
+                <div className="stat-label" style={{ marginBottom: '8px' }}>{s.label}</div>
+                <div className="stat-value">{s.value}</div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
-                <div style={{ fontSize: '1.75rem', fontWeight: 800, lineHeight: 1, fontFamily: 'var(--font-display)', color: 'var(--text-primary)' }}>{s.value}</div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.label}</div>
+              <div style={{
+                width: '42px', height: '42px', borderRadius: '10px',
+                background: `${s.color}15`, color: s.color,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: `1px solid ${s.color}30`,
+                flexShrink: 0
+              }}>
+                <s.icon size={20} />
               </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
+            <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center' }}>
               <span style={{
-                fontSize: '0.72rem', fontWeight: 700, padding: '3px 10px', borderRadius: '20px',
+                fontSize: '0.72rem', fontWeight: 700, padding: '3px 10px', borderRadius: '999px',
                 background: s.trendPositive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)',
                 color: s.trendPositive ? '#10b981' : '#f59e0b',
-                border: `1px solid ${s.trendPositive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)'}`
+                border: `1px solid ${s.trendPositive ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`
               }}>
                 {s.trend}
               </span>
@@ -221,20 +218,27 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
         ))}
       </div>
 
-      {/* Two-column: recent activity + upcoming */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: '20px', alignItems: 'start' }}>
+      {/* Two-Column Activity & Upcoming Split */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: '20px', alignItems: 'start' }}>
 
         {/* Recent Call Activity */}
-        <div className="glass-panel" style={{ padding: '20px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '0 20px 14px', borderBottom: '1px solid var(--border-color)' }}>
-            <Phone size={18} style={{ color: 'var(--accent-primary)' }} />
-            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', fontWeight: 700 }}>Recent Call Activity</h3>
+        <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Phone size={18} style={{ color: 'var(--accent-primary)' }} />
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Recent Call Activity
+              </h3>
+            </div>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+              {history.length} Total Dialed
+            </span>
           </div>
 
-          <div style={{ maxHeight: 'calc(100vh - 380px)', minHeight: '380px', overflowY: 'auto' }}>
+          <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
             {recentCalls.length === 0 ? (
-              <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                No calls yet. Start a campaign to see activity here.
+              <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                No call records yet. Start an outbound campaign to see live activity here.
               </div>
             ) : recentCalls.map(rec => {
               const color = OUTCOME_COLORS[rec.outcome || ''] || '#6366f1';
@@ -243,24 +247,34 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
                 <div
                   key={rec.id}
                   onClick={() => onViewContact?.(rec.contact_id)}
-                  title="View this lead's full history, transcript & recording"
-                  style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px', cursor: onViewContact ? 'pointer' : 'default', borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.2s' }}
-                  {...rowHover}
+                  title="Click to view lead details, audio, and transcript"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '14px',
+                    padding: '14px 20px',
+                    cursor: onViewContact ? 'pointer' : 'default',
+                    borderBottom: '1px solid var(--border-color)',
+                    transition: 'background 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(16, 185, 129, 0.04)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
                   <div className="avatar-circle">{initials(rec.contact_name)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {rec.contact_name}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {rec.summary?.includes('appointment_booked') ? 'Booked an appointment'
-                        : rec.summary?.includes('interested_followup_scheduled') ? 'Asked for a callback'
-                        : rec.summary?.includes('do_not_call') ? 'Asked not to be called'
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                      {rec.summary?.includes('appointment_booked') ? '🎉 Booked an admissions visit'
+                        : rec.summary?.includes('interested_followup_scheduled') ? '📞 Requested follow-up callback'
+                        : rec.summary?.includes('do_not_call') ? '🚫 Requested not to be contacted'
                         : rec.campaign_name || rec.contact_phone}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
-                    <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 600, background: `${color}18`, color }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
+                    <span style={{
+                      padding: '2px 8px', borderRadius: '10px', fontSize: '0.7rem', fontWeight: 700,
+                      background: `${color}18`, color, border: `1px solid ${color}35`
+                    }}>
                       {label}
                     </span>
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{timeAgo(rec.started_at)}</span>
@@ -271,23 +285,23 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
           </div>
 
           {totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '15px', padding: '12px 20px', borderTop: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', borderTop: '1px solid var(--border-color)', background: 'var(--bg-tertiary)' }}>
               <button 
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
                 className="btn btn-secondary"
-                style={{ padding: '4px 12px', fontSize: '0.8rem', minWidth: '80px', justifyContent: 'center' }}
+                style={{ padding: '4px 12px', fontSize: '0.78rem' }}
               >
                 Previous
               </button>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 500 }}>
                 Page {currentPage} of {totalPages}
               </span>
               <button 
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
                 className="btn btn-secondary"
-                style={{ padding: '4px 12px', fontSize: '0.8rem', minWidth: '80px', justifyContent: 'center' }}
+                style={{ padding: '4px 12px', fontSize: '0.78rem' }}
               >
                 Next
               </button>
@@ -295,49 +309,69 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
           )}
         </div>
 
-        {/* Upcoming */}
-        <div className="glass-panel" style={{ padding: '20px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '0 20px 14px', borderBottom: '1px solid var(--border-color)' }}>
-            <CalendarCheck size={18} style={{ color: 'var(--accent-success)' }} />
-            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', fontWeight: 700 }}>Upcoming</h3>
+        {/* Upcoming Appointments & Callbacks */}
+        <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <CalendarCheck size={18} style={{ color: 'var(--accent-primary)' }} />
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Upcoming Appointments & Callbacks
+              </h3>
+            </div>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+              {upcoming.length} Pending
+            </span>
           </div>
 
-          {upcoming.length === 0 ? (
-            <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Nothing scheduled. Booked appointments and callbacks will appear here.
-            </div>
-          ) : upcoming.map(u => (
-            <div
-              key={`${u.kind}-${u.id}`}
-              onClick={() => onViewContact?.(u.contact_id)}
-              title="View this lead's full history"
-              style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px', cursor: onViewContact ? 'pointer' : 'default', borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.2s' }}
-              {...rowHover}
-            >
-              <div className="icon-badge" style={{
-                width: '34px', height: '34px', borderRadius: '10px',
-                background: u.kind === 'Appointment' ? 'rgba(139,92,246,0.15)' : 'rgba(245,158,11,0.15)',
-                color: u.kind === 'Appointment' ? '#7c3aed' : 'var(--accent-warning)',
-              }}>
-                {u.kind === 'Appointment' ? <Calendar size={16} /> : <Clock size={16} />}
+          <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
+            {upcoming.length === 0 ? (
+              <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                No upcoming events scheduled. Confirmed campus visits and callbacks will appear here.
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {u.contact_name}
+            ) : upcoming.map(u => (
+              <div
+                key={`${u.kind}-${u.id}`}
+                onClick={() => onViewContact?.(u.contact_id)}
+                title="Click to view lead details"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '14px',
+                  padding: '14px 20px',
+                  cursor: onViewContact ? 'pointer' : 'default',
+                  borderBottom: '1px solid var(--border-color)',
+                  transition: 'background 0.15s ease'
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(16, 185, 129, 0.04)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              >
+                <div style={{
+                  width: '36px', height: '36px', borderRadius: '10px',
+                  background: u.kind === 'Appointment' ? 'rgba(139,92,246,0.12)' : 'rgba(245,158,11,0.12)',
+                  color: u.kind === 'Appointment' ? '#8b5cf6' : '#f59e0b',
+                  border: `1px solid ${u.kind === 'Appointment' ? 'rgba(139,92,246,0.25)' : 'rgba(245,158,11,0.25)'}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  {u.kind === 'Appointment' ? <Calendar size={18} /> : <Clock size={18} />}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'capitalize', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {u.kind === 'Appointment' ? u.detail : 'Automatic follow-up call'}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {u.contact_name}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'capitalize', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '2px' }}>
+                    {u.kind === 'Appointment' ? u.detail : 'Automatic follow-up callback'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap', background: 'var(--bg-tertiary)', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                    {formatDateTime(u.when)}
+                  </span>
+                  {onViewContact && <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />}
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                  {formatDateTime(u.when)}
-                </span>
-                {onViewContact && <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
+
       </div>
     </div>
   );

@@ -19,6 +19,8 @@ from src.routers.tools import router as tools_router
 from src.routers.appointments import router as appointments_router
 from src.routers.schools import router as schools_router
 from src.routers.analytics import router as analytics_router
+from src.routers.courses import router as courses_router
+from src.routers.classes import router as classes_router
 from src.events import router as events_router, event_manager
 
 app = FastAPI(title="EnquiryCall API", version="1.0.0")
@@ -45,6 +47,8 @@ app.include_router(tools_router)
 app.include_router(appointments_router)
 app.include_router(schools_router)
 app.include_router(analytics_router)
+app.include_router(courses_router)
+app.include_router(classes_router)
 app.include_router(events_router)
 
 # Mount static files for uploads (like logos)
@@ -156,6 +160,25 @@ def startup_event():
             print(f"[STARTUP] Knowledge base seed failed: {e}")
 
     threading.Thread(target=_seed_knowledge_if_empty, daemon=True).start()
+
+    # Sync and persist all lead scores so that database columns lead_score and
+    # lead_classification are fully up to date for indexed SQL filtering.
+    def _rescore_all_contacts_on_startup():
+        try:
+            from src.db import SessionLocal, Contact
+            from src.routers.contacts import persist_lead_scores
+            db = SessionLocal()
+            try:
+                contacts = db.query(Contact).all()
+                if contacts:
+                    persist_lead_scores(db, contacts)
+                    print(f"[STARTUP] Lead scores synced and persisted for {len(contacts)} contacts.")
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"[STARTUP] Initial lead scoring sync failed (non-fatal): {e}")
+
+    threading.Thread(target=_rescore_all_contacts_on_startup, daemon=True).start()
 
     # Auto-configure the shared Retell agent to point at THIS deployment.
     # Permanent fix for "every new deployment needs someone to manually run

@@ -224,6 +224,78 @@ async def upload_excel(
         print("File parse error:", e)
         raise HTTPException(status_code=500, detail="Failed to process file")
 
+
+class ManualContactInput(BaseModel):
+    name: str
+    phone_number: str
+    email: str | None = None
+    notes: str | None = None
+
+class CreateManualCampaignPayload(BaseModel):
+    campaign_name: str
+    contacts: list[ManualContactInput]
+    start_immediately: bool = False
+
+@router.post("/campaigns/manual")
+def create_manual_campaign(
+    payload: CreateManualCampaignPayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Creates a new outreach campaign manually without needing a CSV file.
+    Accepts campaign name, initial contacts, and auto-assigns counselors.
+    """
+    if not payload.campaign_name.strip():
+        raise HTTPException(status_code=400, detail="Campaign name is required")
+    if not payload.contacts:
+        raise HTTPException(status_code=400, detail="At least one lead is required to create a campaign")
+
+    school_id = resolve_school_id(db, current_user)
+    
+    batch = UploadBatch(
+        school_id=school_id,
+        file_name=payload.campaign_name.strip(),
+        total_contacts=len(payload.contacts),
+        uploaded_by=current_user.get("email", "admin"),
+        status="running" if payload.start_immediately else "idle"
+    )
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+
+    counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
+    counselor_count = len(counselors)
+
+    created_contacts = []
+    for idx, c in enumerate(payload.contacts):
+        assigned_id = None
+        if counselor_count > 0:
+            assigned_id = counselors[idx % counselor_count].id
+
+        new_contact = Contact(
+            school_id=school_id,
+            batch_id=batch.id,
+            name=c.name.strip(),
+            phone_number=c.phone_number.strip(),
+            email=c.email.strip() if c.email else None,
+            notes=c.notes.strip() if c.notes else None,
+            status="Pending",
+            assigned_counselor_id=assigned_id
+        )
+        db.add(new_contact)
+        created_contacts.append(new_contact)
+
+    db.commit()
+
+    return {
+        "success": True,
+        "batchId": batch.id,
+        "campaignName": batch.file_name,
+        "totalContacts": len(created_contacts),
+        "message": f"Manual campaign '{batch.file_name}' created with {len(created_contacts)} leads!"
+    }
+
 @router.get("/batches")
 def get_batches(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     from sqlalchemy import func
@@ -1203,7 +1275,23 @@ def get_contacts(
     if batchId:
         query = query.filter(Contact.batch_id == batchId)
     if interest:
-        query = query.filter(Contact.lead_classification == interest.strip())
+        norm_interest = interest.strip().upper()
+        if norm_interest == "HOT":
+            query = query.filter((Contact.lead_classification == "HOT") | (Contact.lead_score >= 75))
+        elif norm_interest == "WARM":
+            query = query.filter((Contact.lead_classification == "WARM") | ((Contact.lead_score >= 50) & (Contact.lead_score < 75)))
+        elif norm_interest == "COLD":
+            query = query.filter(
+                (Contact.lead_classification == "COLD") | ((Contact.lead_score < 50) & (Contact.lead_score.isnot(None)))
+            ).filter(
+                Contact.lead_classification != "HOT",
+                Contact.lead_classification != "WARM",
+                (Contact.lead_score < 50) | (Contact.lead_score.is_(None))
+            )
+        elif norm_interest == "UNSCORED":
+            query = query.filter((Contact.lead_classification == "UNSCORED") | (Contact.lead_score.is_(None)))
+        else:
+            query = query.filter(Contact.lead_classification == interest.strip())
     if counselor_id:
         if counselor_id == "unassigned":
             query = query.filter(Contact.assigned_counselor_id == None)
@@ -1231,6 +1319,23 @@ def get_contacts(
     # Only this page is scored, so the reasons stay fresh without touching the
     # rest of the table.
     scored = compute_lead_scores(db, rows)
+
+    # Synchronise any score discrepancies back to DB
+    needs_commit = False
+    for c in rows:
+        s = scored.get(c.id)
+        if s:
+            target_class = s.get("classification")
+            target_score = s.get("score")
+            if target_class and (c.lead_classification != target_class or c.lead_score != target_score):
+                c.lead_classification = target_class
+                c.lead_score = target_score
+                needs_commit = True
+    if needs_commit:
+        try:
+            db.commit()
+        except Exception:
+            pass
 
     items = [
         {
@@ -1503,7 +1608,7 @@ def get_counselor_analytics(
 
         completed_count = db.query(func.count(Contact.id)).filter(
             Contact.assigned_counselor_id == c.id,
-            Contact.status == "Completed"
+            Contact.counselor_followup_status == "Completed"
         ).scalar() or 0
 
         hot_leads = db.query(func.count(Contact.id)).filter(
@@ -1513,7 +1618,7 @@ def get_counselor_analytics(
 
         active_leads = db.query(func.count(Contact.id)).filter(
             Contact.assigned_counselor_id == c.id,
-            Contact.status != "Completed"
+            Contact.counselor_followup_status != "Completed"
         ).scalar() or 0
 
         # Activity count in last 7 days

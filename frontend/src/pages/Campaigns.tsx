@@ -2,10 +2,11 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import api, { getErrorMessage } from '../api';
 import Pagination from '../components/Pagination';
 import { useSSE } from '../hooks/useSSE';
+import { exportToExcel } from '../utils/exportToExcel';
 import {
   BarChart2, Play, RefreshCw, Users, CheckCircle,
   AlertCircle, Calendar, Phone, Clock, FileText, ChevronDown, ChevronRight, Trash2,
-  Plus, X, UploadCloud, Radio
+  Plus, X, UploadCloud, Radio, FileSpreadsheet
 } from 'lucide-react';
 
 interface BatchStats {
@@ -104,6 +105,106 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadResult, setUploadResult] = useState<any>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Manual Campaign Modal states
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualStartImmediately, setManualStartImmediately] = useState(false);
+  const [manualLeads, setManualLeads] = useState<Array<{ name: string; phone_number: string; email: string; notes: string }>>([
+    { name: '', phone_number: '', email: '', notes: '' }
+  ]);
+  const [creatingManual, setCreatingManual] = useState(false);
+
+  const addManualLeadRow = () => {
+    setManualLeads(prev => [...prev, { name: '', phone_number: '', email: '', notes: '' }]);
+  };
+
+  const updateManualLeadRow = (idx: number, field: string, value: string) => {
+    setManualLeads(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: value };
+      return next;
+    });
+  };
+
+  const removeManualLeadRow = (idx: number) => {
+    setManualLeads(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleCreateManualCampaign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualName.trim()) {
+      showToast('Please provide a Campaign Name', 'error');
+      return;
+    }
+    const validLeads = manualLeads.filter(l => l.name.trim() && l.phone_number.trim());
+    if (validLeads.length === 0) {
+      showToast('Please add at least one valid lead with Name and Phone Number', 'error');
+      return;
+    }
+
+    setCreatingManual(true);
+    try {
+      const res = await api.post('/contacts/campaigns/manual', {
+        campaign_name: manualName,
+        contacts: validLeads,
+        start_immediately: manualStartImmediately
+      });
+
+      showToast(res.data.message || 'Manual campaign created successfully!', 'success');
+      setShowManualModal(false);
+      setManualName('');
+      setManualLeads([{ name: '', phone_number: '', email: '', notes: '' }]);
+      fetchCampaigns();
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to create manual campaign'), 'error');
+    } finally {
+      setCreatingManual(false);
+    }
+  };
+
+  const handleExportCampaignsToExcel = () => {
+    exportToExcel(
+      campaigns,
+      [
+        { header: 'Campaign / File Name', key: 'file_name' },
+        { header: 'Status', key: 'status' },
+        { header: 'Total Contacts', key: 'total_contacts' },
+        { header: 'Completed Calls', key: (c: any) => c.stats?.completed || 0 },
+        { header: 'Pending Calls', key: (c: any) => c.stats?.pending || 0 },
+        { header: 'Calling / Dialing', key: (c: any) => c.stats?.calling || 0 },
+        { header: 'Needs Reschedule', key: (c: any) => c.stats?.needs_reschedule || 0 },
+        { header: 'Uploaded By', key: 'uploaded_by' },
+        { header: 'Uploaded At', key: (c: any) => formatDate(c.uploaded_at) }
+      ],
+      'Campaigns_Summary_Report'
+    );
+  };
+
+  const handleExportSingleCampaignToExcel = async (c: Campaign) => {
+    try {
+      const res = await api.get('/contacts', {
+        params: { batchId: c.id, page_size: 500 }
+      });
+      const items = res.data.items || [];
+      exportToExcel(
+        items,
+        [
+          { header: 'Lead Name', key: 'name' },
+          { header: 'Phone Number', key: 'phone_number' },
+          { header: 'Email', key: 'email' },
+          { header: 'Call Status', key: 'status' },
+          { header: 'Lead Classification', key: (item: any) => item.interest_level || 'UNSCORED' },
+          { header: 'Lead Score', key: (item: any) => item.lead_score || 0 },
+          { header: 'Notes', key: (item: any) => item.notes || '' },
+          { header: 'Registered At', key: (item: any) => item.created_at || '' }
+        ],
+        `Campaign_${c.file_name.replace(/[^a-zA-Z0-9]/g, '_')}_Report`
+      );
+    } catch (err) {
+      showToast('Failed to export campaign details', 'error');
+    }
+  };
 
   const fetchCampaigns = useCallback(async () => {
     try {
@@ -289,21 +390,46 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>Campaigns</h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>Each uploaded CSV is a separate campaign with its own stats & call history</p>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800 }}>Outreach Campaigns</h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>Create outreach campaigns manually or import CSV lead batches with live call tracking</p>
         </div>
-        <button 
-          className="btn btn-primary"
-          onClick={() => {
-            setShowUploadModal(true);
-            setUploadResult(null);
-            setUploadFile(null);
-          }}
-          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-        >
-          <Plus size={18} />
-          New Campaign
-        </button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={handleExportCampaignsToExcel}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', fontWeight: 600, fontSize: '0.9rem', background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}
+            title="Export all campaigns summary to Excel CSV"
+          >
+            <FileSpreadsheet size={18} />
+            Export to Excel
+          </button>
+          
+          <button 
+            className="btn btn-secondary"
+            onClick={() => {
+              setShowUploadModal(true);
+              setUploadResult(null);
+              setUploadFile(null);
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
+            <UploadCloud size={18} />
+            Upload CSV Batch
+          </button>
+
+          <button 
+            className="btn btn-primary"
+            onClick={() => {
+              setShowManualModal(true);
+              setManualName('');
+              setManualLeads([{ name: '', phone_number: '', email: '', notes: '' }]);
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
+            <Plus size={18} />
+            Create Campaign Manually
+          </button>
+        </div>
       </div>
 
       {/* Premium Slim Stats Header Strip */}
@@ -400,6 +526,16 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                   </div>
 
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '8px 12px', fontSize: '0.8rem', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)', background: 'rgba(16, 185, 129, 0.08)', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      onClick={e => { e.stopPropagation(); handleExportSingleCampaignToExcel(campaign); }}
+                      title="Export Campaign Leads to Excel CSV"
+                    >
+                      <FileSpreadsheet size={15} />
+                      Excel
+                    </button>
+
                     <button
                       className="btn btn-primary"
                       style={{ flexShrink: 0, fontSize: '0.85rem', padding: '8px 16px' }}
@@ -593,8 +729,8 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
 
       {/* Upload New Campaign Modal */}
       {showUploadModal && (
-        <div className="modal-overlay">
-          <div className="glass-panel modal-content" style={{ padding: '30px', maxWidth: '540px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
+          <div className="glass-panel modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '26px', maxWidth: '540px', width: '100%', maxHeight: '82vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>
                 <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', marginBottom: '4px' }}>
@@ -707,6 +843,151 @@ export default function Campaigns({ showToast, onViewContact }: CampaignsProps) 
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Create Campaign Manually Modal */}
+      {showManualModal && (
+        <div className="modal-overlay" onClick={() => setShowManualModal(false)}>
+          <div className="glass-panel modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '26px', maxWidth: '680px', width: '100%', maxHeight: '82vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+              <div>
+                <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', marginBottom: '4px' }}>
+                  Create Campaign Manually
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Create a custom outreach campaign and manually enter prospective student leads</p>
+              </div>
+              <button 
+                onClick={() => setShowManualModal(false)} 
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateManualCampaign} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div>
+                <label className="form-label" style={{ fontSize: '0.88rem', fontWeight: 700, marginBottom: '6px', display: 'block' }}>
+                  Campaign Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Grade 11 Admissions Outreach Q1"
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                  className="form-input"
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <label className="form-label" style={{ fontSize: '0.88rem', fontWeight: 700, margin: 0 }}>
+                    Campaign Leads ({manualLeads.length})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={addManualLeadRow}
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Plus size={14} /> Add Lead Row
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px' }}>
+                  {manualLeads.map((lead, idx) => (
+                    <div key={idx} style={{ background: 'var(--bg-tertiary)', padding: '14px', borderRadius: '10px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Lead #{idx + 1}</span>
+                        {manualLeads.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeManualLeadRow(idx)}
+                            style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#ef4444', borderRadius: '6px', padding: '3px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontWeight: 600 }}
+                          >
+                            <Trash2 size={13} /> Remove
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                        <div>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Lead Name *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Parent / Student Name"
+                            value={lead.name}
+                            onChange={(e) => updateManualLeadRow(idx, 'name', e.target.value)}
+                            className="form-input"
+                            style={{ fontSize: '0.85rem', width: '100%', padding: '7px 10px' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Phone Number *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="+91 Phone Number"
+                            value={lead.phone_number}
+                            onChange={(e) => updateManualLeadRow(idx, 'phone_number', e.target.value)}
+                            className="form-input"
+                            style={{ fontSize: '0.85rem', width: '100%', padding: '7px 10px' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Email (Optional)</label>
+                          <input
+                            type="email"
+                            placeholder="email@example.com"
+                            value={lead.email}
+                            onChange={(e) => updateManualLeadRow(idx, 'email', e.target.value)}
+                            className="form-input"
+                            style={{ fontSize: '0.85rem', width: '100%', padding: '7px 10px' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Notes / Target Grade</label>
+                          <input
+                            type="text"
+                            placeholder="Grade 11 CBSE, Hosteller..."
+                            value={lead.notes}
+                            onChange={(e) => updateManualLeadRow(idx, 'notes', e.target.value)}
+                            className="form-input"
+                            style={{ fontSize: '0.85rem', width: '100%', padding: '7px 10px' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(59, 130, 246, 0.08)', padding: '12px 16px', borderRadius: '10px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                <input
+                  type="checkbox"
+                  id="manualStartImmediately"
+                  checked={manualStartImmediately}
+                  onChange={(e) => setManualStartImmediately(e.target.checked)}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="manualStartImmediately" style={{ fontSize: '0.88rem', fontWeight: 600, cursor: 'pointer' }}>
+                  Start Campaign Immediately (Auto-dial leads via AI Agent)
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '10px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowManualModal(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={creatingManual}>
+                  {creatingManual ? <RefreshCw className="animate-spin" style={{ animation: 'spin 2s linear infinite' }} size={16} /> : <CheckCircle size={16} />}
+                  {creatingManual ? 'Creating Campaign...' : 'Create & Save Campaign'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
