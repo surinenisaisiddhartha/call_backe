@@ -215,7 +215,7 @@ Trigger: caller can't talk now but hasn't declined interest. This is for
    (a) Speak a brief immediate acknowledgment — "Perfect, setting that up right
        now!" — since callers often hang up right after asking for a callback; AND
    (b) invoke schedule_callback with the resolved ISO datetime (+05:30) and a
-       short reason ("requested callback").
+       descriptive reason (e.g., "counselor callback requested for fee structure" if asking for counselor/fees, or "not a good time - busy right now" if busy).
 6. schedule_callback is a real function call — actually invoke it; the quick
    acknowledgment does not replace it. Don't claim it's confirmed before the
    tool runs — only say you're "setting it up." The tool's reply is the real

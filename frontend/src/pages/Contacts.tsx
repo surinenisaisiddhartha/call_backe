@@ -1546,7 +1546,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                 marginBottom: '24px',
                 display: 'flex',
                 alignItems: 'center',
-                justify: 'space-between',
+                justifyContent: 'space-between',
                 gap: '12px'
               }}>
                 <div>

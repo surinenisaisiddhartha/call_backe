@@ -444,8 +444,6 @@ def schedule_callback(
             contact.updated_at = datetime.utcnow()
             if target_type == "Counselor":
                 contact.counselor_followup_status = "Pending"
-                from src.routers.contacts import auto_assign_hot_lead
-                auto_assign_hot_lead(db, contact)
         
         db.commit()
 

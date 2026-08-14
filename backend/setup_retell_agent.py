@@ -199,7 +199,7 @@ def build_general_tools(webhook_base_url: str, aegis_tools_secret: str):
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Short reason, e.g. 'requested callback'.",
+                        "description": "Descriptive reason for callback, e.g. 'counselor callback requested for fee structure' or 'not a good time - busy right now'.",
                     },
                 },
                 "required": ["datetime_iso", "reason"],

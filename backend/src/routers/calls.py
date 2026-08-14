@@ -192,15 +192,17 @@ async def call_now(
 
     # Per-school calling window
     from src.utils import is_working_hours, next_working_day_start
-    start_hour, end_hour = 9, 21
+    start_hour, start_minute, end_hour, end_minute = 9, 0, 23, 30
     if contact.school_id:
         from src.db import School
         school = db.query(School).filter(School.id == contact.school_id).first()
         if school:
-            start_hour = school.calling_start_hour or 9
-            end_hour = school.calling_end_hour or 21
+            start_hour = school.calling_start_hour if school.calling_start_hour is not None else 9
+            start_minute = school.calling_start_minute if school.calling_start_minute is not None else 0
+            end_hour = school.calling_end_hour if school.calling_end_hour is not None else 23
+            end_minute = school.calling_end_minute if school.calling_end_minute is not None else 30
 
-    if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
+    if not is_working_hours(start_hour=start_hour, start_minute=start_minute, end_hour=end_hour, end_minute=end_minute):
         # Auto-schedule for next working day instead of a hard block
         from src.db import ScheduledCallback
         retry_time = next_working_day_start(start_hour)
@@ -220,7 +222,7 @@ async def call_now(
             db.commit()
         raise HTTPException(
             status_code=400,
-            detail=f"Outside calling hours ({start_hour}:00–{end_hour}:00 IST). This call has been auto-scheduled for {retry_time.strftime('%Y-%m-%d %H:%M')} UTC."
+            detail=f"Outside calling hours ({start_hour}:{start_minute:02d}–{end_hour}:{end_minute:02d} IST). This call has been auto-scheduled for {retry_time.strftime('%Y-%m-%d %H:%M')} UTC."
         )
 
     if contact.status == "Calling":

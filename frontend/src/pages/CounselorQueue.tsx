@@ -18,9 +18,15 @@ interface Contact {
   status: 'Pending' | 'Calling' | 'Completed' | 'NeedsReschedule' | 'Scheduled' | 'Failed';
   interest_level: 'HOT' | 'WARM' | 'COLD' | 'UNSCORED' | string;
   lead_score: number;
-  score_reasons: string[];
+  score_reasons?: string[];
   assigned_counselor_id: string | null;
   counselor_followup_status?: 'Pending' | 'InProgress' | 'Completed';
+  next_scheduled_callback?: {
+    id: string;
+    scheduled_for: string;
+    call_type: string;
+    reason?: string;
+  } | null;
   created_at: string;
 }
 
@@ -72,6 +78,7 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
   const [search, setSearch] = useState('');
   const [queueFilter, setQueueFilter] = useState<'all' | 'hot' | 'warm' | 'callback'>('hot');
   const [counselorFilter, setCounselorFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'scheduled_time' | 'lead_score' | 'newest'>('scheduled_time');
   const [hasDefaultedFilter, setHasDefaultedFilter] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'completed' | 'roster' | 'analytics'>(initialWorkspace);
 
@@ -281,6 +288,22 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
 
   const currentDataset = activeWorkspace === 'completed' ? completedContacts : activeContacts;
 
+  const formatDateTime = (isoStr: string) => {
+    try {
+      const d = new Date(isoStr);
+      return d.toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return isoStr;
+    }
+  };
+
   const filteredContacts = currentDataset.filter(c => {
     // 1. Queue priority filter (only applied on active queue)
     if (activeWorkspace === 'queue') {
@@ -289,7 +312,7 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
       } else if (queueFilter === 'warm') {
         if (!(c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75))) return false;
       } else if (queueFilter === 'callback') {
-        if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled')) return false;
+        if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled' || !!c.next_scheduled_callback)) return false;
       }
     }
 
@@ -300,6 +323,19 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
       return c.assigned_counselor_id === counselorFilter;
     }
     return true;
+  }).sort((a, b) => {
+    if (sortBy === 'scheduled_time') {
+      const aCb = a.next_scheduled_callback?.scheduled_for;
+      const bCb = b.next_scheduled_callback?.scheduled_for;
+      if (aCb && bCb) return new Date(aCb).getTime() - new Date(bCb).getTime();
+      if (aCb) return -1;
+      if (bCb) return 1;
+      return (b.lead_score || 0) - (a.lead_score || 0);
+    } else if (sortBy === 'lead_score') {
+      return (b.lead_score || 0) - (a.lead_score || 0);
+    } else {
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    }
   });
 
   const hotCount = activeContacts.filter(c => {
@@ -726,6 +762,22 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
                   })()}
                 </select>
               </div>
+
+              {/* Sort Order Selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={15} style={{ color: 'var(--text-muted)' }} />
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="form-input"
+                  style={{ fontSize: '0.85rem', padding: '8px 12px', minWidth: '220px', fontWeight: 600 }}
+                  title="Choose sorting order for leads"
+                >
+                  <option value="scheduled_time">⏰ Sort by Scheduled Time (Earliest First)</option>
+                  <option value="lead_score">🔥 Sort by Lead Score (Highest First)</option>
+                  <option value="newest">📅 Sort by Date Added (Newest First)</option>
+                </select>
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -963,6 +1015,36 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
                       background: isSelected ? 'rgba(16, 185, 129, 0.04)' : undefined
                     }}
                   >
+                    {/* Scheduled Callback Banner */}
+                    {c.next_scheduled_callback && (
+                      <div style={{
+                        background: c.next_scheduled_callback.call_type === 'Counselor' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(99, 102, 241, 0.12)',
+                        border: `1px solid ${c.next_scheduled_callback.call_type === 'Counselor' ? 'rgba(245, 158, 11, 0.3)' : 'rgba(99, 102, 241, 0.3)'}`,
+                        borderRadius: '10px',
+                        padding: '10px 14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '12px',
+                        width: '100%'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <Calendar size={16} style={{ color: c.next_scheduled_callback.call_type === 'Counselor' ? '#d97706' : '#6366f1' }} />
+                          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: c.next_scheduled_callback.call_type === 'Counselor' ? '#d97706' : '#6366f1', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                            {c.next_scheduled_callback.call_type === 'Counselor' ? '👤 Counselor Callback Scheduled:' : '🤖 AI Agent Callback Scheduled:'}
+                          </span>
+                          <span style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                            {formatDateTime(c.next_scheduled_callback.scheduled_for)}
+                          </span>
+                        </div>
+                        {c.next_scheduled_callback.reason && (
+                          <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                            Reason: {c.next_scheduled_callback.reason}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {/* Top Row: Checkbox, Lead info & Score */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>

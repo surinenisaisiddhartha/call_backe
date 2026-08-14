@@ -1026,6 +1026,9 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
             return new
         return current if len(current) >= len(new) else new
 
+    latest_attempt_info: dict[str, dict] = {}
+    latest_negative_decline: dict[str, bool] = {}
+
     for contact_id, raw, duration, det_topics, outcome, sentiment_val in rows:
         engaged = outcome not in _NON_ENGAGED and (duration or 0) >= 10
 
@@ -1045,49 +1048,81 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
                 if t.strip():
                     merged_topics[contact_id].add(t.strip())
 
+        parsed_data = None
         # Merge LLM analysis: keep the highest-intent value per field
         if raw:
             try:
                 parsed = _json.loads(raw)
-                if not isinstance(parsed, dict) or not parsed:
-                    continue
+                if isinstance(parsed, dict) and parsed:
+                    parsed_data = parsed
+                    # Normalize LLM enum drift BEFORE merging (e.g. "High" → "Hot")
+                    normalize_analysis_enums(parsed)
+
+                    if contact_id not in merged_analysis:
+                        merged_analysis[contact_id] = {}
+                    best = merged_analysis[contact_id]
+
+                    # Enum fields: keep the highest-intent value
+                    best["interest_level"] = _pick_best_enum(
+                        best.get("interest_level"), parsed.get("interest_level"), _INTEREST_RANK)
+                    best["engagement_quality"] = _pick_best_enum(
+                        best.get("engagement_quality"), parsed.get("engagement_quality"), _ENGAGEMENT_RANK)
+                    best["caller_type"] = _pick_best_enum(
+                        best.get("caller_type"), parsed.get("caller_type"), _CALLER_RANK)
+
+                    # String fields: keep the longest (most detailed) value
+                    for str_field in ("call_synopsis", "recommended_next_step", "concerns_raised"):
+                        best[str_field] = _pick_longest(best.get(str_field), parsed.get(str_field))
+
+                    # Topics: union across all calls
+                    new_topics = (parsed.get("topics_discussed") or "").split(",")
+                    existing = set(
+                        t.strip() for t in (best.get("topics_discussed") or "").split(",")
+                        if t.strip() and t.strip().lower() != "none"
+                    )
+                    for t in new_topics:
+                        cleaned = t.strip()
+                        if cleaned and cleaned.lower() != "none":
+                            existing.add(cleaned)
+                    best["topics_discussed"] = ", ".join(sorted(existing)) if existing else ""
+
+                    # Primary topic: keep from the call with highest engagement
+                    if parsed.get("primary_topic") and not best.get("primary_topic"):
+                        best["primary_topic"] = parsed["primary_topic"]
             except (ValueError, TypeError):
-                continue
+                parsed_data = None
 
-            # Normalize LLM enum drift BEFORE merging (e.g. "High" → "Hot")
-            normalize_analysis_enums(parsed)
+        latest_attempt_info[contact_id] = {
+            "outcome": outcome,
+            "parsed": parsed_data,
+            "sentiment": sentiment_val
+        }
 
-            if contact_id not in merged_analysis:
-                merged_analysis[contact_id] = {}
-            best = merged_analysis[contact_id]
+    # Respect the caller's LATEST active stance: if the latest call is explicit rejection/Cold, override historical high scores
+    for cid, info in latest_attempt_info.items():
+        out_name = (info.get("outcome") or "").lower()
+        p_analysis = info.get("parsed") or {}
+        l_interest = (p_analysis.get("interest_level") or "").strip()
+        l_engagement = (p_analysis.get("engagement_quality") or "").strip()
 
-            # Enum fields: keep the highest-intent value
-            best["interest_level"] = _pick_best_enum(
-                best.get("interest_level"), parsed.get("interest_level"), _INTEREST_RANK)
-            best["engagement_quality"] = _pick_best_enum(
-                best.get("engagement_quality"), parsed.get("engagement_quality"), _ENGAGEMENT_RANK)
-            best["caller_type"] = _pick_best_enum(
-                best.get("caller_type"), parsed.get("caller_type"), _CALLER_RANK)
+        if out_name in ("not_interested", "do_not_call", "wrong_number") or l_interest == "Cold" or l_engagement == "NotInterested":
+            if cid not in merged_analysis:
+                merged_analysis[cid] = {}
+            merged_analysis[cid]["interest_level"] = "Cold"
+            merged_analysis[cid]["engagement_quality"] = "NotInterested"
+            latest_negative_decline[cid] = True
 
-            # String fields: keep the longest (most detailed) value
-            for str_field in ("call_synopsis", "recommended_next_step", "concerns_raised"):
-                best[str_field] = _pick_longest(best.get(str_field), parsed.get(str_field))
-
-            # Topics: union across all calls
-            new_topics = (parsed.get("topics_discussed") or "").split(",")
-            existing = set(
-                t.strip() for t in (best.get("topics_discussed") or "").split(",")
-                if t.strip() and t.strip().lower() != "none"
-            )
-            for t in new_topics:
-                cleaned = t.strip()
-                if cleaned and cleaned.lower() != "none":
-                    existing.add(cleaned)
-            best["topics_discussed"] = ", ".join(sorted(existing)) if existing else ""
-
-            # Primary topic: keep from the call with highest engagement
-            if parsed.get("primary_topic") and not best.get("primary_topic"):
-                best["primary_topic"] = parsed["primary_topic"]
+            # Guarantee: If caller declined on latest call, cancel ALL prior scheduled callbacks (AI & Counselor) in DB
+            try:
+                db.query(ScheduledCallback).filter(
+                    ScheduledCallback.contact_id == cid,
+                    ScheduledCallback.status == "Scheduled"
+                ).update({"status": "Cancelled"})
+                c_obj = db.query(Contact).filter(Contact.id == cid).first()
+                if c_obj:
+                    c_obj.counselor_followup_status = None
+            except Exception as _cb_err:
+                print(f"[SCORING] Error cancelling pending callbacks for declined contact {cid}: {_cb_err}")
 
     attempted_contact_ids = {r.contact_id for r in rows}
     completed_contact_ids = {
@@ -1135,14 +1170,14 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
 
         # Compute each parameter (None = missing signal)
         raw_scores = {
-            "appointment_conversion_intent": _score_appointment(is_booked, is_callback, analysis, c),
-            "engagement_quality":            _score_engagement(analysis, merged_sentiment.get(c.id)),
-            "interest_level":                _score_interest(analysis),
+            "appointment_conversion_intent": 0 if latest_negative_decline.get(c.id) else _score_appointment(is_booked, is_callback, analysis, c),
+            "engagement_quality":            10 if latest_negative_decline.get(c.id) else _score_engagement(analysis, merged_sentiment.get(c.id)),
+            "interest_level":                20 if latest_negative_decline.get(c.id) else _score_interest(analysis),
             "conversation_depth":            _score_conversation_depth(analysis, engaged, det_topics),
             "caller_relevance":              _score_caller_relevance(analysis),
-            "admission_intent":              _score_admission_intent(c),
+            "admission_intent":              0 if latest_negative_decline.get(c.id) else _score_admission_intent(c),
             "requirement_fit":               _score_requirement_fit(c),
-            "follow_up_intent":              _score_follow_up(is_callback, c, analysis),
+            "follow_up_intent":              0 if latest_negative_decline.get(c.id) else _score_follow_up(is_callback, c, analysis),
         }
 
         # Separate available vs missing
@@ -1170,8 +1205,12 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
             weighted_breakdown = {k: 0.0 for k in PARAM_WEIGHTS}
             final_score = 0.0
 
-        final_score = max(0.0, min(100.0, final_score))
-        classification = _classify(final_score)
+        if latest_negative_decline.get(c.id):
+            final_score = min(20.0, final_score)
+            classification = "COLD"
+        else:
+            final_score = max(0.0, min(100.0, final_score))
+            classification = _classify(final_score)
 
         # Parameter scores for display (None → 0 in output)
         param_scores = {k: (v if v is not None else 0) for k, v in raw_scores.items()}
@@ -1442,8 +1481,22 @@ def get_contacts(
 
     page = max(1, page)
     page_size = max(1, min(page_size, 200))   # a caller cannot ask for everything
+    # Subquery for active scheduled callbacks so we can order contacts by scheduled_for first
+    from sqlalchemy import case
+    cb_subquery = (
+        db.query(ScheduledCallback.contact_id, ScheduledCallback.scheduled_for)
+        .filter(ScheduledCallback.status == "Scheduled")
+        .subquery()
+    )
+
     rows = (
-        query.order_by(Contact.lead_score.desc(), Contact.created_at.desc())
+        query.outerjoin(cb_subquery, Contact.id == cb_subquery.c.contact_id)
+        .order_by(
+            case((cb_subquery.c.scheduled_for.isnot(None), 0), else_=1),
+            cb_subquery.c.scheduled_for.asc(),
+            Contact.lead_score.desc(),
+            Contact.created_at.desc()
+        )
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -1470,6 +1523,23 @@ def get_contacts(
         except Exception:
             pass
 
+    # Batch fetch active scheduled callbacks for these contacts
+    row_ids = [c.id for c in rows]
+    active_callbacks = {}
+    if row_ids:
+        cbs = db.query(ScheduledCallback).filter(
+            ScheduledCallback.contact_id.in_(row_ids),
+            ScheduledCallback.status == "Scheduled"
+        ).order_by(ScheduledCallback.scheduled_for.asc()).all()
+        for cb in cbs:
+            if cb.contact_id not in active_callbacks:
+                active_callbacks[cb.contact_id] = {
+                    "id": cb.id,
+                    "scheduled_for": cb.scheduled_for.isoformat() if cb.scheduled_for else None,
+                    "call_type": cb.call_type,
+                    "reason": cb.reason
+                }
+
     items = [
         {
             "id": c.id,
@@ -1486,14 +1556,13 @@ def get_contacts(
             "parameter_scores": scored.get(c.id, {}).get("parameter_scores", {}),
             "weighted_score_breakdown": scored.get(c.id, {}).get("weighted_score_breakdown", {}),
             "classification_reason": scored.get(c.id, {}).get("classification_reason", ""),
-            # Only the points actually learned, plus the count — a counselor
-            # scanning the queue wants "14/20 known", not twenty nulls.
             "profile": profile_dict(c),
             "profile_completeness": completeness(c),
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "updated_at": c.updated_at.isoformat() if c.updated_at else None,
             "assigned_counselor_id": c.assigned_counselor_id,
             "counselor_followup_status": c.counselor_followup_status or "Pending",
+            "next_scheduled_callback": active_callbacks.get(c.id),
         }
         for c in rows
     ]

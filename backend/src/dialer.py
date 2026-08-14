@@ -72,17 +72,19 @@ class CampaignDialer:
         try:
             # Load per-school calling window
             batch_row = db_check.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
-            start_hour, end_hour = 9, 21
+            start_hour, start_minute, end_hour, end_minute = 9, 0, 23, 30
             if batch_row and batch_row.school_id:
                 from src.db import School
                 school = db_check.query(School).filter(School.id == batch_row.school_id).first()
                 if school:
-                    start_hour = school.calling_start_hour or 9
-                    end_hour = school.calling_end_hour or 21
+                    start_hour = school.calling_start_hour if school.calling_start_hour is not None else 9
+                    start_minute = school.calling_start_minute if school.calling_start_minute is not None else 0
+                    end_hour = school.calling_end_hour if school.calling_end_hour is not None else 23
+                    end_minute = school.calling_end_minute if school.calling_end_minute is not None else 30
         finally:
             db_check.close()
 
-        if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
+        if not is_working_hours(start_hour=start_hour, start_minute=start_minute, end_hour=end_hour, end_minute=end_minute):
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist)
@@ -122,7 +124,7 @@ class CampaignDialer:
             return {
                 "queued": 0,
                 "scheduled_for_tomorrow": scheduled_count if 'scheduled_count' in dir() else 0,
-                "message": f"Outside calling hours ({now_ist.strftime('%H:%M')} IST, window {start_hour}:00–{end_hour}:00). Contacts auto-scheduled for {retry_time.strftime('%Y-%m-%d %H:%M')} UTC."
+                "message": f"Outside calling hours ({now_ist.strftime('%H:%M')} IST, window {start_hour}:{start_minute:02d}–{end_hour}:{end_minute:02d}). Contacts auto-scheduled for {retry_time.strftime('%Y-%m-%d %H:%M')} UTC."
             }
         db = SessionLocal()
         try:
@@ -254,7 +256,7 @@ class CampaignDialer:
     def _fire_call(self, batch_id: str, contact_id: str):
         """Fire a single Retell call in a background thread."""
         # Load per-school calling window for this contact
-        start_hour, end_hour = 9, 21
+        start_hour, start_minute, end_hour, end_minute = 9, 0, 23, 30
         db_hrs = SessionLocal()
         try:
             c_row = db_hrs.query(Contact).filter(Contact.id == contact_id).first()
@@ -262,15 +264,17 @@ class CampaignDialer:
                 from src.db import School
                 school = db_hrs.query(School).filter(School.id == c_row.school_id).first()
                 if school:
-                    start_hour = school.calling_start_hour or 9
-                    end_hour = school.calling_end_hour or 21
+                    start_hour = school.calling_start_hour if school.calling_start_hour is not None else 9
+                    start_minute = school.calling_start_minute if school.calling_start_minute is not None else 0
+                    end_hour = school.calling_end_hour if school.calling_end_hour is not None else 23
+                    end_minute = school.calling_end_minute if school.calling_end_minute is not None else 30
         finally:
             db_hrs.close()
 
         # Safety guard — re-queue the contact and bail out if we have drifted
-        # outside working hours (e.g. a campaign was running near 9 PM and the
-        # last webhook-triggered slot freed after 9 PM).
-        if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
+        # outside working hours (e.g. a campaign was running near 11:30 PM and the
+        # last webhook-triggered slot freed after 11:30 PM).
+        if not is_working_hours(start_hour=start_hour, start_minute=start_minute, end_hour=end_hour, end_minute=end_minute):
             from datetime import timezone, timedelta
             ist = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist)

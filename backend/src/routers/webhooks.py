@@ -60,15 +60,33 @@ COUNSELOR_CALLBACK_KEYWORDS = [
 def classify_callback_target(combined_text: str) -> str:
     """
     Classifies a callback request into:
-      - "Counselor": Human admissions counselor callback (requires human authority e.g. fee structures, waivers, counselor consultation).
-      - "Follow-up": AI Agent automated callback (general timing retry e.g. "call me back in 2 minutes", "busy right now").
+      - "Follow-up": AI Agent automated callback retry (when caller says "not a good time", "busy right now", "call back in 10 minutes", "driving", "in a meeting").
+      - "Counselor": Human admissions counselor callback (when caller asks for counselor/management, AI cannot answer question, or requires human consultation).
     """
     if not combined_text:
-        return "Follow-up"
-    lower = combined_text.lower()
-    if any(kw in lower for kw in COUNSELOR_CALLBACK_KEYWORDS):
         return "Counselor"
-    return "Follow-up"
+    lower = combined_text.lower()
+    
+    # 1. Keywords indicating explicit Counselor / Human / Management consultation or unanswered questions
+    counselor_keywords = [
+        "counselor", "counselour", "human", "management", "officer", "principal", 
+        "fee", "fees", "cost", "pricing", "tuition", "discount", "waiver", "scholarship", 
+        "special request", "approval", "transfer certificate", "tc document", "syllabus"
+    ]
+    if any(kw in lower for kw in counselor_keywords):
+        return "Counselor"
+
+    # 2. Keywords indicating timing retry / busy / not a good time → AI Agent automated callback
+    ai_retry_keywords = [
+        "not a good time", "busy right now", "busy", "driving", "in a meeting", 
+        "call back in", "call me back", "call later", "try again in", "auto-retry", 
+        "no answer", "incompletehangup"
+    ]
+    if any(kw in lower for kw in ai_retry_keywords):
+        return "Follow-up"
+
+    # Default for unspecified callbacks from live AI conversation is Counselor
+    return "Counselor"
 
 
 def process_webhook_payload(payload: dict):
@@ -283,9 +301,32 @@ def process_webhook_payload(payload: dict):
             # request, causing an actual outbound phone call to be scheduled
             # at the same time as the booked meeting (confirmed in production).
             _no_followup_outcomes = ("appointment_booked", "not_interested", "do_not_call", "wrong_number")
-            _agent_resolved_definitively = mark_outcome_recorded and _existing_attempt and any(
-                f"Agent Outcome: {o}" in _existing_attempt.summary for o in _no_followup_outcomes
+            _summary_lower = (summary or "").lower()
+            _is_declined_or_dnc = (
+                outcome in _no_followup_outcomes or
+                any(f"agent outcome: {o}" in _summary_lower for o in _no_followup_outcomes) or
+                any(kw in _summary_lower for kw in ("do_not_call", "not_interested", "wrong_number", "chosen a different school", "do not call")) or
+                custom_analysis.get("interest_level") == "Cold"
             )
+
+            # ── Cancel prior pending callbacks if caller declined or booked ──
+            if _is_declined_or_dnc:
+                prior_pending_cbs = db.query(ScheduledCallback).filter(
+                    ScheduledCallback.contact_id == contact_id,
+                    ScheduledCallback.status == "Scheduled"
+                ).all()
+                for p_cb in prior_pending_cbs:
+                    p_cb.status = "Cancelled"
+                    print(f"[WEBHOOK] Cancelled prior pending ScheduledCallback {p_cb.id} for {contact_id} due to outcome/summary decline")
+                if contact:
+                    contact.counselor_followup_status = None
+                    if "do_not_call" in _summary_lower or outcome == "do_not_call":
+                        contact_status = "DoNotCall"
+                    elif "not_interested" in _summary_lower or outcome == "not_interested":
+                        contact_status = "Completed"
+
+            _agent_resolved_definitively = _is_declined_or_dnc
+
             if not _agent_resolved_definitively and (outcome == "Answered" or (summary and has_callback_intent(summary))):
                 combined_text = f"{summary}\n{transcript}"
                 if has_callback_intent(combined_text):
@@ -327,14 +368,11 @@ def process_webhook_payload(payload: dict):
                             contact_status = "Scheduled"
                             auto_scheduled = True
 
-                            # If it's a Counselor Callback (e.g. fee details, human officer requested),
-                            # auto-assign contact to available counselor and set status to Pending
-                            # so human counselor calls manually — DO NOT register AI auto-dialer.
+                            # If it's a Counselor Callback (human officer/consultation requested),
+                            # set status to Pending for manual human assignment — DO NOT register AI auto-dialer.
                             if target_type == "Counselor":
                                 contact.counselor_followup_status = "Pending"
-                                from src.routers.contacts import auto_assign_hot_lead
-                                auto_assign_hot_lead(db, contact)
-                                print(f"[WEBHOOK] Classified as Counselor Callback for {contact.name} — assigned to admissions counselor, AI auto-dial bypassed.")
+                                print(f"[WEBHOOK] Classified as Counselor Callback for {contact.name} — queued for manual counselor follow-up, AI auto-dial bypassed.")
                             else:
                                 try:
                                     from src.scheduler import get_scheduler
