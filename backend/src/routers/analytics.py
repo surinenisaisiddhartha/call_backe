@@ -12,6 +12,7 @@ rather than being silently folded into the totals — a denominator that
 quietly includes unanalysed calls would make every percentage wrong.
 """
 import json
+from typing import Optional
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -66,21 +67,56 @@ def _split_topics(value: str):
 @router.get("/calls")
 def call_analytics(
     days: int = 30,
+    provider: Optional[str] = None,
+    school_id: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    status: Optional[str] = None,
+    qualification: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Aggregate view of the last `days` of calls, scoped to the caller's school.
+    Aggregate view of calls with multi-provider and date filtering, scoped to the caller's school.
     """
-    since = datetime.utcnow() - timedelta(days=days)
+    if date_from:
+        try:
+            since = datetime.fromisoformat(date_from)
+        except Exception:
+            since = datetime.utcnow() - timedelta(days=days)
+    else:
+        since = datetime.utcnow() - timedelta(days=days)
 
     q = (
         db.query(CallAttempt)
         .join(Contact, CallAttempt.contact_id == Contact.id)
         .filter(CallAttempt.started_at >= since)
     )
-    if current_user.get("school_id"):
-        q = q.filter(Contact.school_id == current_user["school_id"])
+
+    target_school_id = school_id or current_user.get("school_id")
+    if target_school_id:
+        q = q.filter(Contact.school_id == target_school_id)
+
+    if provider:
+        q = q.filter(CallAttempt.provider == provider.lower().strip())
+
+    if campaign_id:
+        q = q.filter(Contact.batch_id == campaign_id)
+
+    if status:
+        q = q.filter(CallAttempt.outcome == status)
+
+    if qualification:
+        q = q.filter(Contact.lead_classification == qualification.upper())
+
+    if date_to:
+        try:
+            until = datetime.fromisoformat(date_to)
+            q = q.filter(CallAttempt.started_at <= until)
+        except Exception:
+            pass
+
     attempts = q.all()
 
     interest = Counter()

@@ -18,44 +18,36 @@ router = APIRouter(prefix="/api/webhooks/tools", tags=["Retell Tools"])
 
 def verify_tools_secret(req: Request, db: Session = Depends(get_db)) -> None:
     """
-    Soft-enforced shared-secret check for these Retell custom-function webhooks.
-    These URLs are publicly reachable (ngrok/prod) and otherwise unauthenticated,
-    so anyone who finds them could invoke book_appointment/schedule_callback/
-    mark_outcome directly. If AEGIS_TOOLS_SECRET is configured (Settings key
-    "aegis_tools_secret" or env var), the request must carry a matching
-    X-Aegis-Tools-Secret header — set via setup_retell_agent.py's tool `headers`
-    config. If no secret is configured yet, the check is skipped (with a
-    warning) so existing unconfigured deployments keep working.
+    Shared-secret check for admission tool webhooks.
+    Validates X-Admission-Tools-Secret or X-Aegis-Tools-Secret header.
     """
-    # Cached: this runs on EVERY tool call the agent makes mid-conversation,
-    # and re-reading it from a remote database each time added a round trip of
-    # dead air to every lookup, booking and callback. Invalidated immediately
-    # when settings are saved (see routers/settings.py), so rotating the secret
-    # takes effect at once rather than after the TTL.
     from src.cache import settings_cache
 
     def _load_secret():
-        s = db.query(Settings).filter(Settings.key == "aegis_tools_secret").first()
+        s = db.query(Settings).filter(Settings.key.in_(["admission_tools_secret", "aegis_tools_secret"])).first()
         return s.value if s else None
 
-    expected = settings_cache.get_or_load("aegis_tools_secret", _load_secret) or os.getenv("AEGIS_TOOLS_SECRET")
+    expected = (
+        settings_cache.get_or_load("admission_tools_secret", _load_secret)
+        or os.getenv("ADMISSION_TOOLS_SECRET")
+        or os.getenv("AEGIS_TOOLS_SECRET")
+    )
     if not expected:
-        print("[TOOLS] WARNING: aegis_tools_secret not configured — tool webhook endpoints are unauthenticated. Set it in Settings to lock these down.")
         return
-    provided = req.headers.get("x-aegis-tools-secret")
+    provided = req.headers.get("x-admission-tools-secret") or req.headers.get("x-aegis-tools-secret")
     if not provided or provided != expected:
-        print("[TOOLS] Rejected tool call: missing or invalid X-Aegis-Tools-Secret header")
+        print("[TOOLS] Rejected tool call: missing or invalid X-Admission-Tools-Secret header")
         raise HTTPException(status_code=401, detail="Invalid or missing tools secret")
 
 
-class RetellToolBase(BaseModel):
+class AdmissionToolBase(BaseModel):
     call_id: Optional[str] = None
+    provider_call_id: Optional[str] = None
+    internal_call_id: Optional[str] = None
+    provider: Optional[str] = None
     to_number: Optional[str] = None
-    # The Retell agent that placed this call. Every school has its OWN agent
-    # (see school_agent.py), so this is what identifies the tenant a tool call
-    # belongs to — used by resolve_contact/resolve_school to keep one school's
-    # phone/email lookups from ever matching another school's lead.
     agent_id: Optional[str] = None
+    contact_id: Optional[str] = None
 
     @model_validator(mode='before')
     @classmethod
@@ -63,29 +55,32 @@ class RetellToolBase(BaseModel):
         if not isinstance(data, dict):
             return data
         merged = dict(data)
-        # Retell nests the live-call info under a "call" object — the call_id
-        # (and dialed number) live there, NOT at the top level. Pull them up so
-        # resolve_contact's most reliable path (call_id -> CallAttempt -> contact)
-        # actually works instead of falling through to fragile guesses.
         call = data.get("call")
         if isinstance(call, dict):
             if not merged.get("call_id"):
                 merged["call_id"] = call.get("call_id")
+            if not merged.get("provider_call_id"):
+                merged["provider_call_id"] = call.get("call_id") or call.get("provider_call_id")
             if not merged.get("to_number"):
                 merged["to_number"] = call.get("to_number")
             if not merged.get("agent_id"):
                 merged["agent_id"] = call.get("agent_id")
-        # Also honour a call_id sent via retell_llm_dynamic_variables, if present.
         dv = data.get("retell_llm_dynamic_variables") or (call.get("retell_llm_dynamic_variables") if isinstance(call, dict) else None)
         if isinstance(dv, dict):
             if not merged.get("call_id") and dv.get("call_id"):
                 merged["call_id"] = dv.get("call_id")
             if not merged.get("contact_id") and dv.get("contact_id"):
                 merged["contact_id"] = dv.get("contact_id")
-        # Flatten the tool arguments Retell passes under "args".
+            if not merged.get("internal_call_id") and dv.get("internal_call_id"):
+                merged["internal_call_id"] = dv.get("internal_call_id")
         if isinstance(data.get("args"), dict):
             merged.update(data["args"])
+        if isinstance(data.get("arguments"), dict):
+            merged.update(data["arguments"])
         return merged
+
+
+RetellToolBase = AdmissionToolBase
 
 
 class LookupRequest(RetellToolBase):
@@ -95,6 +90,7 @@ class LookupRequest(RetellToolBase):
 class ScheduleCallbackRequest(RetellToolBase):
     datetime_iso: str
     reason: str = "requested callback"
+    followup_type: str = "ai_callback"  # "ai_callback", "counselor_callback", "counselor_task"
     contact_id: str = None  # Optional, can be inferred from call context
     phone_number: str = None  # Optional, fallback
 
@@ -106,6 +102,14 @@ class BookAppointmentRequest(RetellToolBase):
     attendee_phone: str = ""  # Optional — backend uses the dialed number / call_id
     attendee_email: str = ""  # Optional — collected during call if not pre-filled
     meeting_type: str = "in_person"  # "in_person" or "virtual" — caller's stated preference
+    contact_id: str = None
+
+
+class BookClassRequest(RetellToolBase):
+    student_name: str
+    grade_sought: str = ""
+    class_type: str  # "Early Years Trial", "STEM Robotics Workshop", "Cambridge IB Trial"
+    datetime_iso: str
     contact_id: str = None
 
 
@@ -417,8 +421,14 @@ def schedule_callback(
             ScheduledCallback.contact_id == contact_id,
             ScheduledCallback.status == "Scheduled"
         ).first()
+
+        attempt = db.query(CallAttempt).filter(
+            CallAttempt.contact_id == contact_id
+        ).order_by(CallAttempt.started_at.desc()).first()
+        ctx_text = f"{request.reason or ''} {attempt.summary if attempt and attempt.summary else ''} {attempt.transcript if attempt and attempt.transcript else ''}"
+
         from src.routers.webhooks import classify_callback_target
-        target_type = classify_callback_target(f"{request.reason}")
+        target_type = classify_callback_target(ctx_text, followup_type=getattr(request, "followup_type", None))
 
         if existing:
             # Update the existing one instead of creating a duplicate
@@ -445,7 +455,19 @@ def schedule_callback(
             if target_type == "Counselor":
                 contact.counselor_followup_status = "Pending"
                 from src.routers.contacts import auto_assign_hot_lead
-                auto_assign_hot_lead(db, contact)
+                assigned_cns = auto_assign_hot_lead(db, contact)
+                if assigned_cns:
+                    print(f"[TOOLS] Auto-assigned counselor {assigned_cns.name} to {contact.name}")
+                
+                # Log counselor activity so it shows immediately in the counselor timeline
+                from src.db import CounselorActivity
+                db.add(CounselorActivity(
+                    contact_id=contact.id,
+                    counselor_id=assigned_cns.id if assigned_cns else None,
+                    action_type="CallbackRequested",
+                    outcome="Pending",
+                    notes=f"Parent requested admissions counselor callback for {readable_time}. Reason: {request.reason or 'Counselor consultation'}"
+                ))
         
         db.commit()
 
@@ -462,7 +484,7 @@ def schedule_callback(
         
         if target_type == "Counselor":
             print(f"[TOOLS] Classified as Counselor Callback for {contact.name if contact else contact_id} — assigned to counselor, AI auto-dial bypassed.")
-            return {"result": f"Callback for our admissions counselor successfully scheduled for {readable_time}. Our admissions counselor will call you then with all the details!"}
+            return {"result": f"Admissions counselor callback successfully scheduled for {readable_time}. Our admissions counselor will call you then with full details!"}
 
         # Register APScheduler one-shot job ONLY for AI Agent callbacks
         try:
@@ -770,6 +792,68 @@ def book_appointment(
         return {"result": f"There was an issue booking the appointment: {str(e)}. Please call us directly to confirm your slot."}
 
 
+@router.post("/book-class")
+def book_demo_class(
+    request: BookClassRequest,
+    req: Request,
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
+):
+    """
+    Tool: book_class(student_name, grade_sought, class_type, datetime_iso)
+    Validates capacity via AvailabilityService and reserves a demo session seat.
+    """
+    try:
+        from src.services.availability_service import availability_service
+        from src.db import ClassBooking
+
+        dt_str = request.datetime_iso
+        if dt_str.endswith("Z"):
+            dt_str = dt_str.replace("Z", "+05:30")
+        if "+" not in dt_str and (dt_str.count("-") < 3):
+            dt_str = dt_str + "+05:30"
+        dt = datetime.fromisoformat(dt_str)
+        date_str = dt.strftime("%Y-%m-%d")
+        time_str = dt.strftime("%H:%M")
+        readable_time = dt.strftime("%A, %d %B at %I:%M %p")
+
+        contact = resolve_contact(db, req, request)
+        school_id = contact.school_id if contact else None
+
+        # Check capacity
+        slot_status = availability_service.check_class_slot(
+            db=db,
+            class_type_name=request.class_type,
+            booked_date_str=date_str,
+            booked_time_str=time_str,
+            school_id=school_id
+        )
+
+        if not slot_status["available"]:
+            return {"result": f"I checked our schedule, but the {request.class_type} on {date_str} at {time_str} is currently full. Would you like me to look for an alternative time slot?"}
+
+        # Create booking record
+        booking = ClassBooking(
+            school_id=school_id,
+            class_type=slot_status["class_type"],
+            booked_date=date_str,
+            booked_time=time_str,
+            student_name=request.student_name,
+            phone_number=contact.phone_number if contact else "",
+            email=contact.email if contact else None,
+            status="upcoming",
+            notes=f"Grade: {request.grade_sought or 'N/A'}"
+        )
+        db.add(booking)
+        db.commit()
+
+        return {
+            "result": f"A demo seat for {request.student_name} in {slot_status['class_type']} has been successfully reserved for {readable_time}. We've sent the session details to your phone."
+        }
+    except Exception as e:
+        return {"result": f"There was an issue reserving the demo seat: {str(e)}. Please contact our admissions desk directly."}
+
+
 @router.post("/mark-outcome")
 def mark_outcome(
     request: MarkOutcomeRequest,
@@ -891,3 +975,52 @@ def save_profile(
         except Exception:
             pass
         return {"result": "Noted."}
+
+
+class TransferCounselorRequest(AdmissionToolBase):
+    reason: Optional[str] = "Lead requested live human counselor"
+
+
+@router.post("/transfer-counselor")
+def transfer_counselor_tool(
+    request: TransferCounselorRequest,
+    req: Request,
+    db: Session = Depends(get_db),
+    _secret: None = Depends(verify_tools_secret)
+):
+    """
+    Tool: transfer_to_counselor(reason)
+    Resolves available admissions counselor and coordinates live call transfer.
+    """
+    try:
+        from src.services.counselor_router import counselor_router
+        contact = resolve_contact(db, req, request)
+        school_id = resolve_calling_school_id(db, req, request) or (contact.school_id if contact else None)
+        call_id = request.provider_call_id or request.call_id or getattr(request, "internal_call_id", None) or ""
+        provider_name = request.provider or "retell"
+
+        res = counselor_router.execute_transfer(
+            provider=provider_name,
+            provider_call_id=call_id,
+            contact_id=contact.id if contact else None,
+            school_id=school_id,
+            reason=request.reason
+        )
+
+        if res.get("success"):
+            return {
+                "result": f"Transferring call to {res.get('counselor_name')} at {res.get('transfer_number')}.",
+                "transfer_number": res.get("transfer_number"),
+                "counselor_name": res.get("counselor_name")
+            }
+        else:
+            return {
+                "result": "Our senior counselors are currently in meetings with families. I have prioritized your contact details and our team will call you back shortly.",
+                "transfer_number": None
+            }
+    except Exception as e:
+        print(f"[TOOLS] transfer_counselor error: {e}")
+        return {
+            "result": "I will have our admissions team call you back shortly with personal assistance.",
+            "transfer_number": None
+        }

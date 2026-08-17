@@ -1,0 +1,2172 @@
+[
+  {
+    "category": "Auth",
+    "name": "POST /api/auth/identify",
+    "method": "POST",
+    "url": "/api/auth/identify",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Next: password"
+  },
+  {
+    "category": "Auth",
+    "name": "POST /api/auth/login",
+    "method": "POST",
+    "url": "/api/auth/login",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Role: admin"
+  },
+  {
+    "category": "Auth",
+    "name": "GET /api/auth/me",
+    "method": "GET",
+    "url": "/api/auth/me",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Email: it_admin@datalabscor.com"
+  },
+  {
+    "category": "Health",
+    "name": "GET /health",
+    "method": "GET",
+    "url": "/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: ok"
+  },
+  {
+    "category": "Docs",
+    "name": "GET /openapi.json",
+    "method": "GET",
+    "url": "/openapi.json",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Title: EnquiryCall API"
+  },
+  {
+    "category": "Schools",
+    "name": "GET /api/schools",
+    "method": "GET",
+    "url": "/api/schools",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Count: 2"
+  },
+  {
+    "category": "Schools",
+    "name": "GET /api/schools/{id}/settings",
+    "method": "GET",
+    "url": "/api/schools/626a626f/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Provider: retell"
+  },
+  {
+    "category": "Schools",
+    "name": "PATCH /api/schools/{id}",
+    "method": "PATCH",
+    "url": "/api/schools/626a626f",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated contact_phone"
+  },
+  {
+    "category": "Schools",
+    "name": "PATCH /api/schools/{id}/settings",
+    "method": "PATCH",
+    "url": "/api/schools/626a626f/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated smtp_port"
+  },
+  {
+    "category": "Schools",
+    "name": "POST /api/schools/{id}/view-as",
+    "method": "POST",
+    "url": "/api/schools/626a626f/view-as",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Impersonation token minted"
+  },
+  {
+    "category": "Schools",
+    "name": "POST /api/schools (Create)",
+    "method": "POST",
+    "url": "/api/schools",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Created ID: 762ab374"
+  },
+  {
+    "category": "Schools",
+    "name": "DELETE /api/schools/{id}",
+    "method": "DELETE",
+    "url": "/api/schools/762ab374",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up test school"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts",
+    "method": "GET",
+    "url": "/api/contacts",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Found 5 contacts"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/stats",
+    "method": "GET",
+    "url": "/api/contacts/stats",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Total: 10"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/batches",
+    "method": "GET",
+    "url": "/api/contacts/batches",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Batches: 9"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/history/all",
+    "method": "GET",
+    "url": "/api/contacts/history/all",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "History items: 61"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/counselors/all",
+    "method": "GET",
+    "url": "/api/contacts/counselors/all",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Counselors: 5"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/counselors/analytics",
+    "method": "GET",
+    "url": "/api/contacts/counselors/analytics",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Counselor metrics retrieved"
+  },
+  {
+    "category": "Contacts",
+    "name": "POST /api/contacts",
+    "method": "POST",
+    "url": "/api/contacts",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Contact ID: 2070f9a3-6977-4dec-9541-48d072261156"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/{id}",
+    "method": "GET",
+    "url": "/api/contacts/2070f9a3-6977-4dec-9541-48d072261156",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Name: None"
+  },
+  {
+    "category": "Contacts",
+    "name": "PATCH /api/contacts/{id}",
+    "method": "PATCH",
+    "url": "/api/contacts/2070f9a3-6977-4dec-9541-48d072261156",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Notes updated"
+  },
+  {
+    "category": "Contacts",
+    "name": "POST /api/contacts/{id}/activities",
+    "method": "POST",
+    "url": "/api/contacts/2070f9a3-6977-4dec-9541-48d072261156/activities",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Activity logged"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/{id}/activities",
+    "method": "GET",
+    "url": "/api/contacts/2070f9a3-6977-4dec-9541-48d072261156/activities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Activities: 5"
+  },
+  {
+    "category": "Contacts",
+    "name": "DELETE /api/contacts/{id}",
+    "method": "DELETE",
+    "url": "/api/contacts/2070f9a3-6977-4dec-9541-48d072261156",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up contact"
+  },
+  {
+    "category": "Contacts",
+    "name": "POST /api/contacts/counselors",
+    "method": "POST",
+    "url": "/api/contacts/counselors",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Counselor ID: 48a27fc2-a4af-4ac5-b3c0-3ebf4c265a4e"
+  },
+  {
+    "category": "Contacts",
+    "name": "PATCH /api/contacts/counselors/{id}",
+    "method": "PATCH",
+    "url": "/api/contacts/counselors/48a27fc2-a4af-4ac5-b3c0-3ebf4c265a4e",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated counselor name"
+  },
+  {
+    "category": "Contacts",
+    "name": "DELETE /api/contacts/counselors/{id}",
+    "method": "DELETE",
+    "url": "/api/contacts/counselors/48a27fc2-a4af-4ac5-b3c0-3ebf4c265a4e",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up counselor"
+  },
+  {
+    "category": "Calls",
+    "name": "GET /api/calls/concurrency",
+    "method": "GET",
+    "url": "/api/calls/concurrency",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Limit: None"
+  },
+  {
+    "category": "Calls",
+    "name": "GET /api/calls/inbound-logs",
+    "method": "GET",
+    "url": "/api/calls/inbound-logs",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Logs: 15"
+  },
+  {
+    "category": "Calls",
+    "name": "POST /api/calls/simulate-inbound",
+    "method": "POST",
+    "url": "/api/calls/simulate-inbound",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Simulated call recorded"
+  },
+  {
+    "category": "Calls",
+    "name": "POST /api/calls/inbound-webhook",
+    "method": "POST",
+    "url": "/api/calls/inbound-webhook",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agent: Oakridge International School Admission Assistant"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/config",
+    "method": "GET",
+    "url": "/api/agent/config",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Config loaded"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/prompt",
+    "method": "GET",
+    "url": "/api/agent/prompt",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Prompt length: 25647"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/versions",
+    "method": "GET",
+    "url": "/api/agent/versions",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Versions count: 2"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/status",
+    "method": "GET",
+    "url": "/api/agent/status",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: None"
+  },
+  {
+    "category": "Agent",
+    "name": "POST /api/agent/prompt/preview",
+    "method": "POST",
+    "url": "/api/agent/prompt/preview",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Preview generated"
+  },
+  {
+    "category": "Agent",
+    "name": "POST /api/agent/validate",
+    "method": "POST",
+    "url": "/api/agent/validate",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Validation executed"
+  },
+  {
+    "category": "Agent",
+    "name": "POST /api/agent/test",
+    "method": "POST",
+    "url": "/api/agent/test",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Interactive simulation executed"
+  },
+  {
+    "category": "Knowledge",
+    "name": "GET /api/knowledge/status",
+    "method": "GET",
+    "url": "/api/knowledge/status",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Chunks: 39"
+  },
+  {
+    "category": "Knowledge",
+    "name": "GET /api/knowledge/search",
+    "method": "GET",
+    "url": "/api/knowledge/search?query=curriculum",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Search results: 0"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/lookup",
+    "method": "POST",
+    "url": "/api/webhooks/tools/lookup",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Answer retrieved"
+  },
+  {
+    "category": "Tools",
+    "name": "GET /api/webhooks/tools/lookup",
+    "method": "GET",
+    "url": "/api/webhooks/tools/lookup?query=timing",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "GET lookup worked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/schedule-callback",
+    "method": "POST",
+    "url": "/api/webhooks/tools/schedule-callback",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Callback booked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/book-appointment",
+    "method": "POST",
+    "url": "/api/webhooks/tools/book-appointment",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Appointment handled"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/book-class",
+    "method": "POST",
+    "url": "/api/webhooks/tools/book-class",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Class booked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/mark-outcome",
+    "method": "POST",
+    "url": "/api/webhooks/tools/mark-outcome",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Outcome saved"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/save-profile",
+    "method": "POST",
+    "url": "/api/webhooks/tools/save-profile",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Profile updated"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/transfer-counselor",
+    "method": "POST",
+    "url": "/api/webhooks/tools/transfer-counselor",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Transfer checked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/end-call",
+    "method": "POST",
+    "url": "/api/webhooks/tools/end-call",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "End call processed"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/types",
+    "method": "GET",
+    "url": "/api/classes/types",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Types: 4"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/availability",
+    "method": "GET",
+    "url": "/api/classes/availability",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Availability slots returned"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/stats",
+    "method": "GET",
+    "url": "/api/classes/stats",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Total classes: None"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/bookings",
+    "method": "GET",
+    "url": "/api/classes/bookings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Bookings: 2"
+  },
+  {
+    "category": "Classes",
+    "name": "POST /api/classes/types",
+    "method": "POST",
+    "url": "/api/classes/types",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Created ID: 45df282e-0ed7-4d87-80a3-fe800e8aa65b"
+  },
+  {
+    "category": "Classes",
+    "name": "PUT /api/classes/types/{id}",
+    "method": "PUT",
+    "url": "/api/classes/types/45df282e-0ed7-4d87-80a3-fe800e8aa65b",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated fee"
+  },
+  {
+    "category": "Classes",
+    "name": "DELETE /api/classes/types/{id}",
+    "method": "DELETE",
+    "url": "/api/classes/types/45df282e-0ed7-4d87-80a3-fe800e8aa65b",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up class type"
+  },
+  {
+    "category": "Courses",
+    "name": "GET /api/courses",
+    "method": "GET",
+    "url": "/api/courses",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Found 5 courses"
+  },
+  {
+    "category": "Courses",
+    "name": "POST /api/courses",
+    "method": "POST",
+    "url": "/api/courses",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Course ID: 5c852b3e-034d-49e2-92be-2cda7a56ed6a"
+  },
+  {
+    "category": "Courses",
+    "name": "PUT /api/courses/{id}",
+    "method": "PUT",
+    "url": "/api/courses/5c852b3e-034d-49e2-92be-2cda7a56ed6a",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated course fee"
+  },
+  {
+    "category": "Courses",
+    "name": "DELETE /api/courses/{id}",
+    "method": "DELETE",
+    "url": "/api/courses/5c852b3e-034d-49e2-92be-2cda7a56ed6a",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up course"
+  },
+  {
+    "category": "Appointments",
+    "name": "GET /api/appointments",
+    "method": "GET",
+    "url": "/api/appointments",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Appointments: 3"
+  },
+  {
+    "category": "Schedule",
+    "name": "GET /api/schedule",
+    "method": "GET",
+    "url": "/api/schedule",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Callbacks: 16"
+  },
+  {
+    "category": "Analytics",
+    "name": "GET /api/analytics/calls",
+    "method": "GET",
+    "url": "/api/analytics/calls",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Analytics metrics retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers",
+    "method": "GET",
+    "url": "/api/providers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Providers: 3"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/active",
+    "method": "GET",
+    "url": "/api/providers/active",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Active: retell"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/rates",
+    "method": "GET",
+    "url": "/api/providers/rates",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Rates retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/school-markups",
+    "method": "GET",
+    "url": "/api/providers/school-markups",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "School markups: 2"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/customer-pricing",
+    "method": "GET",
+    "url": "/api/providers/customer-pricing",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Customer pricing retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/call-ledger",
+    "method": "GET",
+    "url": "/api/providers/call-ledger",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Ledger records: 0"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/economics",
+    "method": "GET",
+    "url": "/api/providers/economics",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Economics data retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/logs",
+    "method": "GET",
+    "url": "/api/providers/logs",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Logs: 0"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/comparisons",
+    "method": "GET",
+    "url": "/api/providers/comparisons",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Comparisons: 0"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/capabilities",
+    "method": "GET",
+    "url": "/api/providers/retell/capabilities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Capabilities checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/health",
+    "method": "GET",
+    "url": "/api/providers/retell/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: True"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/agents",
+    "method": "GET",
+    "url": "/api/providers/retell/agents",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agents list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/phone-numbers",
+    "method": "GET",
+    "url": "/api/providers/retell/phone-numbers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Phone numbers list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/capabilities",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/capabilities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Capabilities checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/health",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: True"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/agents",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/agents",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agents list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/phone-numbers",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/phone-numbers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Phone numbers list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/capabilities",
+    "method": "GET",
+    "url": "/api/providers/bolna/capabilities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Capabilities checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/health",
+    "method": "GET",
+    "url": "/api/providers/bolna/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: False"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/agents",
+    "method": "GET",
+    "url": "/api/providers/bolna/agents",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agents list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/phone-numbers",
+    "method": "GET",
+    "url": "/api/providers/bolna/phone-numbers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Phone numbers list checked"
+  },
+  {
+    "category": "Settings",
+    "name": "GET /api/settings",
+    "method": "GET",
+    "url": "/api/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Settings count: 22"
+  },
+  {
+    "category": "Settings",
+    "name": "POST /api/settings",
+    "method": "POST",
+    "url": "/api/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Settings saved"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/retell",
+    "method": "POST",
+    "url": "/api/webhooks/retell",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Retell signed ping processed"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/omnidimension",
+    "method": "POST",
+    "url": "/api/webhooks/omnidimension",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Omnidimension ping processed"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/bolna",
+    "method": "POST",
+    "url": "/api/webhooks/bolna",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Bolna ping processed"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/cal",
+    "method": "POST",
+    "url": "/api/webhooks/cal",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cal.com webhook processed"
+  },
+  {
+    "category": "Auth",
+    "name": "POST /api/auth/identify",
+    "method": "POST",
+    "url": "/api/auth/identify",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Next: password"
+  },
+  {
+    "category": "Auth",
+    "name": "POST /api/auth/login",
+    "method": "POST",
+    "url": "/api/auth/login",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Role: admin"
+  },
+  {
+    "category": "Auth",
+    "name": "GET /api/auth/me",
+    "method": "GET",
+    "url": "/api/auth/me",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Email: saisiddhartha.datalabs@gmail.com"
+  },
+  {
+    "category": "Health",
+    "name": "GET /health",
+    "method": "GET",
+    "url": "/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: ok"
+  },
+  {
+    "category": "Docs",
+    "name": "GET /openapi.json",
+    "method": "GET",
+    "url": "/openapi.json",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Title: EnquiryCall API"
+  },
+  {
+    "category": "Schools",
+    "name": "GET /api/schools",
+    "method": "GET",
+    "url": "/api/schools",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Count: 2"
+  },
+  {
+    "category": "Schools",
+    "name": "GET /api/schools/{id}/settings",
+    "method": "GET",
+    "url": "/api/schools/626a626f/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Provider: retell"
+  },
+  {
+    "category": "Schools",
+    "name": "PATCH /api/schools/{id}",
+    "method": "PATCH",
+    "url": "/api/schools/626a626f",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated contact_phone"
+  },
+  {
+    "category": "Schools",
+    "name": "PATCH /api/schools/{id}/settings",
+    "method": "PATCH",
+    "url": "/api/schools/626a626f/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated smtp_port"
+  },
+  {
+    "category": "Schools",
+    "name": "POST /api/schools/{id}/view-as",
+    "method": "POST",
+    "url": "/api/schools/626a626f/view-as",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Impersonation token minted"
+  },
+  {
+    "category": "Schools",
+    "name": "POST /api/schools (Create)",
+    "method": "POST",
+    "url": "/api/schools",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Created ID: 8d011d09"
+  },
+  {
+    "category": "Schools",
+    "name": "DELETE /api/schools/{id}",
+    "method": "DELETE",
+    "url": "/api/schools/8d011d09",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up test school"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts",
+    "method": "GET",
+    "url": "/api/contacts",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Found 5 contacts"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/stats",
+    "method": "GET",
+    "url": "/api/contacts/stats",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Total: 11"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/batches",
+    "method": "GET",
+    "url": "/api/contacts/batches",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Batches: 9"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/history/all",
+    "method": "GET",
+    "url": "/api/contacts/history/all",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "History items: 63"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/counselors/all",
+    "method": "GET",
+    "url": "/api/contacts/counselors/all",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Counselors: 3"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/counselors/analytics",
+    "method": "GET",
+    "url": "/api/contacts/counselors/analytics",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Counselor metrics retrieved"
+  },
+  {
+    "category": "Contacts",
+    "name": "POST /api/contacts",
+    "method": "POST",
+    "url": "/api/contacts",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Contact ID: 7fc48c02-e103-4e3d-8d8c-0689a7b1973e"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/{id}",
+    "method": "GET",
+    "url": "/api/contacts/7fc48c02-e103-4e3d-8d8c-0689a7b1973e",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Name: None"
+  },
+  {
+    "category": "Contacts",
+    "name": "PATCH /api/contacts/{id}",
+    "method": "PATCH",
+    "url": "/api/contacts/7fc48c02-e103-4e3d-8d8c-0689a7b1973e",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Notes updated"
+  },
+  {
+    "category": "Contacts",
+    "name": "POST /api/contacts/{id}/activities",
+    "method": "POST",
+    "url": "/api/contacts/7fc48c02-e103-4e3d-8d8c-0689a7b1973e/activities",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Activity logged"
+  },
+  {
+    "category": "Contacts",
+    "name": "GET /api/contacts/{id}/activities",
+    "method": "GET",
+    "url": "/api/contacts/7fc48c02-e103-4e3d-8d8c-0689a7b1973e/activities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Activities: 5"
+  },
+  {
+    "category": "Contacts",
+    "name": "DELETE /api/contacts/{id}",
+    "method": "DELETE",
+    "url": "/api/contacts/7fc48c02-e103-4e3d-8d8c-0689a7b1973e",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up contact"
+  },
+  {
+    "category": "Contacts",
+    "name": "POST /api/contacts/counselors",
+    "method": "POST",
+    "url": "/api/contacts/counselors",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Counselor ID: 744ecc8d-0aab-4f20-a545-0ae92db5894d"
+  },
+  {
+    "category": "Contacts",
+    "name": "PATCH /api/contacts/counselors/{id}",
+    "method": "PATCH",
+    "url": "/api/contacts/counselors/744ecc8d-0aab-4f20-a545-0ae92db5894d",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated counselor name"
+  },
+  {
+    "category": "Contacts",
+    "name": "DELETE /api/contacts/counselors/{id}",
+    "method": "DELETE",
+    "url": "/api/contacts/counselors/744ecc8d-0aab-4f20-a545-0ae92db5894d",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up counselor"
+  },
+  {
+    "category": "Calls",
+    "name": "GET /api/calls/concurrency",
+    "method": "GET",
+    "url": "/api/calls/concurrency",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Limit: None"
+  },
+  {
+    "category": "Calls",
+    "name": "GET /api/calls/inbound-logs",
+    "method": "GET",
+    "url": "/api/calls/inbound-logs",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Logs: 17"
+  },
+  {
+    "category": "Calls",
+    "name": "POST /api/calls/simulate-inbound",
+    "method": "POST",
+    "url": "/api/calls/simulate-inbound",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Simulated call recorded"
+  },
+  {
+    "category": "Calls",
+    "name": "POST /api/calls/inbound-webhook",
+    "method": "POST",
+    "url": "/api/calls/inbound-webhook",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agent: Oakridge International School Admission Assistant"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/config",
+    "method": "GET",
+    "url": "/api/agent/config",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Config loaded"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/prompt",
+    "method": "GET",
+    "url": "/api/agent/prompt",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Prompt length: 25647"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/versions",
+    "method": "GET",
+    "url": "/api/agent/versions",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Versions count: 2"
+  },
+  {
+    "category": "Agent",
+    "name": "GET /api/agent/status",
+    "method": "GET",
+    "url": "/api/agent/status",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: None"
+  },
+  {
+    "category": "Agent",
+    "name": "POST /api/agent/prompt/preview",
+    "method": "POST",
+    "url": "/api/agent/prompt/preview",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Preview generated"
+  },
+  {
+    "category": "Agent",
+    "name": "POST /api/agent/validate",
+    "method": "POST",
+    "url": "/api/agent/validate",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Validation executed"
+  },
+  {
+    "category": "Agent",
+    "name": "POST /api/agent/test",
+    "method": "POST",
+    "url": "/api/agent/test",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Interactive simulation executed"
+  },
+  {
+    "category": "Knowledge",
+    "name": "GET /api/knowledge/status",
+    "method": "GET",
+    "url": "/api/knowledge/status",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Chunks: 39"
+  },
+  {
+    "category": "Knowledge",
+    "name": "GET /api/knowledge/search",
+    "method": "GET",
+    "url": "/api/knowledge/search?query=curriculum",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Search results: 0"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/lookup",
+    "method": "POST",
+    "url": "/api/webhooks/tools/lookup",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Answer retrieved"
+  },
+  {
+    "category": "Tools",
+    "name": "GET /api/webhooks/tools/lookup",
+    "method": "GET",
+    "url": "/api/webhooks/tools/lookup?query=timing",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "GET lookup worked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/schedule-callback",
+    "method": "POST",
+    "url": "/api/webhooks/tools/schedule-callback",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Callback booked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/book-appointment",
+    "method": "POST",
+    "url": "/api/webhooks/tools/book-appointment",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Appointment handled"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/book-class",
+    "method": "POST",
+    "url": "/api/webhooks/tools/book-class",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Class booked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/mark-outcome",
+    "method": "POST",
+    "url": "/api/webhooks/tools/mark-outcome",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Outcome saved"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/save-profile",
+    "method": "POST",
+    "url": "/api/webhooks/tools/save-profile",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Profile updated"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/transfer-counselor",
+    "method": "POST",
+    "url": "/api/webhooks/tools/transfer-counselor",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Transfer checked"
+  },
+  {
+    "category": "Tools",
+    "name": "POST /api/webhooks/tools/end-call",
+    "method": "POST",
+    "url": "/api/webhooks/tools/end-call",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "End call processed"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/types",
+    "method": "GET",
+    "url": "/api/classes/types",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Types: 4"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/availability",
+    "method": "GET",
+    "url": "/api/classes/availability",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Availability slots returned"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/stats",
+    "method": "GET",
+    "url": "/api/classes/stats",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Total classes: None"
+  },
+  {
+    "category": "Classes",
+    "name": "GET /api/classes/bookings",
+    "method": "GET",
+    "url": "/api/classes/bookings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Bookings: 2"
+  },
+  {
+    "category": "Classes",
+    "name": "POST /api/classes/types",
+    "method": "POST",
+    "url": "/api/classes/types",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Created ID: df7a7263-9e95-44b1-92e9-0af5882ce468"
+  },
+  {
+    "category": "Classes",
+    "name": "PUT /api/classes/types/{id}",
+    "method": "PUT",
+    "url": "/api/classes/types/df7a7263-9e95-44b1-92e9-0af5882ce468",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated fee"
+  },
+  {
+    "category": "Classes",
+    "name": "DELETE /api/classes/types/{id}",
+    "method": "DELETE",
+    "url": "/api/classes/types/df7a7263-9e95-44b1-92e9-0af5882ce468",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up class type"
+  },
+  {
+    "category": "Courses",
+    "name": "GET /api/courses",
+    "method": "GET",
+    "url": "/api/courses",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Found 5 courses"
+  },
+  {
+    "category": "Courses",
+    "name": "POST /api/courses",
+    "method": "POST",
+    "url": "/api/courses",
+    "status_code": 200,
+    "expected_status": [
+      200,
+      201
+    ],
+    "passed": true,
+    "detail": "Course ID: 2a63ef4b-8e25-49ba-a33c-d3801edc971f"
+  },
+  {
+    "category": "Courses",
+    "name": "PUT /api/courses/{id}",
+    "method": "PUT",
+    "url": "/api/courses/2a63ef4b-8e25-49ba-a33c-d3801edc971f",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Updated course fee"
+  },
+  {
+    "category": "Courses",
+    "name": "DELETE /api/courses/{id}",
+    "method": "DELETE",
+    "url": "/api/courses/2a63ef4b-8e25-49ba-a33c-d3801edc971f",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cleaned up course"
+  },
+  {
+    "category": "Appointments",
+    "name": "GET /api/appointments",
+    "method": "GET",
+    "url": "/api/appointments",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Appointments: 3"
+  },
+  {
+    "category": "Schedule",
+    "name": "GET /api/schedule",
+    "method": "GET",
+    "url": "/api/schedule",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Callbacks: 16"
+  },
+  {
+    "category": "Analytics",
+    "name": "GET /api/analytics/calls",
+    "method": "GET",
+    "url": "/api/analytics/calls",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Analytics metrics retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers",
+    "method": "GET",
+    "url": "/api/providers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Providers: 3"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/active",
+    "method": "GET",
+    "url": "/api/providers/active",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Active: retell"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/rates",
+    "method": "GET",
+    "url": "/api/providers/rates",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Rates retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/school-markups",
+    "method": "GET",
+    "url": "/api/providers/school-markups",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "School markups: 2"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/customer-pricing",
+    "method": "GET",
+    "url": "/api/providers/customer-pricing",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Customer pricing retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/call-ledger",
+    "method": "GET",
+    "url": "/api/providers/call-ledger",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Ledger records: 0"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/economics",
+    "method": "GET",
+    "url": "/api/providers/economics",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Economics data retrieved"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/logs",
+    "method": "GET",
+    "url": "/api/providers/logs",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Logs: 0"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/comparisons",
+    "method": "GET",
+    "url": "/api/providers/comparisons",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Comparisons: 0"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/capabilities",
+    "method": "GET",
+    "url": "/api/providers/retell/capabilities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Capabilities checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/health",
+    "method": "GET",
+    "url": "/api/providers/retell/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: True"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/agents",
+    "method": "GET",
+    "url": "/api/providers/retell/agents",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agents list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/retell/phone-numbers",
+    "method": "GET",
+    "url": "/api/providers/retell/phone-numbers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Phone numbers list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/capabilities",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/capabilities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Capabilities checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/health",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: True"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/agents",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/agents",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agents list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/omnidimension/phone-numbers",
+    "method": "GET",
+    "url": "/api/providers/omnidimension/phone-numbers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Phone numbers list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/capabilities",
+    "method": "GET",
+    "url": "/api/providers/bolna/capabilities",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Capabilities checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/health",
+    "method": "GET",
+    "url": "/api/providers/bolna/health",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Status: False"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/agents",
+    "method": "GET",
+    "url": "/api/providers/bolna/agents",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Agents list checked"
+  },
+  {
+    "category": "Providers",
+    "name": "GET /api/providers/bolna/phone-numbers",
+    "method": "GET",
+    "url": "/api/providers/bolna/phone-numbers",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Phone numbers list checked"
+  },
+  {
+    "category": "Settings",
+    "name": "GET /api/settings",
+    "method": "GET",
+    "url": "/api/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Settings count: 22"
+  },
+  {
+    "category": "Settings",
+    "name": "POST /api/settings",
+    "method": "POST",
+    "url": "/api/settings",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Settings saved"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/retell",
+    "method": "POST",
+    "url": "/api/webhooks/retell",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Retell signed ping processed"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/omnidimension",
+    "method": "POST",
+    "url": "/api/webhooks/omnidimension",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Omnidimension ping processed"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/bolna",
+    "method": "POST",
+    "url": "/api/webhooks/bolna",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Bolna ping processed"
+  },
+  {
+    "category": "Webhooks",
+    "name": "POST /api/webhooks/cal",
+    "method": "POST",
+    "url": "/api/webhooks/cal",
+    "status_code": 200,
+    "expected_status": [
+      200
+    ],
+    "passed": true,
+    "detail": "Cal.com webhook processed"
+  }
+]

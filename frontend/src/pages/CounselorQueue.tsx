@@ -3,6 +3,7 @@ import api, { getErrorMessage } from '../api';
 import { useSSE } from '../hooks/useSSE';
 import { LeadJourneyStepper, LeadStepBadge, calculateLeadJourney } from '../components/LeadJourneyStepper';
 import { exportToExcel } from '../utils/exportToExcel';
+import Pagination from '../components/Pagination';
 import {
   Headphones, Flame, Clock, CheckCircle, Phone, Calendar,
   Search, Filter, History, MessageSquare, AlertCircle, RefreshCw, X, ChevronRight, User, UserPlus, Trash2, Mail,
@@ -70,10 +71,37 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
   const [counselors, setCounselors] = useState<Counselor[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [queueFilter, setQueueFilter] = useState<'all' | 'hot' | 'warm' | 'callback'>('hot');
+  const [queueFilter, setQueueFilter] = useState<'all' | 'hot' | 'warm' | 'callback'>('all');
   const [counselorFilter, setCounselorFilter] = useState<string>('all');
   const [hasDefaultedFilter, setHasDefaultedFilter] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<'queue' | 'completed' | 'roster' | 'analytics'>(initialWorkspace);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalContacts, setTotalContacts] = useState(0);
+
+  // Stats State
+  const [statsData, setStatsData] = useState<{
+    hot: number;
+    warm: number;
+    cold: number;
+    pending: number;
+    completed: number;
+    scheduled: number;
+    needs_reschedule?: number;
+    total: number;
+    followup_pending: number;
+    followup_completed: number;
+  }>({ hot: 0, warm: 0, cold: 0, pending: 0, completed: 0, scheduled: 0, needs_reschedule: 0, total: 0, followup_pending: 0, followup_completed: 0 });
+
+  // Direct Contact Modal State
+  const [contactModalLead, setContactModalLead] = useState<Contact | null>(null);
+  const [contactModalTab, setContactModalTab] = useState<'direct' | 'whatsapp' | 'aibot' | 'note'>('direct');
+  const [modalActionOutcome, setModalActionOutcome] = useState('Connected - Interested in Admission');
+  const [modalActionNotes, setModalActionNotes] = useState('');
+  const [modalFollowupStatus, setModalFollowupStatus] = useState<'Pending' | 'InProgress' | 'Completed'>('InProgress');
+  const [savingContactAction, setSavingContactAction] = useState(false);
 
   // Bulk Operations State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -128,10 +156,20 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
       showToast(res.data.message || 'Auto-assignment complete!', 'success');
       fetchQueue();
       fetchCounselors();
+      fetchStats();
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to auto-assign leads'), 'error');
     } finally {
       setAutoAssigning(false);
+    }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const res = await api.get('/contacts/stats');
+      setStatsData(res.data);
+    } catch (e) {
+      console.error('Failed to load stats', e);
     }
   };
 
@@ -140,19 +178,24 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
     try {
       const res = await api.get('/contacts', {
         params: {
-          search,
-          page: 1,
-          page_size: 100,
+          search: search || undefined,
+          interest: activeWorkspace === 'queue' && queueFilter === 'hot' ? 'HOT' : activeWorkspace === 'queue' && queueFilter === 'warm' ? 'WARM' : undefined,
+          status: activeWorkspace === 'queue' && queueFilter === 'callback' ? 'Scheduled' : undefined,
+          counselor_id: counselorFilter !== 'all' ? counselorFilter : undefined,
+          counselor_followup_status: activeWorkspace === 'completed' ? 'Completed' : (activeWorkspace === 'queue' ? 'active' : undefined),
+          page: currentPage,
+          page_size: pageSize,
         },
       });
       setContacts(res.data.items || []);
+      setTotalContacts(res.data.total || 0);
     } catch (err) {
       console.error('Error fetching counselor queue:', err);
       showToast(getErrorMessage(err, 'Failed to load counselor queue'), 'error');
     } finally {
       setLoading(false);
     }
-  }, [search, showToast]);
+  }, [search, queueFilter, counselorFilter, activeWorkspace, currentPage, pageSize, showToast]);
 
   const fetchCounselors = async () => {
     try {
@@ -188,6 +231,7 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
   useSSE(useCallback((msg) => {
     fetchQueue();
     fetchCounselors();
+    fetchStats();
     if (activeWorkspace === 'analytics') {
       fetchAnalytics();
     }
@@ -220,6 +264,7 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
   useEffect(() => {
     fetchQueue();
     fetchCounselors();
+    fetchStats();
     if (activeWorkspace === 'analytics') {
       fetchAnalytics();
     }
@@ -276,54 +321,63 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
   };
 
   const isCompleted = (c: Contact) => c.counselor_followup_status === 'Completed';
-  const activeContacts = contacts.filter(c => !isCompleted(c));
-  const completedContacts = contacts.filter(c => isCompleted(c));
+  const filteredContacts = contacts;
 
-  const currentDataset = activeWorkspace === 'completed' ? completedContacts : activeContacts;
+  const hotCount = statsData.hot || 0;
+  const warmCount = statsData.warm || 0;
+  const callbackCount = (statsData.scheduled || 0) + (statsData.needs_reschedule || 0);
+  const totalActiveCount = statsData.followup_pending || 0;
+  const totalCompletedCount = statsData.followup_completed || 0;
 
-  const filteredContacts = currentDataset.filter(c => {
-    // 1. Queue priority filter (only applied on active queue)
-    if (activeWorkspace === 'queue') {
-      if (queueFilter === 'hot') {
-        if (!(c.interest_level === 'HOT' || c.lead_score >= 75)) return false;
-      } else if (queueFilter === 'warm') {
-        if (!(c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75))) return false;
-      } else if (queueFilter === 'callback') {
-        if (!(c.status === 'NeedsReschedule' || c.status === 'Scheduled')) return false;
-      }
+  const getSlaBadge = (c: Contact) => {
+    const isHot = c.interest_level === 'HOT' || c.lead_score >= 75;
+    const isWarm = c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75);
+    const createdTime = c.created_at ? new Date(c.created_at).getTime() : Date.now();
+    const ageHours = (Date.now() - createdTime) / (1000 * 60 * 60);
+
+    if (c.counselor_followup_status === 'Completed') {
+      return (
+        <span style={{
+          padding: '2px 8px', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+          background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)',
+          display: 'inline-flex', alignItems: 'center', gap: '4px'
+        }}>
+          <CheckCircle2 size={12} /> Completed
+        </span>
+      );
     }
 
-    // 2. Counselor filter
-    if (counselorFilter === 'unassigned') {
-      return !c.assigned_counselor_id;
-    } else if (counselorFilter !== 'all') {
-      return c.assigned_counselor_id === counselorFilter;
+    if (isHot) {
+      const isOverdue = ageHours > 2;
+      return (
+        <span style={{
+          padding: '2px 8px', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+          background: isOverdue ? 'rgba(239, 68, 68, 0.15)' : 'rgba(249, 115, 22, 0.15)',
+          color: isOverdue ? '#ef4444' : '#f97316',
+          border: `1px solid ${isOverdue ? 'rgba(239, 68, 68, 0.4)' : 'rgba(249, 115, 22, 0.4)'}`,
+          display: 'inline-flex', alignItems: 'center', gap: '4px'
+        }}>
+          {isOverdue ? <AlertCircle size={12} /> : <Zap size={12} />}
+          {isOverdue ? '⚠️ SLA Overdue (>2h)' : '⚡ HOT (2h SLA)'}
+        </span>
+      );
+    } else if (isWarm) {
+      const isOverdue = ageHours > 24;
+      return (
+        <span style={{
+          padding: '2px 8px', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+          background: isOverdue ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+          color: isOverdue ? '#ef4444' : '#f59e0b',
+          border: `1px solid ${isOverdue ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)'}`,
+          display: 'inline-flex', alignItems: 'center', gap: '4px'
+        }}>
+          <Flame size={12} />
+          {isOverdue ? '⚠️ SLA Overdue (>24h)' : '🔥 WARM (24h SLA)'}
+        </span>
+      );
     }
-    return true;
-  });
-
-  const hotCount = activeContacts.filter(c => {
-    const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-    return belongs && (c.interest_level === 'HOT' || c.lead_score >= 75);
-  }).length;
-
-  const warmCount = activeContacts.filter(c => {
-    const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-    return belongs && (c.interest_level === 'WARM' || (c.lead_score >= 50 && c.lead_score < 75));
-  }).length;
-
-  const callbackCount = activeContacts.filter(c => {
-    const belongs = counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-    return belongs && (c.status === 'NeedsReschedule' || c.status === 'Scheduled');
-  }).length;
-
-  const totalActiveCount = activeContacts.filter(c => {
-    return counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-  }).length;
-
-  const totalCompletedCount = completedContacts.filter(c => {
-    return counselorFilter === 'unassigned' ? !c.assigned_counselor_id : (counselorFilter === 'all' || c.assigned_counselor_id === counselorFilter);
-  }).length;
+    return null;
+  };
 
   // Bulk Selection Helpers
   const toggleSelectContact = (id: string) => {
@@ -388,13 +442,57 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
     }
   };
 
-  const triggerCall = async (contact: Contact) => {
+  const openContactModal = (contact: Contact) => {
+    setContactModalLead(contact);
+    setContactModalTab('direct');
+    setModalActionOutcome('Connected - Interested in Admission');
+    setModalActionNotes(contact.notes || '');
+    setModalFollowupStatus(contact.counselor_followup_status || 'InProgress');
+  };
+
+  const submitContactModalAction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!contactModalLead) return;
+    setSavingContactAction(true);
+    try {
+      // 1. Update contact status & notes
+      await api.patch(`/contacts/${contactModalLead.id}`, {
+        counselor_followup_status: modalFollowupStatus,
+        notes: modalActionNotes || undefined,
+      });
+
+      // 2. Log structured activity
+      const actionType = contactModalTab === 'whatsapp' ? 'WhatsApp' : contactModalTab === 'note' ? 'Note' : 'Call';
+      await api.post(`/contacts/${contactModalLead.id}/activities`, {
+        action_type: actionType,
+        outcome: modalActionOutcome,
+        notes: modalActionNotes || `Counselor outreach via ${actionType}`,
+      });
+
+      showToast(`Follow-up logged for ${contactModalLead.name}!`, 'success');
+      setContactModalLead(null);
+      fetchQueue();
+      fetchStats();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to save follow-up action'), 'error');
+    } finally {
+      setSavingContactAction(false);
+    }
+  };
+
+  const triggerAIBotCall = async (contact: Contact) => {
     try {
       await api.post(`/calls/${contact.id}/call-now`);
-      showToast(`Initiated direct counselor callback to ${contact.name}!`, 'success');
+      await api.post(`/contacts/${contact.id}/activities`, {
+        action_type: 'Call',
+        outcome: 'AI Voice Bot Outbound Call Initiated',
+        notes: 'Counselor dispatched AI agent voice outreach'
+      });
+      showToast(`Initiated AI Agent Voice Bot call to ${contact.name}!`, 'success');
+      setContactModalLead(null);
       fetchQueue();
     } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to initiate callback'), 'error');
+      showToast(getErrorMessage(err, 'Failed to initiate AI bot call'), 'error');
     }
   };
 
@@ -684,6 +782,7 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
       {/* Main Content Area */}
       {activeWorkspace === 'queue' || activeWorkspace === 'completed' ? (
         <>
+
           {/* Controls Bar: Search, Counselor Filter & Auto-Assign */}
           <div className="glass-panel" style={{ padding: '16px 20px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flex: '1 1 300px', flexWrap: 'wrap' }}>
@@ -984,7 +1083,7 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
                           {c.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.15rem', fontWeight: 700 }}>{c.name}</h3>
                             <span style={{
                               padding: '3px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 700,
@@ -993,6 +1092,15 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
                               border: `1px solid ${isHot ? 'rgba(239, 68, 68, 0.3)' : isWarm ? 'rgba(245, 158, 11, 0.3)' : c.interest_level === 'COLD' ? 'rgba(148, 163, 184, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`
                             }}>
                               {isHot ? 'HOT LEAD' : isWarm ? 'WARM LEAD' : c.interest_level === 'COLD' ? 'COLD LEAD' : 'UNCONTACTED'}
+                            </span>
+                            {getSlaBadge(c)}
+                            <span style={{
+                              padding: '2px 8px', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600,
+                              background: c.counselor_followup_status === 'Completed' ? 'rgba(16, 185, 129, 0.12)' : c.counselor_followup_status === 'InProgress' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(245, 158, 11, 0.12)',
+                              color: c.counselor_followup_status === 'Completed' ? '#10b981' : c.counselor_followup_status === 'InProgress' ? '#3b82f6' : '#f59e0b',
+                              border: `1px solid ${c.counselor_followup_status === 'Completed' ? 'rgba(16, 185, 129, 0.3)' : c.counselor_followup_status === 'InProgress' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                            }}>
+                              Follow-up: {c.counselor_followup_status || 'Pending'}
                             </span>
                             <LeadStepBadge
                               contact={c}
@@ -1082,11 +1190,11 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
                           <>
                             <button
                               className="btn btn-primary"
-                              style={{ fontSize: '0.82rem', padding: '7px 13px' }}
-                              onClick={() => triggerCall(c)}
+                              style={{ fontSize: '0.82rem', padding: '7px 13px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                              onClick={() => openContactModal(c)}
                             >
                               <Phone size={14} />
-                              Call Lead Now
+                              Contact Lead
                             </button>
 
                             <button
@@ -1175,6 +1283,17 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
               })}
             </div>
           )}
+
+          {/* Server-side Pagination */}
+          <div style={{ marginTop: '20px' }}>
+            <Pagination
+              currentPage={currentPage}
+              totalItems={totalContacts}
+              pageSize={pageSize}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={setPageSize}
+            />
+          </div>
         </>
       ) : activeWorkspace === 'roster' ? (
         /* Counselors Roster Workspace */
@@ -1694,6 +1813,177 @@ export default function CounselorQueue({ showToast, onViewContact, initialWorksp
                 {rescheduling ? 'Scheduling...' : 'Confirm Schedule'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multichannel Contact & Follow-up Modal */}
+      {contactModalLead && (
+        <div className="modal-overlay" onClick={() => setContactModalLead(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ padding: '28px', maxWidth: '580px', width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Contact Lead: {contactModalLead.name}
+                  </h3>
+                  {getSlaBadge(contactModalLead)}
+                </div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                  Phone: <strong>{contactModalLead.phone_number}</strong> {contactModalLead.email && `• ${contactModalLead.email}`}
+                </div>
+              </div>
+              <button onClick={() => setContactModalLead(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Channel Tabs */}
+            <div style={{ display: 'flex', background: 'var(--bg-tertiary)', padding: '4px', borderRadius: '10px', marginBottom: '20px', gap: '4px' }}>
+              <button
+                type="button"
+                className={`btn ${contactModalTab === 'direct' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => { setContactModalTab('direct'); setModalActionOutcome('Connected - Interested in Admission'); }}
+                style={{ flex: 1, fontSize: '0.8rem', padding: '8px 10px', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+              >
+                <Phone size={14} />
+                Counselor Call
+              </button>
+              <button
+                type="button"
+                className={`btn ${contactModalTab === 'whatsapp' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => { setContactModalTab('whatsapp'); setModalActionOutcome('WhatsApp Outreach Message Sent'); }}
+                style={{ flex: 1, fontSize: '0.8rem', padding: '8px 10px', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+              >
+                <MessageSquare size={14} />
+                WhatsApp
+              </button>
+              <button
+                type="button"
+                className={`btn ${contactModalTab === 'aibot' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setContactModalTab('aibot')}
+                style={{ flex: 1, fontSize: '0.8rem', padding: '8px 10px', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+              >
+                <Headphones size={14} />
+                AI Voice Bot
+              </button>
+            </div>
+
+            {contactModalTab === 'direct' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '18px' }}>
+                <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', padding: '12px 16px', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent-primary)' }}>Click to Dial from Counselor Phone / Softphone</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>{contactModalLead.phone_number}</div>
+                  </div>
+                  <a
+                    href={`tel:${contactModalLead.phone_number}`}
+                    className="btn btn-primary"
+                    style={{ fontSize: '0.82rem', padding: '8px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}
+                  >
+                    <Phone size={14} /> Direct Dial Now
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {contactModalTab === 'whatsapp' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '18px' }}>
+                <div style={{ background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '14px 16px', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#10b981', marginBottom: '4px' }}>WhatsApp Template Message:</div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-color)', margin: 0, fontStyle: 'italic' }}>
+                    "Hello {contactModalLead.name}, greetings from The Shri Ram Academy Admissions Team! We noticed your inquiry regarding our curriculum and admissions process. When is a good time for a quick 5-minute discussion or campus visit?"
+                  </p>
+                  <a
+                    href={`https://wa.me/${contactModalLead.phone_number.replace(/\D/g, '')}?text=${encodeURIComponent(`Hello ${contactModalLead.name}, greetings from The Shri Ram Academy Admissions Team! We noticed your inquiry regarding our curriculum and admissions process. When is a good time for a quick discussion or campus visit?`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-primary"
+                    style={{ marginTop: '12px', fontSize: '0.82rem', padding: '8px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#10b981', borderColor: '#10b981', color: '#fff', textDecoration: 'none' }}
+                  >
+                    <MessageSquare size={14} /> Open WhatsApp Chat
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {contactModalTab === 'aibot' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '18px' }}>
+                <div style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', padding: '14px 16px', borderRadius: '10px' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f59e0b', marginBottom: '4px' }}>Dispatch Automated Retell AI Voice Agent Call</div>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '0 0 12px 0', lineHeight: 1.4 }}>
+                    This triggers our AI Voice Bot to call {contactModalLead.name} immediately. The conversation transcript and qualification scoring will automatically appear in your queue.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => triggerAIBotCall(contactModalLead)}
+                    style={{ fontSize: '0.82rem', padding: '8px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))' }}
+                  >
+                    <Headphones size={14} /> Launch AI Outbound Call
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Structured Activity & Outcome Logger Form */}
+            <form onSubmit={submitContactModalAction} style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontWeight: 600, fontSize: '0.8rem' }}>Outreach Outcome</label>
+                  <select
+                    className="form-input"
+                    value={modalActionOutcome}
+                    onChange={(e) => setModalActionOutcome(e.target.value)}
+                    style={{ fontSize: '0.82rem', padding: '8px 10px' }}
+                  >
+                    <option value="Connected - Interested in Admission">Connected - Interested</option>
+                    <option value="Campus Visit Scheduled">Campus Visit Scheduled</option>
+                    <option value="Virtual Consultation Booked">Virtual Consultation Booked</option>
+                    <option value="Follow-up Call Requested">Follow-up Call Requested</option>
+                    <option value="Fee Details Shared">Fee Details Shared</option>
+                    <option value="No Answer / Busy">No Answer / Busy</option>
+                    <option value="Wrong Number / Invalid">Wrong Number / Invalid</option>
+                    <option value="Not Interested / Dropped">Not Interested / Dropped</option>
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontWeight: 600, fontSize: '0.8rem' }}>Follow-up Status</label>
+                  <select
+                    className="form-input"
+                    value={modalFollowupStatus}
+                    onChange={(e) => setModalFollowupStatus(e.target.value as any)}
+                    style={{ fontSize: '0.82rem', padding: '8px 10px' }}
+                  >
+                    <option value="InProgress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Pending">Pending (Needs Call)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: '16px' }}>
+                <label className="form-label" style={{ fontWeight: 600, fontSize: '0.8rem' }}>Counselor Notes & Next Steps</label>
+                <textarea
+                  className="form-input"
+                  rows={3}
+                  value={modalActionNotes}
+                  onChange={(e) => setModalActionNotes(e.target.value)}
+                  placeholder="e.g. Spoke to parent about Grade 4 IB curriculum. Shared brochure via WhatsApp. Scheduled campus tour on Saturday."
+                  style={{ fontSize: '0.85rem' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setContactModalLead(null)} style={{ fontSize: '0.82rem' }}>
+                  Close
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={savingContactAction} style={{ fontSize: '0.82rem', padding: '8px 16px' }}>
+                  {savingContactAction ? 'Saving...' : 'Save & Update Lead'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

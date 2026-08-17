@@ -171,6 +171,8 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
     try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
   })();
 
+
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       {/* Header */}
@@ -182,6 +184,16 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
           <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.92rem' }}>
             Real-time telemetry on calling activity, student intent, and admissions conversion.
           </p>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button
+            onClick={fetchAll}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 14px', fontSize: '0.84rem' }}
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
         </div>
       </div>
 
@@ -373,6 +385,7 @@ export default function Dashboard({ showToast, onViewContact }: DashboardProps) 
         </div>
 
       </div>
+
     </div>
   );
 }

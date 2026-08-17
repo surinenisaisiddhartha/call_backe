@@ -4,7 +4,7 @@ import Pagination from '../components/Pagination';
 import { exportToExcel } from '../utils/exportToExcel';
 import {
   Calendar, Trash2, Edit2, CalendarRange, RefreshCw, Plus, X, Search, Phone,
-  CalendarCheck, CheckCircle, Clock, XCircle, User, FileSpreadsheet
+  CalendarCheck, CheckCircle, Check, Clock, XCircle, User, FileSpreadsheet
 } from 'lucide-react';
 
 interface ScheduledCallback {
@@ -151,6 +151,7 @@ export default function Scheduling({ showToast }: SchedulingProps) {
   const [newAptContactId, setNewAptContactId] = useState('');
   const [newAptTime, setNewAptTime] = useState('');
   const [newAptPurpose, setNewAptPurpose] = useState('');
+  const [newAptMeetingType, setNewAptMeetingType] = useState<'virtual' | 'in_person'>('virtual');
   const [creatingApt, setCreatingApt] = useState(false);
 
   // --- Fetch Handlers ---
@@ -256,6 +257,26 @@ export default function Scheduling({ showToast }: SchedulingProps) {
     }
   };
 
+  const completeCounselorCallback = async (scheduleId: string, contactId: string) => {
+    try {
+      await api.delete(`/schedule/${scheduleId}`);
+      if (contactId) {
+        await api.post(`/contacts/${contactId}/activities`, {
+          action_type: 'Call',
+          outcome: 'Counselor Callback Completed',
+          notes: 'Counselor completed scheduled phone consultation'
+        });
+        await api.patch(`/contacts/${contactId}`, {
+          counselor_followup_status: 'Completed'
+        });
+      }
+      showToast('Follow-up callback marked as completed!', 'success');
+      fetchSchedules();
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to complete callback'), 'error');
+    }
+  };
+
   // --- Appointment Event Actions ---
   const openEditApt = (apt: Appointment) => {
     setEditApt(apt);
@@ -326,12 +347,13 @@ export default function Scheduling({ showToast }: SchedulingProps) {
         contact_id: newAptContactId,
         scheduled_for: newAptTime,
         purpose: newAptPurpose,
+        meeting_type: newAptMeetingType,
       });
-      showToast('Appointment booked!', 'success');
+      showToast(`${newAptMeetingType === 'virtual' ? 'Virtual Consultation' : 'Campus Visit'} booked!`, 'success');
       setShowCreateApt(false);
       fetchAppointments();
     } catch (err: any) {
-      showToast(getErrorMessage(err, 'Failed to create appointment'), 'error');
+      showToast(getErrorMessage(err, 'Failed to book appointment'), 'error');
     } finally {
       setCreatingApt(false);
     }
@@ -576,7 +598,12 @@ export default function Scheduling({ showToast }: SchedulingProps) {
       {/* Actions Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#fff', margin: 0 }}>Callbacks & Appointments</h2>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-primary)', margin: 0 }}>
+            Callbacks &amp; Appointments
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.92rem' }}>
+            Schedule and manage campus tours, virtual admissions meets, and phone callbacks.
+          </p>
         </div>
 
         <div style={{ display: 'flex', gap: '12px' }}>
@@ -755,6 +782,17 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                                 <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
                                   {s.status === 'Scheduled' && (
                                     <>
+                                      {s.call_type === 'Counselor' && (
+                                        <button
+                                          className="btn btn-secondary"
+                                          style={{ padding: '6px 10px', fontSize: '0.78rem', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)', background: 'rgba(16, 185, 129, 0.08)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                          onClick={() => completeCounselorCallback(s.id, s.contact_id)}
+                                          title="Mark Counselor Callback as Completed"
+                                        >
+                                          <Check size={12} />
+                                          Done
+                                        </button>
+                                      )}
                                       <button
                                         className="btn btn-secondary"
                                         style={{ padding: '6px 12px', fontSize: '0.8rem' }}
@@ -1188,6 +1226,29 @@ export default function Scheduling({ showToast }: SchedulingProps) {
                   <option key={c.id} value={c.id}>{c.name} ({c.phone_number})</option>
                 ))}
               </select>
+            </div>
+            <div className="form-group" style={{ marginBottom: '16px' }}>
+              <label className="form-label">Meeting Type</label>
+              <div style={{ display: 'flex', gap: '14px', marginTop: '6px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="modal_meeting_type"
+                    checked={newAptMeetingType === 'virtual'}
+                    onChange={() => setNewAptMeetingType('virtual')}
+                  />
+                  🎥 Virtual Video Call
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                  <input
+                    type="radio"
+                    name="modal_meeting_type"
+                    checked={newAptMeetingType === 'in_person'}
+                    onChange={() => setNewAptMeetingType('in_person')}
+                  />
+                  🏫 In-Person Campus Visit
+                </label>
+              </div>
             </div>
             <div className="form-group" style={{ marginBottom: '16px' }}>
               <label className="form-label">Purpose</label>

@@ -23,6 +23,14 @@ interface Contact {
   assigned_counselor_id?: string | null;
   counselor_followup_status?: string;
   created_at: string;
+  call_cost?: {
+    call_count: number;
+    provider_total_cost: number;
+    customer_billable_total: number;
+    net_margin: number;
+    gross_margin_percent: number;
+    total_duration_sec: number;
+  };
 }
 
 interface Counselor {
@@ -49,6 +57,14 @@ interface CallAttempt {
   user_sentiment?: string | null;
   call_successful?: string | null;
   analysis?: CallAnalysis | null;
+  cost?: {
+    provider_total_cost: number;
+    customer_billable_total: number;
+    markup_amount: number;
+    gross_margin_percent: number;
+    cost_source: string;
+    currency: string;
+  };
 }
 
 /** Retell's structured post-call analysis. Every field is optional: it only
@@ -82,6 +98,17 @@ interface Appointment {
   purpose?: string;
   virtual_meeting_link?: string;
   created_at?: string;
+}
+
+interface CounselorActivity {
+  id: string;
+  contact_id: string;
+  counselor_id: string | null;
+  counselor_name?: string;
+  action_type: string;
+  outcome: string | null;
+  notes: string | null;
+  created_at: string;
 }
 
 interface ContactsProps {
@@ -333,6 +360,12 @@ function CallAnalysisPanel({ a, sentiment, callSuccessful }: { a: CallAnalysis; 
 }
 
 export default function Contacts({ showToast, jumpToContactId, onJumpHandled, jumpToClassification, onClassificationHandled }: ContactsProps) {
+  const user = (() => {
+    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+  })();
+  const userRole = user?.role || 'user';
+  const isAdmin = userRole === 'admin' || Boolean(localStorage.getItem('admin_token'));
+
   const [contacts, setContacts] = useState<Contact[]>([]);
   // Server-side paging: `contacts` holds ONE page, and the total comes from
   // the API. Slicing a full list in the browser stopped being viable at
@@ -372,6 +405,66 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [addingLead, setAddingLead] = useState(false);
   const [showProfileDetails, setShowProfileDetails] = useState(false);
+  // Bulk Operations State
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCounselorId, setBulkCounselorId] = useState('');
+  const [bulkExecuting, setBulkExecuting] = useState(false);
+
+  const toggleSelectContact = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === contacts.length && contacts.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(contacts.map(c => c.id)));
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    if (selectedIds.size === 0 || !bulkCounselorId) return;
+    setBulkExecuting(true);
+    try {
+      await api.post('/contacts/bulk-update', {
+        contact_ids: Array.from(selectedIds),
+        action: 'assign',
+        assigned_counselor_id: bulkCounselorId === 'unassign' ? null : bulkCounselorId
+      });
+      showToast(`Assigned ${selectedIds.size} leads successfully!`, 'success');
+      setSelectedIds(new Set());
+      setBulkCounselorId('');
+      fetchContacts();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to assign leads'), 'error');
+    } finally {
+      setBulkExecuting(false);
+    }
+  };
+
+  const handleBulkAutoAssign = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkExecuting(true);
+    try {
+      await api.post('/contacts/bulk-update', {
+        contact_ids: Array.from(selectedIds),
+        action: 'auto_assign'
+      });
+      showToast(`Auto-assigned ${selectedIds.size} leads across counselors!`, 'success');
+      setSelectedIds(new Set());
+      fetchContacts();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to auto-assign selected leads'), 'error');
+    } finally {
+      setBulkExecuting(false);
+    }
+  };
+
   const [newLead, setNewLead] = useState({
     name: '',
     phone_number: '',
@@ -396,6 +489,12 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
   const [attempts, setAttempts] = useState<CallAttempt[]>([]);
   const [schedules, setSchedules] = useState<Callback[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [activities, setActivities] = useState<CounselorActivity[]>([]);
+  const [newActionType, setNewActionType] = useState('Call');
+  const [newActionOutcome, setNewActionOutcome] = useState('Connected - Interested in Admission');
+  const [newActionNotes, setNewActionNotes] = useState('');
+  const [newFollowupStatus, setNewFollowupStatus] = useState('InProgress');
+  const [loggingDrawerActivity, setLoggingDrawerActivity] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   // The lead's standing judgement, shown at the top of the drawer so the
   // reader doesn't have to reconstruct it from a list of calls.
@@ -624,6 +723,8 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       setAttempts(res.data.attempts || []);
       setSchedules(res.data.schedules || []);
       setAppointments(res.data.appointments || []);
+      setActivities(res.data.activities || []);
+      setNewFollowupStatus(res.data.counselor_followup_status || contact.counselor_followup_status || 'Pending');
       setLeadSummary({
         classification: res.data.classification,
         score: res.data.lead_score,
@@ -650,6 +751,8 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       setAttempts(res.data.attempts || []);
       setSchedules(res.data.schedules || []);
       setAppointments(res.data.appointments || []);
+      setActivities(res.data.activities || []);
+      setNewFollowupStatus(res.data.counselor_followup_status || res.data.contact?.counselor_followup_status || 'Pending');
       setLeadSummary({
         classification: res.data.classification,
         score: res.data.lead_score,
@@ -663,6 +766,35 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
       showToast('Failed to load contact history', 'error');
     } finally {
       setLoadingHistory(false);
+    }
+  };
+
+  const handleLogDrawerActivity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedContact) return;
+    setLoggingDrawerActivity(true);
+    try {
+      if (newFollowupStatus && newFollowupStatus !== selectedContact.counselor_followup_status) {
+        await api.patch(`/contacts/${selectedContact.id}`, {
+          counselor_followup_status: newFollowupStatus,
+        });
+        setSelectedContact({ ...selectedContact, counselor_followup_status: newFollowupStatus });
+      }
+      await api.post(`/contacts/${selectedContact.id}/activities`, {
+        action_type: newActionType,
+        outcome: newActionOutcome,
+        notes: newActionNotes || null,
+      });
+      showToast('Counselor activity logged successfully!', 'success');
+      setNewActionNotes('');
+      // Refresh activities
+      const res = await api.get(`/contacts/${selectedContact.id}/activities`);
+      setActivities(res.data.items || []);
+      fetchContacts();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to log counselor activity'), 'error');
+    } finally {
+      setLoggingDrawerActivity(false);
     }
   };
 
@@ -804,6 +936,52 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
         </div>
       </div>
 
+      {/* Unassigned Hot Leads Alert Banner */}
+      {contacts.some(c => (c.interest_level === 'HOT' || (c.lead_score && c.lead_score >= 75)) && !c.assigned_counselor_id) && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.12) 0%, rgba(245, 158, 11, 0.1) 100%)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: '12px',
+          padding: '14px 18px',
+          marginBottom: '18px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '1.25rem' }}>🔥</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#ef4444' }}>
+                Unassigned Qualified HOT Leads Detected!
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                High-intent prospective parents have finished AI qualification and need counselor follow-up.
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => { setInterestFilter('HOT'); setCounselorFilter('unassigned'); setCurrentPage(1); }}
+              style={{ fontSize: '0.82rem', padding: '7px 14px', background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+            >
+              Filter Unassigned HOT Leads
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleAutoAssign}
+              disabled={autoAssigning}
+              style={{ background: 'linear-gradient(135deg, #ef4444, #f59e0b)', border: 'none', fontSize: '0.82rem', padding: '7px 16px', fontWeight: 700 }}
+            >
+              ⚡ Auto-Distribute to Counselors
+            </button>
+          </div>
+        </div>
+      )}
+
+
       {/* Filter and search bar */}
       <div className="glass-panel" style={{ display: 'flex', gap: '12px', marginBottom: '24px', padding: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ flexGrow: 1, minWidth: '220px', display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
@@ -819,7 +997,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
         
         <select 
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
           className="form-input"
           style={{ width: '160px' }}
         >
@@ -834,7 +1012,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
 
         <select
           value={interestFilter}
-          onChange={(e) => setInterestFilter(e.target.value)}
+          onChange={(e) => { setInterestFilter(e.target.value); setCurrentPage(1); }}
           className="form-input"
           style={{ width: '150px' }}
           title="Lead classification based on weighted scoring"
@@ -848,7 +1026,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
 
         <select
           value={counselorFilter}
-          onChange={(e) => setCounselorFilter(e.target.value)}
+          onChange={(e) => { setCounselorFilter(e.target.value); setCurrentPage(1); }}
           className="form-input"
           style={{ width: '170px' }}
         >
@@ -871,6 +1049,70 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
         </button>
       </div>
 
+      {/* Sticky Bulk Action Toolbar */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--accent-primary)',
+          borderRadius: '12px',
+          padding: '12px 18px',
+          marginBottom: '16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--accent-primary)' }}>
+              {selectedIds.size} {selectedIds.size === 1 ? 'lead' : 'leads'} selected
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <select
+              className="form-input"
+              style={{ fontSize: '0.82rem', padding: '6px 12px', minWidth: '180px' }}
+              value={bulkCounselorId}
+              onChange={(e) => setBulkCounselorId(e.target.value)}
+            >
+              <option value="">Select Counselor...</option>
+              <option value="unassign">Unassign</option>
+              {counselors.map(cns => (
+                <option key={cns.id} value={cns.id}>{cns.name}</option>
+              ))}
+            </select>
+
+            <button
+              className="btn btn-primary"
+              onClick={handleBulkAssign}
+              disabled={bulkExecuting || !bulkCounselorId}
+              style={{ fontSize: '0.82rem', padding: '7px 14px' }}
+            >
+              {bulkExecuting ? 'Assigning...' : 'Assign to Selected'}
+            </button>
+
+            <button
+              className="btn btn-secondary"
+              onClick={handleBulkAutoAssign}
+              disabled={bulkExecuting}
+              style={{ fontSize: '0.82rem', padding: '7px 14px' }}
+            >
+              ⚡ Auto-Distribute Selected
+            </button>
+
+            <button
+              className="btn btn-secondary"
+              onClick={() => setSelectedIds(new Set())}
+              style={{ fontSize: '0.82rem', padding: '7px 12px' }}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Table grid */}
       {loading ? (
         <div className="glass-panel" style={{ padding: '60px', textAlign: 'center', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
@@ -891,11 +1133,20 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             <table className="custom-table">
               <thead>
                 <tr>
+                  <th style={{ width: '40px', textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.size === contacts.length && contacts.length > 0}
+                      onChange={toggleSelectAll}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </th>
                   <th>Name</th>
                   <th>Phone Number</th>
                   <th>Admissions Stage</th>
                   <th>Call Status</th>
                   <th>Classification</th>
+                  <th>Call Cost</th>
                   <th>Counsellor</th>
                   <th>Email</th>
                   <th style={{ textAlign: 'center' }}>Actions</th>
@@ -903,7 +1154,15 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
               </thead>
               <tbody>
                 {contacts.map((c) => (
-                  <tr key={c.id}>
+                  <tr key={c.id} style={{ background: selectedIds.has(c.id) ? 'rgba(99, 102, 241, 0.06)' : undefined }}>
+                    <td style={{ textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(c.id)}
+                        onChange={() => toggleSelectContact(c.id)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </td>
                     <td style={{ fontWeight: 600 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <div className="avatar-circle">
@@ -927,6 +1186,31 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                     </td>
                     <td><InterestBadge level={c.interest_level} score={c.lead_score} reasons={c.score_reasons} /></td>
                     <td>
+                      {c.call_cost && c.call_cost.call_count > 0 ? (
+                        <div
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => viewHistory(c)}
+                          title={isAdmin && c.call_cost.provider_total_cost !== null && c.call_cost.provider_total_cost !== undefined
+                            ? `Carrier Cost: ₹${c.call_cost.provider_total_cost.toFixed(2)} | Final Billed: ₹${c.call_cost.customer_billable_total.toFixed(2)}`
+                            : `Total Billed: ₹${c.call_cost.customer_billable_total.toFixed(2)}`}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                            ₹{(isAdmin && c.call_cost.provider_total_cost !== null && c.call_cost.provider_total_cost !== undefined
+                              ? c.call_cost.provider_total_cost
+                              : c.call_cost.customer_billable_total).toFixed(2)}
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            {c.call_cost.call_count} {c.call_cost.call_count === 1 ? 'call' : 'calls'}
+                            {isAdmin && c.call_cost.provider_total_cost !== null && c.call_cost.provider_total_cost !== undefined && (
+                              <span> • Billed: ₹{c.call_cost.customer_billable_total.toFixed(2)}</span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>₹0.00</span>
+                      )}
+                    </td>
+                    <td>
                       <select
                         value={c.assigned_counselor_id || 'none'}
                         onChange={(e) => handleAssignCounselor(c.id, e.target.value)}
@@ -949,6 +1233,21 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                           </option>
                         ))}
                       </select>
+                      {c.counselor_followup_status && (
+                        <div style={{ marginTop: '4px' }}>
+                          <span style={{
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            padding: '1px 6px',
+                            borderRadius: '6px',
+                            background: c.counselor_followup_status === 'Completed' ? 'rgba(34, 197, 94, 0.1)' : c.counselor_followup_status === 'InProgress' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(245, 158, 11, 0.1)',
+                            color: c.counselor_followup_status === 'Completed' ? '#16a34a' : c.counselor_followup_status === 'InProgress' ? '#2563eb' : '#d97706',
+                            border: `1px solid ${c.counselor_followup_status === 'Completed' ? 'rgba(34, 197, 94, 0.25)' : c.counselor_followup_status === 'InProgress' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`,
+                          }}>
+                            {c.counselor_followup_status === 'InProgress' ? 'In Progress' : c.counselor_followup_status}
+                          </span>
+                        </div>
+                      )}
                     </td>
                     <td style={{ color: 'var(--text-secondary)' }}>{c.email || '—'}</td>
                     <td>
@@ -1362,8 +1661,29 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                   Call with{' '}
                   <span style={{ color: 'var(--accent-primary)' }}>{selectedContact.name}</span>
                 </h3>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  {selectedContact.phone_number}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                    {selectedContact.phone_number}
+                  </div>
+                  {selectedContact.call_cost && selectedContact.call_cost.call_count > 0 && (
+                    <div style={{
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      background: 'rgba(99, 102, 241, 0.1)',
+                      color: 'var(--accent-primary)',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(99, 102, 241, 0.25)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      {isAdmin && selectedContact.call_cost.provider_total_cost !== undefined && selectedContact.call_cost.provider_total_cost !== null
+                        ? `💰 Carrier Cost: ₹${selectedContact.call_cost.provider_total_cost.toFixed(2)} (Billed: ₹${selectedContact.call_cost.customer_billable_total.toFixed(2)})`
+                        : `💳 Call Billing Total: ₹${selectedContact.call_cost.customer_billable_total.toFixed(2)}`
+                      }
+                    </div>
+                  )}
                 </div>
               </div>
               <button
@@ -1532,11 +1852,139 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
             </div>
           </div>
 
+          {/* Counselor Follow-up & Activity Timeline Section */}
+          <div style={{
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '12px',
+            padding: '18px',
+            marginBottom: '24px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h4 style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <History size={16} style={{ color: 'var(--accent-primary)' }} />
+                Counselor Follow-up & Activities
+              </h4>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {activities.length} {activities.length === 1 ? 'activity' : 'activities'}
+              </span>
+            </div>
+
+            {/* Quick Activity Form */}
+            <form onSubmit={handleLogDrawerActivity} style={{ background: 'var(--bg-tertiary)', padding: '14px', borderRadius: '10px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                <div>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Action</label>
+                  <select
+                    className="form-input"
+                    value={newActionType}
+                    onChange={(e) => setNewActionType(e.target.value)}
+                    style={{ fontSize: '0.8rem', padding: '6px 8px' }}
+                  >
+                    <option value="Call">📞 Phone Call</option>
+                    <option value="WhatsApp">💬 WhatsApp</option>
+                    <option value="CampusVisit">🏫 Campus Visit</option>
+                    <option value="Email">📧 Email</option>
+                    <option value="Note">📝 Counselor Note</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Follow-up Status</label>
+                  <select
+                    className="form-input"
+                    value={newFollowupStatus}
+                    onChange={(e) => setNewFollowupStatus(e.target.value)}
+                    style={{ fontSize: '0.8rem', padding: '6px 8px' }}
+                  >
+                    <option value="InProgress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Pending">Pending</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '10px' }}>
+                <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>Outcome / Disposition</label>
+                <select
+                  className="form-input"
+                  value={newActionOutcome}
+                  onChange={(e) => setNewActionOutcome(e.target.value)}
+                  style={{ fontSize: '0.8rem', padding: '6px 8px', width: '100%' }}
+                >
+                  <option value="Connected - Interested in Admission">Connected - Interested</option>
+                  <option value="Campus Visit Scheduled">Campus Visit Scheduled</option>
+                  <option value="Virtual Consultation Booked">Virtual Consultation Booked</option>
+                  <option value="Follow-up Call Requested">Follow-up Call Requested</option>
+                  <option value="Fee Details Shared">Fee Details Shared</option>
+                  <option value="No Answer / Busy">No Answer / Busy</option>
+                  <option value="Not Interested / Dropped">Not Interested / Dropped</option>
+                </select>
+              </div>
+
+              <div style={{ marginBottom: '10px' }}>
+                <textarea
+                  className="form-input"
+                  rows={2}
+                  value={newActionNotes}
+                  onChange={(e) => setNewActionNotes(e.target.value)}
+                  placeholder="Notes from parent conversation..."
+                  style={{ fontSize: '0.8rem' }}
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={loggingDrawerActivity}
+                style={{ fontSize: '0.78rem', padding: '6px 14px', width: '100%' }}
+              >
+                {loggingDrawerActivity ? 'Logging...' : '+ Log Counselor Activity'}
+              </button>
+            </form>
+
+            {/* Activities List */}
+            {activities.length === 0 ? (
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>
+                No counselor follow-up activities recorded yet.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+                {activities.map((act) => (
+                  <div key={act.id} style={{ background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.8rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>
+                        {act.action_type === 'Call' ? '📞 Call' : act.action_type === 'WhatsApp' ? '💬 WhatsApp' : act.action_type === 'CampusVisit' ? '🏫 Campus Visit' : act.action_type === 'AutoAssign' ? '⚡ Auto-Assign' : '📝 ' + act.action_type}
+                      </span>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        {formatDateTime(act.created_at)}
+                      </span>
+                    </div>
+                    {act.outcome && (
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                        {act.outcome}
+                      </div>
+                    )}
+                    {act.notes && (
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                        {act.notes}
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      By: {act.counselor_name || 'System / Counselor'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Pending Callback Banner */}
           {schedules && schedules.length > 0 && (() => {
             const activeCb = schedules.find((s: any) => s.status === 'Scheduled');
             if (!activeCb) return null;
-            const isCounselorCb = activeCb.call_type === 'Counselor';
+            const isCounselorCb = activeCb.call_type === 'Counselor' ||
+                                  activeCb.call_type === 'counselor' ||
+                                  (activeCb.reason && /counselor|counsellor|human|admissions|consultation/i.test(activeCb.reason));
             return (
               <div style={{
                 background: isCounselorCb ? 'rgba(245, 158, 11, 0.12)' : 'rgba(99, 102, 241, 0.12)',
@@ -1546,7 +1994,7 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                 marginBottom: '24px',
                 display: 'flex',
                 alignItems: 'center',
-                justify: 'space-between',
+                justifyContent: 'space-between',
                 gap: '12px'
               }}>
                 <div>
@@ -1730,10 +2178,45 @@ export default function Contacts({ showToast, jumpToContactId, onJumpHandled, ju
                       <span className={`badge badge-${(attempt.outcome || 'calling').toLowerCase()}`}>
                         {attempt.outcome || 'Calling'}
                       </span>
-                      {attempt.duration_sec && (
+                      {attempt.duration_sec ? (
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                           • {Math.floor(attempt.duration_sec / 60)}m {Math.floor(attempt.duration_sec % 60)}s
                         </span>
+                      ) : null}
+
+                      {/* Itemized Per-Call Cost Badge */}
+                      {attempt.cost && (
+                        <div style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'rgba(16, 185, 129, 0.08)',
+                          border: '1px solid rgba(16, 185, 129, 0.25)',
+                          borderRadius: '6px',
+                          padding: '2px 8px',
+                          fontSize: '0.74rem'
+                        }}>
+                          {isAdmin && attempt.cost.provider_total_cost !== undefined && attempt.cost.provider_total_cost !== null ? (
+                            <>
+                              <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                                Carrier Cost: ₹{attempt.cost.provider_total_cost.toFixed(2)}
+                              </span>
+                              <span style={{ color: 'var(--text-muted)' }}>•</span>
+                              <span style={{ color: 'var(--text-secondary)' }}>
+                                Billed: ₹{attempt.cost.customer_billable_total.toFixed(2)}
+                              </span>
+                              {attempt.cost.markup_amount !== undefined && attempt.cost.markup_amount !== null && (
+                                <span style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>
+                                  (+₹{attempt.cost.markup_amount.toFixed(2)})
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                              Billed: ₹{attempt.cost.customer_billable_total.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
 

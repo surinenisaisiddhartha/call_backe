@@ -162,31 +162,31 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
         boxShadow: 'var(--shadow-xl)',
         borderRadius: '16px'
       }}>
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '64px',
-            height: '64px',
-            borderRadius: '16px',
-            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.1) 100%)',
-            color: 'var(--accent-primary)',
-            marginBottom: '16px',
-            border: '1px solid rgba(16, 185, 129, 0.25)',
-            boxShadow: '0 4px 16px rgba(16, 185, 129, 0.15)',
-            transition: 'transform 0.3s var(--ease-spring)'
-          }}>
-            {inChallenge ? <KeyRound size={30} /> : step === 'email' ? <Mail size={30} /> : <Lock size={30} />}
-          </div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2.2rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px', letterSpacing: '-0.02em' }}>
-            EnquiryCall
+        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+          <img
+            src="/logo.png"
+            alt="Response AI"
+            style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              objectFit: 'cover',
+              marginBottom: '14px',
+              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.15)',
+              display: 'inline-block'
+            }}
+          />
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px', letterSpacing: '-0.02em' }}>
+            Response AI
           </h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginTop: '4px' }}>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.86rem', marginTop: '2px', fontWeight: 600 }}>
+            Admissions CRM
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '6px' }}>
             {inChallenge
               ? 'Choose a new password for your account'
               : step === 'email'
-                ? 'Enter your email to continue'
+                ? 'Sign in to access your admission pipeline'
                 : 'Enter your password to sign in'}
           </p>
         </div>
@@ -338,7 +338,7 @@ export default function Login({ onLoginSuccess, showToast }: LoginProps) {
           </form>
         )}
 
-        <div style={{ marginTop: '32px', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+        <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
           Product Delivered by <strong>Response Informatics</strong>
         </div>
       </div>

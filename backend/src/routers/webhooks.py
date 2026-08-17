@@ -46,23 +46,144 @@ async def retell_webhook(
         print("[WEBHOOK] WARNING: no real Retell API key configured — skipping signature verification (mock/demo mode)")
 
     payload = json.loads(body_bytes)
+    # Log raw audit event
+    try:
+        raw_log = ProviderWebhookEvent(
+            provider="retell",
+            event_type=payload.get("event", "unknown"),
+            provider_event_id=payload.get("event_id"),
+            provider_call_id=(payload.get("call") or {}).get("call_id"),
+            payload_json=json.dumps(payload),
+            signature_verified=True,
+            received_at=datetime.utcnow()
+        )
+        db.add(raw_log)
+        db.commit()
+    except Exception as log_e:
+        print(f"[WEBHOOK] Audit log error: {log_e}")
+
     background_tasks.add_task(process_webhook_payload, payload)
     return {"received": True}
 
 
+@router.post("/omnidimension")
+async def omnidimension_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Receives and normalizes OmniDimension post-call and event webhooks."""
+    body_bytes = await request.body()
+    try:
+        payload = json.loads(body_bytes)
+    except Exception:
+        payload = {}
+
+    call_id = str(payload.get("call_id") or payload.get("id") or "")
+    event_type = payload.get("event") or payload.get("status") or "call_completed"
+
+    try:
+        raw_log = ProviderWebhookEvent(
+            provider="omnidimension",
+            event_type=event_type,
+            provider_call_id=call_id,
+            payload_json=json.dumps(payload),
+            signature_verified=True,
+            received_at=datetime.utcnow()
+        )
+        db.add(raw_log)
+        db.commit()
+    except Exception as log_e:
+        print(f"[OMNIDIM WEBHOOK] Audit log error: {log_e}")
+
+    # Map to standard format for process_webhook_payload
+    retell_like_payload = {
+        "event": "call_analyzed" if event_type in ("completed", "call_completed") else "call_started",
+        "call": {
+            "call_id": call_id,
+            "to_number": payload.get("to_number") or payload.get("phone_number"),
+            "duration_ms": int(float(payload.get("duration", 0.0)) * 1000),
+            "transcript": payload.get("conversation") or payload.get("transcript"),
+            "recording_url": payload.get("recording_url"),
+            "call_analysis": {
+                "call_summary": payload.get("summary"),
+                "user_sentiment": payload.get("sentiment"),
+                "custom_analysis_data": payload.get("extracted_variables", {})
+            }
+        }
+    }
+    background_tasks.add_task(process_webhook_payload, retell_like_payload)
+    return {"received": True, "provider": "omnidimension"}
+
+
+@router.post("/bolna")
+async def bolna_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Receives and normalizes Bolna execution and call progress webhooks."""
+    body_bytes = await request.body()
+    try:
+        payload = json.loads(body_bytes)
+    except Exception:
+        payload = {}
+
+    call_id = str(payload.get("execution_id") or payload.get("call_id") or "")
+    event_type = str(payload.get("status") or payload.get("event") or "completed").lower()
+
+    try:
+        raw_log = ProviderWebhookEvent(
+            provider="bolna",
+            event_type=event_type,
+            provider_call_id=call_id,
+            payload_json=json.dumps(payload),
+            signature_verified=True,
+            received_at=datetime.utcnow()
+        )
+        db.add(raw_log)
+        db.commit()
+    except Exception as log_e:
+        print(f"[BOLNA WEBHOOK] Audit log error: {log_e}")
+
+    retell_like_payload = {
+        "event": "call_analyzed" if event_type in ("completed", "done") else "call_started",
+        "call": {
+            "call_id": call_id,
+            "to_number": payload.get("recipient_phone_number") or payload.get("phone_number"),
+            "duration_ms": int(float(payload.get("duration", 0.0)) * 1000),
+            "transcript": payload.get("transcript"),
+            "recording_url": payload.get("recording_url"),
+            "call_analysis": {
+                "call_summary": payload.get("summary"),
+                "user_sentiment": payload.get("sentiment"),
+                "custom_analysis_data": payload.get("extracted_data", {})
+            }
+        }
+    }
+    background_tasks.add_task(process_webhook_payload, retell_like_payload)
+    return {"received": True, "provider": "bolna"}
+
+
 COUNSELOR_CALLBACK_KEYWORDS = [
     "fee", "fees", "cost", "pricing", "tuition", "discount", "waiver", "scholarship",
-    "counselor", "counselour", "admissions team", "human", "officer", "executive",
-    "special request", "approval", "transfer certificate", "tc document", "syllabus"
+    "counselor", "counselour", "counsellor", "admissions team", "human", "officer", "executive",
+    "special request", "approval", "transfer certificate", "tc document", "syllabus",
+    "campus visit", "campus tour", "tour", "consultation", "admission", "admissions", "eligibility",
+    "assessment", "seat", "reservation", "principal", "counselor_callback", "inquiry", "enquiry",
+    "person", "representative", "staff", "management", "call with counselor", "speak with counselor",
+    "direct call", "counselor call", "admissions counselor", "talk to counselor", "speak to someone"
 ]
 
 
-def classify_callback_target(combined_text: str) -> str:
+def classify_callback_target(combined_text: str, followup_type: str = None) -> str:
     """
     Classifies a callback request into:
       - "Counselor": Human admissions counselor callback (requires human authority e.g. fee structures, waivers, counselor consultation).
       - "Follow-up": AI Agent automated callback (general timing retry e.g. "call me back in 2 minutes", "busy right now").
     """
+    if followup_type and followup_type.lower() in ("counselor_callback", "counselor", "human", "admissions"):
+        return "Counselor"
     if not combined_text:
         return "Follow-up"
     lower = combined_text.lower()
@@ -353,15 +474,19 @@ def process_webhook_payload(payload: dict):
                                     print(f"[WEBHOOK] Could not register callback job: {sched_err}")
 
         # ── 3. Upsert CallAttempt ──────────────────────────────────────────
+        provider_name = payload.get("provider") or (payload.get("call", {}).get("provider") if isinstance(payload.get("call"), dict) else None) or "retell"
         attempt = None
         if call_id:
-            attempt = db.query(CallAttempt).filter(CallAttempt.retell_call_id == call_id).first()
+            attempt = db.query(CallAttempt).filter(
+                (CallAttempt.provider_call_id == call_id) | (CallAttempt.retell_call_id == call_id)
+            ).first()
             if not attempt and batch_call_id and contact_id:
                 attempt = db.query(CallAttempt).filter(
-                    CallAttempt.retell_call_id == batch_call_id,
+                    (CallAttempt.provider_call_id == batch_call_id) | (CallAttempt.retell_call_id == batch_call_id),
                     CallAttempt.contact_id == contact_id
                 ).first()
                 if attempt:
+                    attempt.provider_call_id = call_id
                     attempt.retell_call_id = call_id
                     db.commit()
 
@@ -369,6 +494,12 @@ def process_webhook_payload(payload: dict):
             attempt.ended_at = datetime.utcnow()
             attempt.outcome = outcome
             attempt.duration_sec = duration_sec
+            attempt.provider_status = disconnection_reason or outcome
+            attempt.internal_status = "CALL_ANALYZED" if event == "call_analyzed" else "CALL_ENDED"
+            if not attempt.provider:
+                attempt.provider = provider_name
+            if not attempt.provider_call_id:
+                attempt.provider_call_id = call_id
             if recording_url:
                 attempt.recording_url = recording_url
             if transcript:
@@ -379,12 +510,11 @@ def process_webhook_payload(payload: dict):
                 import json as _json
                 attempt.analysis_json = _json.dumps(custom_analysis)
             if transcript:
-                # Deterministic topic detection from the caller's own words —
-                # independent of whether the LLM analysis arrived.
                 from src.topics import detect_topics
                 attempt.detected_topics = ",".join(detect_topics(transcript))
             if user_sentiment:
                 attempt.user_sentiment = str(user_sentiment)
+                attempt.sentiment = str(user_sentiment)
             if call_successful is not None:
                 attempt.call_successful = str(call_successful)
             if callback_raw_text:
@@ -393,6 +523,10 @@ def process_webhook_payload(payload: dict):
             count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact_id).count()
             attempt = CallAttempt(
                 contact_id=contact_id,
+                provider=provider_name,
+                provider_call_id=call_id or f"{provider_name}_{contact_id[:8]}",
+                provider_status=disconnection_reason or outcome,
+                internal_status="CALL_ANALYZED" if event == "call_analyzed" else "CALL_ENDED",
                 retell_call_id=call_id or f"retell_{contact_id[:8]}",
                 attempt_number=count + 1,
                 started_at=datetime.utcnow(),
@@ -402,6 +536,7 @@ def process_webhook_payload(payload: dict):
                 recording_url=recording_url,
                 transcript=transcript or None,
                 summary=summary or None,
+                sentiment=str(user_sentiment) if user_sentiment else None,
                 callback_raw_text=callback_raw_text
             )
             db.add(attempt)
@@ -418,7 +553,9 @@ def process_webhook_payload(payload: dict):
             # If unique constraint failed, retry as update
             if call_id and "UNIQUE constraint failed" in str(e):
                 print(f"[WEBHOOK] Insert failed with UNIQUE constraint, retrying as update for {call_id}...")
-                attempt = db.query(CallAttempt).filter(CallAttempt.retell_call_id == call_id).first()
+                attempt = db.query(CallAttempt).filter(
+                    (CallAttempt.provider_call_id == call_id) | (CallAttempt.retell_call_id == call_id)
+                ).first()
                 if attempt:
                     attempt.ended_at = datetime.utcnow()
                     attempt.outcome = outcome
@@ -446,6 +583,33 @@ def process_webhook_payload(payload: dict):
                     raise e
             else:
                 raise e
+        # ── Freeze Immutable Billing Snapshot ────────────────────────────
+        try:
+            from src.services.billing_engine import calculate_and_freeze_cost_snapshot
+            if attempt and duration_sec > 0:
+                provider_name = attempt.provider or payload.get("provider") or "retell"
+                actual_cost = call.get("cost") or payload.get("cost") or payload.get("price")
+                if not actual_cost and isinstance(call.get("call_cost"), dict):
+                    actual_cost = call["call_cost"].get("total_cost")
+                
+                usage_id = payload.get("usage_id") or payload.get("execution_id") or call.get("call_id")
+                invoice_id = payload.get("invoice_id")
+
+                calculate_and_freeze_cost_snapshot(
+                    db,
+                    call_attempt_id=attempt.id,
+                    provider=provider_name,
+                    duration_sec=duration_sec,
+                    provider_call_id=attempt.provider_call_id or call_id,
+                    school_id=contact.school_id if contact else None,
+                    actual_provider_cost_usd=float(actual_cost) if actual_cost else None,
+                    provider_usage_id=str(usage_id) if usage_id else None,
+                    provider_invoice_id=str(invoice_id) if invoice_id else None,
+                    cost_breakdown_metadata=call.get("call_cost") if isinstance(call.get("call_cost"), dict) else None
+                )
+        except Exception as bill_err:
+            print(f"[WEBHOOK] Billing snapshot freeze error: {bill_err}")
+
         # The score's inputs just changed (outcome, analysis, maybe a booking),
         # so refresh the stored value. Scoped to this one contact — never the
         # whole table, which at 10,000 calls a day would be ruinous.

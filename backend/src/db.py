@@ -1,7 +1,7 @@
 import os
 import uuid
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, ForeignKey, Text, Boolean, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from dotenv import load_dotenv
@@ -105,11 +105,7 @@ class School(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # ── Per-school overrides ──────────────────────────────────────────
-    # All nullable: a school with none of these set falls back to the
-    # platform's global Settings/env values (src/school_settings.py), so
-    # existing schools keep working unchanged until an admin configures
-    # them individually. retell_api_key is deliberately NOT here — one
-    # Retell account serves every school's (separate) agent.
+    custom_prompt = Column(Text, nullable=True)                     # school-specific system prompt override
     retell_phone_number = Column(String(50), nullable=True)         # this school's outbound caller ID
     google_calendar_credentials_json = Column(Text, nullable=True)  # this school's own service account
     google_calendar_id = Column(String(255), nullable=True)
@@ -256,35 +252,46 @@ class Contact(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     batch = relationship("UploadBatch", back_populates="contacts")
-    attempts = relationship("CallAttempt", back_populates="contact", cascade="all, delete-orphan")
+    attempts = relationship("CallAttempt", back_populates="contact")
     schedules = relationship("ScheduledCallback", back_populates="contact", cascade="all, delete-orphan")
 
 class CallAttempt(Base):
     __tablename__ = "call_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_call_id",
+            name="uq_call_attempt_provider_call",
+        ),
+    )
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    contact_id = Column(String(36), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
-    retell_call_id = Column(String(255), nullable=False, unique=True)
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="SET NULL"), nullable=True, index=True)
+    contact_id = Column(String(36), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
+    contact_name = Column(String(255), nullable=True)
+    contact_phone = Column(String(255), nullable=True)
+    provider = Column(String(50), nullable=False, default="retell", index=True)
+    provider_call_id = Column(String(255), nullable=False, index=True)
+    provider_agent_id = Column(String(255), nullable=True)
+    provider_phone_number_id = Column(String(255), nullable=True)
+    direction = Column(String(20), default="outbound")     # "inbound" or "outbound"
+    provider_status = Column(String(100), nullable=True)   # completed, in-progress, failed, etc.
+    internal_status = Column(String(100), nullable=True)   # CALL_STARTED, CALL_ENDED, CALL_ANALYZED, etc.
+    retell_call_id = Column(String(255), nullable=True)     # Backward compatibility alias
     attempt_number = Column(Integer, nullable=False)
     started_at = Column(DateTime, nullable=False)
     ended_at = Column(DateTime, nullable=True)
     outcome = Column(String(50), nullable=True)  # Answered, NoAnswer, Busy, Rejected, Failed, InProgress
     transcript = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)
-    recording_url = Column(String(500), nullable=True)   # Retell-hosted recording URL
+    recording_url = Column(String(500), nullable=True)   # Provider-hosted recording URL
     duration_sec = Column(Float, nullable=True)           # Call duration in seconds
+    sentiment = Column(String(50), nullable=True)         # Positive / Neutral / Negative
     callback_raw_text = Column(Text, nullable=True)       # Raw phrase from lead e.g. "tomorrow at 11"
-    # ── Post-call analysis (from Retell's call_analyzed webhook) ──────
-    # Stored as JSON rather than one column per field: the field list is
-    # defined in school_agent.POST_CALL_ANALYSIS_FIELDS and will change as
-    # the team learns what's useful, and a schema migration per tweak would
-    # make that painful for no gain — nothing joins or filters on these.
+    # ── Post-call analysis ─────────────────────────────────────────────
     analysis_json = Column(Text, nullable=True)           # synopsis, topics, interest, caller type, concerns, next step
-    # Topics detected deterministically from the CALLER's own words (src/topics.py).
-    # Separate from the LLM's analysis on purpose: this is reproducible, works on
-    # calls made before analysis existed, and costs nothing per call.
     detected_topics = Column(Text, nullable=True)         # comma-separated labels
-    user_sentiment = Column(String(50), nullable=True)    # Retell's own read: Positive / Neutral / Negative
-    call_successful = Column(String(10), nullable=True)   # Retell's own judgement of whether the call achieved its goal
+    user_sentiment = Column(String(50), nullable=True)    # Compatibility alias for sentiment
+    call_successful = Column(String(10), nullable=True)   # Goal achievement flag
     created_at = Column(DateTime, default=datetime.utcnow)
 
     contact = relationship("Contact", back_populates="attempts")
@@ -353,6 +360,157 @@ class CounselorActivity(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class VoiceProviderConfig(Base):
+    """Stores per-school and global provider configurations."""
+    __tablename__ = "voice_provider_configs"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    provider = Column(String(50), nullable=False)          # 'retell', 'omnidimension', 'bolna'
+    is_active = Column(Boolean, default=False)             # Current active dialing provider
+    is_enabled = Column(Boolean, default=True)             # Enabled for selection
+    configuration_status = Column(String(30), default="draft") # draft, ready, active, error
+    api_key_encrypted = Column(Text, nullable=True)        # Encrypted provider credential
+    agent_id = Column(String(255), nullable=True)          # Provider-specific agent ID
+    phone_number_id = Column(String(255), nullable=True)   # Provider-specific phone ID
+    phone_number = Column(String(50), nullable=True)       # E.164 caller ID
+    telephony_provider = Column(String(50), nullable=True) # twilio, exotel, sip, managed
+    webhook_url = Column(String(500), nullable=True)
+    last_validated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class ProviderPhoneNumber(Base):
+    """Maps managed and BYO phone numbers per provider."""
+    __tablename__ = "provider_phone_numbers"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    provider = Column(String(50), nullable=False)          # 'retell', 'omnidimension', 'bolna'
+    provider_number_id = Column(String(255), nullable=False)
+    phone_number = Column(String(50), nullable=False)
+    agent_id = Column(String(255), nullable=True)
+    telephony_provider = Column(String(50), default="managed") # managed, twilio, exotel, sip
+    supports_inbound = Column(Boolean, default=True)
+    supports_outbound = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class BillingRateVersion(Base):
+    """Versioned provider base rates (per minute)."""
+    __tablename__ = "billing_rate_versions"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_number = Column(Integer, nullable=False)
+    provider = Column(String(50), nullable=False)          # 'retell', 'omnidimension', 'bolna'
+    platform_rate_per_min = Column(Float, default=0.03)
+    telephony_rate_per_min = Column(Float, default=0.015)
+    stt_rate_per_min = Column(Float, default=0.005)
+    llm_rate_per_min = Column(Float, default=0.02)
+    tts_rate_per_min = Column(Float, default=0.01)
+    currency = Column(String(10), default="USD")           # USD, INR
+    is_current = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class CustomerPricingVersion(Base):
+    """Versioned customer pricing rates and tax configuration (e.g. ₹15.00/min + 18% GST)."""
+    __tablename__ = "customer_pricing_versions"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_number = Column(Integer, nullable=False, default=1)
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    rate_per_min = Column(Float, default=15.00) # ₹15.00/min
+    tax_rate_percent = Column(Float, default=18.0) # 18% GST
+    currency = Column(String(10), default="INR")
+    is_current = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SchoolBillingSettings(Base):
+    """SaaS markup and customer pricing settings."""
+    __tablename__ = "school_billing_settings"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    markup_type = Column(String(20), default="fixed_per_min") # percentage, fixed_per_min
+    markup_value = Column(Float, default=15.0)             # ₹15.00/min
+    currency = Column(String(10), default="INR")           # INR, USD
+    tax_rate_percent = Column(Float, default=18.0)         # 18% GST
+    min_billable_seconds = Column(Integer, default=0)
+    rounding_mode = Column(String(20), default="per_second") # per_second, per_minute
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class CallCostSnapshot(Base):
+    """Immutable billing snapshot frozen upon call completion with dual-layer cost evidence and client pricing."""
+    __tablename__ = "call_cost_snapshots"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="SET NULL"), nullable=True, index=True)
+    school_name = Column(String(255), nullable=True)
+    contact_name = Column(String(255), nullable=True)
+    contact_phone = Column(String(255), nullable=True)
+    call_attempt_id = Column(String(36), ForeignKey("call_attempts.id", ondelete="SET NULL"), nullable=True)
+    provider = Column(String(50), nullable=False, default="retell", index=True)
+    provider_call_id = Column(String(255), nullable=True, index=True)
+    retell_call_id = Column(String(255), nullable=True) # backward compatibility alias
+    provider_rate_version_id = Column(String(36), ForeignKey("billing_rate_versions.id"), nullable=True)
+    rate_version_id = Column(String(36), nullable=True) # legacy alias
+    customer_rate_version_id = Column(String(36), ForeignKey("customer_pricing_versions.id"), nullable=True)
+    duration_sec = Column(Float, default=0.0)
+    provider_platform_cost = Column(Float, default=0.0)
+    provider_telephony_cost = Column(Float, default=0.0)
+    provider_ai_cost = Column(Float, default=0.0)
+    provider_total_cost = Column(Float, default=0.0)
+    cost_source = Column(String(50), default="rate_card") # provider_actual, rate_card, hybrid
+    provider_usage_id = Column(String(255), nullable=True)
+    provider_invoice_id = Column(String(255), nullable=True)
+    provider_cost_breakdown_json = Column(Text, nullable=True)
+    customer_rate_per_min = Column(Float, default=15.0) # ₹15.00/min
+    markup_amount = Column(Float, default=0.0)
+    markup_on_cost_percent = Column(Float, default=124.6)
+    gross_margin_percent = Column(Float, default=55.5)
+    tax_amount = Column(Float, default=0.0)
+    customer_billable_total = Column(Float, default=0.0)
+    currency = Column(String(10), default="INR")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ProviderWebhookEvent(Base):
+    """Raw webhook audit trail for operational debugging."""
+    __tablename__ = "provider_webhook_events"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    provider = Column(String(50), nullable=False)
+    event_type = Column(String(100), nullable=False)
+    provider_event_id = Column(String(255), nullable=True)
+    provider_call_id = Column(String(255), nullable=True)
+    payload_json = Column(Text, nullable=False)
+    signature_verified = Column(Boolean, default=True)
+    received_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    processing_status = Column(String(30), default="processed") # processed, ignored, error
+    error_message = Column(Text, nullable=True)
+
+class AgentConfigVersion(Base):
+    """Complete unified snapshot of AI Agent configuration (prompt, tools, qualification, transfer, voice, post-call)."""
+    __tablename__ = "agent_config_versions"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    version_number = Column(Integer, nullable=False)
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    status = Column(String(20), default="published") # published, draft, archived
+    is_current = Column(Boolean, default=True)
+    created_by = Column(String(255), default="admin")
+    change_summary = Column(String(500), nullable=True)
+    config_json = Column(Text, nullable=False) # Full JSON representation of all 10 agent modules
+    sync_status_json = Column(Text, nullable=True) # Per-provider sync results
+    created_at = Column(DateTime, default=datetime.utcnow)
+    published_at = Column(DateTime, nullable=True)
+
+class CompetitorComparison(Base):
+    """School competitor knowledge and talking points."""
+    __tablename__ = "competitor_comparisons"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    school_id = Column(String(36), ForeignKey("schools.id", ondelete="CASCADE"), nullable=True)
+    competitor_name = Column(String(255), nullable=False)
+    key_advantages = Column(Text, nullable=False)          # Why our school is better
+    curriculum_comparison = Column(Text, nullable=True)    # e.g. IB Continuum vs CBSE
+    ratio_comparison = Column(String(100), nullable=True)  # e.g. 1:8 vs 1:30
+    facilities_comparison = Column(Text, nullable=True)    # Robotics, sports, infrastructure
+    objection_scripts = Column(Text, nullable=True)        # Ready talking points for counselors
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # Self-healing migration for appointments google_calendar_html_link column
@@ -383,6 +541,13 @@ def init_db():
             print("[DB] Self-healing migration: adding virtual_meeting_link to appointments table")
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE appointments ADD COLUMN virtual_meeting_link TEXT;"))
+                conn.commit()
+
+        attempt_cols = [c['name'] for c in inspector.get_columns('call_attempts')]
+        if 'direction' not in attempt_cols:
+            print("[DB] Self-healing migration: adding direction to call_attempts table")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE call_attempts ADD COLUMN direction VARCHAR(20) DEFAULT 'outbound';"))
                 conn.commit()
 
         # ── Multi-tenancy: school_id on contacts + upload_batches, and a ──
@@ -497,9 +662,16 @@ def init_db():
             except Exception as idx_err:
                 print(f"[DB] Could not create index {index_name}: {idx_err}")
 
-        # Post-call analysis fields on call_attempts
+        # Post-call analysis and provider fields on call_attempts
         attempt_columns = [c['name'] for c in inspector.get_columns('call_attempts')]
         for col_name, col_type in (
+            ("provider", "VARCHAR(50) DEFAULT 'retell'"),
+            ("provider_call_id", "VARCHAR(255)"),
+            ("provider_agent_id", "VARCHAR(255)"),
+            ("provider_phone_number_id", "VARCHAR(255)"),
+            ("provider_status", "VARCHAR(100)"),
+            ("internal_status", "VARCHAR(100)"),
+            ("sentiment", "VARCHAR(50)"),
             ("analysis_json", "TEXT"),
             ("detected_topics", "TEXT"),
             ("user_sentiment", "VARCHAR(50)"),
@@ -509,6 +681,47 @@ def init_db():
                 print(f"[DB] Self-healing migration: adding {col_name} to call_attempts table")
                 with engine.connect() as conn:
                     conn.execute(text(f"ALTER TABLE call_attempts ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
+
+        # Drop NOT NULL constraint on retell_call_id for multi-provider compatibility
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE call_attempts ALTER COLUMN retell_call_id DROP NOT NULL;"))
+                conn.commit()
+        except Exception as drop_err:
+            pass
+
+        # Backfill provider_call_id from retell_call_id if empty
+        with engine.connect() as conn:
+            conn.execute(text("UPDATE call_attempts SET provider_call_id = retell_call_id WHERE provider_call_id IS NULL AND retell_call_id IS NOT NULL;"))
+            conn.execute(text("UPDATE call_attempts SET provider = 'retell' WHERE provider IS NULL;"))
+            conn.commit()
+
+        # Ensure composite unique index on (provider, provider_call_id)
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_call_attempt_provider_call ON call_attempts (provider, provider_call_id);"))
+                conn.commit()
+        except Exception as uq_err:
+            print(f"[DB] Unique index notice: {uq_err}")
+
+        # Self-healing migration for call_cost_snapshots table
+        snap_columns = [c['name'] for c in inspector.get_columns('call_cost_snapshots')]
+        for col_name, col_type in (
+            ("provider", "VARCHAR(50) DEFAULT 'retell'"),
+            ("provider_call_id", "VARCHAR(255)"),
+            ("retell_call_id", "VARCHAR(255)"),
+            ("provider_rate_version_id", "VARCHAR(36)"),
+            ("customer_rate_version_id", "VARCHAR(36)"),
+            ("cost_source", "VARCHAR(50) DEFAULT 'rate_card'"),
+            ("provider_usage_id", "VARCHAR(255)"),
+            ("provider_invoice_id", "VARCHAR(255)"),
+            ("provider_cost_breakdown_json", "TEXT"),
+        ):
+            if col_name not in snap_columns:
+                print(f"[DB] Self-healing migration: adding {col_name} to call_cost_snapshots table")
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE call_cost_snapshots ADD COLUMN {col_name} {col_type};"))
                     conn.commit()
 
         kc_columns = [c['name'] for c in inspector.get_columns('knowledge_chunks')]
@@ -604,18 +817,29 @@ def init_db():
                     conn.execute(text(f"ALTER TABLE counselors ADD COLUMN {col_name} {col_type};"))
                     conn.commit()
 
-        # ── CounselorActivity indexes ─────────────────────────────────
-        for index_name, table, columns in (
-            ("ix_counselor_activities_contact", "counselor_activities", "contact_id"),
-            ("ix_counselor_activities_counselor", "counselor_activities", "counselor_id"),
-            ("ix_counselor_activities_created", "counselor_activities", "created_at"),
+        # ── CallAttempt and CallCostSnapshot immutable billing columns ──
+        ca_cols = [c['name'] for c in inspector.get_columns('call_attempts')]
+        for col_name, col_type in (
+            ("school_id", "VARCHAR(36)"),
+            ("contact_name", "VARCHAR(255)"),
+            ("contact_phone", "VARCHAR(255)"),
         ):
-            try:
+            if col_name not in ca_cols:
                 with engine.connect() as conn:
-                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({columns});"))
+                    conn.execute(text(f"ALTER TABLE call_attempts ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
                     conn.commit()
-            except Exception as idx_err:
-                print(f"[DB] Could not create index {index_name}: {idx_err}")
+
+        snap_cols = [c['name'] for c in inspector.get_columns('call_cost_snapshots')]
+        for col_name, col_type in (
+            ("school_id", "VARCHAR(36)"),
+            ("school_name", "VARCHAR(255)"),
+            ("contact_name", "VARCHAR(255)"),
+            ("contact_phone", "VARCHAR(255)"),
+        ):
+            if col_name not in snap_cols:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE call_cost_snapshots ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
+                    conn.commit()
 
     except Exception as e:
         print(f"[DB] Migration warning: {e}")

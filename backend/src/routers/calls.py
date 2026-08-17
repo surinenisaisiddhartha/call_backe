@@ -1,88 +1,49 @@
 import os
-import random
 import time
-import threading
-import httpx
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+import uuid
+import json
+from datetime import datetime, timezone, timedelta
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
 from sqlalchemy.orm import Session
-from src.db import get_db, Contact, Settings, UploadBatch
+from sqlalchemy import func
+from src.db import get_db, Contact, Settings, UploadBatch, CallAttempt, School, ScheduledCallback
 from src.routers.auth import get_current_user
 from src.school_agent import get_school_agent_id
+from src.school_settings import get_school_for_contact, get_retell_phone_number
 from src.dialer import dialer
 from src.events import event_manager
+from src.utils import is_working_hours, next_working_day_start
+from src.services.voice.provider_manager import provider_manager
+from src.services.voice.models import OutboundCallRequest
 
 router = APIRouter(prefix="/api/calls", tags=["Calling"])
-
-async def make_retell_request(endpoint: str, method: str, body: dict = None) -> dict:
-    api_key = os.getenv("RETELL_API_KEY")
-    if not api_key or "mock" in api_key or api_key == "YOUR_RETELL_API_KEY" or api_key == "":
-        print(f"[RETELL MOCK] Simulated request to {endpoint}")
-        if endpoint == "/get-concurrency":
-            return {"current_concurrency": 2, "concurrency_limit": 20}
-        if endpoint == "/create-batch-call":
-            return {
-                "batch_call_id": f"batch_{random.randint(100000, 999999)}",
-                "total_task_count": len(body.get("tasks", [])) if body else 1,
-                "scheduled_timestamp": body.get("trigger_timestamp") if body else int(time.time() * 1000)
-            }
-
-    url = f"https://api.retellai.com{endpoint}"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-
-    async with httpx.AsyncClient() as client:
-        try:
-            if method.upper() == "GET":
-                response = await client.get(url, headers=headers, timeout=30.0)
-            else:
-                response = await client.post(url, headers=headers, json=body, timeout=30.0)
-
-            if response.status_code >= 400:
-                print(f"Retell error body: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail=f"Retell API failed: {response.text}")
-
-            return response.json()
-        except HTTPException:
-            raise
-        except Exception as e:
-            # Previously this silently faked a "batch_fallback_..." success
-            # response ("fallback to mock for smooth demo") whenever the real
-            # Retell request raised ANY exception (timeout, network error,
-            # etc). Callers checked for a real failure via
-            # `"error" in retell_res and "batch_call_id" not in retell_res`
-            # — which never triggered, because the fake response always
-            # included a batch_call_id alongside the error. The result: a
-            # totally failed call was reported to the UI as successfully
-            # triggered, and the contact got stuck showing "Calling" forever
-            # with no way to know the real call was never placed, and no way
-            # to see what actually went wrong. Real failures must surface as
-            # real failures.
-            print(f"[RETELL] Request to {endpoint} failed: {e}")
-            raise HTTPException(status_code=502, detail=f"Could not reach Retell: {e}")
-
-# Retell's concurrency limit is an account-level plan setting — it does not
-# change minute to minute. Every dashboard load was making a live call to
-# Retell's API for it, which was the single slowest request in the app (~1s,
-# dominated by the round trip to Retell). Cache it briefly: the number stays
-# accurate enough for a dashboard, and a plan change shows up within a minute.
-_CONCURRENCY_CACHE = {"data": None, "fetched_at": 0.0}
-_CONCURRENCY_TTL_SECONDS = 60
 
 
 @router.get("/concurrency")
 async def get_concurrency(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    import time
-    now = time.time()
-    if _CONCURRENCY_CACHE["data"] is not None and now - _CONCURRENCY_CACHE["fetched_at"] < _CONCURRENCY_TTL_SECONDS:
-        return _CONCURRENCY_CACHE["data"]
+    """
+    Returns structured concurrency metrics across active provider, school, and local dialer limits.
+    """
+    school_id = current_user.get("school_id")
+    provider = provider_manager.get_provider(school_id=school_id)
+    capabilities = provider.get_capabilities()
 
-    data = await make_retell_request("/get-concurrency", "GET")
-    _CONCURRENCY_CACHE["data"] = data
-    _CONCURRENCY_CACHE["fetched_at"] = now
-    return data
+    s = db.query(Settings).filter(Settings.key == "concurrency_limit").first()
+    school_limit = int((s.value if s else None) or os.getenv("MAX_CONCURRENT_CALLS", "15"))
+    provider_limit = capabilities.max_concurrency or 20
+    campaign_limit = min(school_limit, provider_limit)
+    local_active = dialer.get_active_calls()
+
+    return {
+        "provider": provider.provider_name,
+        "provider_limit": provider_limit,
+        "provider_active": local_active,
+        "school_limit": school_limit,
+        "campaign_limit": campaign_limit,
+        "effective_limit": campaign_limit,
+        "local_active": local_active
+    }
+
 
 @router.post("/start-campaign")
 async def start_campaign(
@@ -93,10 +54,8 @@ async def start_campaign(
 ):
     batch_id = payload.get("batchId")
     contact_ids = payload.get("contactIds")
-
-    # Determine eligible contacts (always scoped to the caller's school so a
-    # school can never start a campaign over another tenant's contacts)
     school_id = current_user.get("school_id")
+
     if batch_id:
         q = db.query(Contact).filter(
             Contact.batch_id == batch_id,
@@ -108,6 +67,7 @@ async def start_campaign(
         q = db.query(Contact).filter(
             Contact.status.in_(["Pending", "NeedsReschedule", "Failed"])
         )
+
     if school_id:
         q = q.filter(Contact.school_id == school_id)
     contacts_to_call = q.all()
@@ -115,14 +75,10 @@ async def start_campaign(
     if not contacts_to_call:
         raise HTTPException(status_code=400, detail="No eligible contacts found to call")
 
-    # Determine effective batch_id for campaign tracking
     effective_batch_id = batch_id or f"manual_{int(time.time())}"
     cid_list = [c.id for c in contacts_to_call]
 
-    # Launch via CampaignDialer (handles concurrency + auto-queue)
-    result = background_tasks.add_task(
-        _start_dialer_campaign, effective_batch_id, cid_list
-    )
+    background_tasks.add_task(_start_dialer_campaign, effective_batch_id, cid_list)
 
     event_manager.broadcast_sync(
         "CAMPAIGN_UPDATE",
@@ -130,7 +86,6 @@ async def start_campaign(
         school_id=school_id
     )
 
-    # Fetch setting for response message
     concurrency_setting = db.query(Settings).filter(Settings.key == "concurrency_limit").first()
     concurrency_val = (concurrency_setting.value if concurrency_setting else None) or os.getenv('MAX_CONCURRENT_CALLS', '15')
 
@@ -156,14 +111,11 @@ async def get_campaign_status(
     current_user: dict = Depends(get_current_user)
 ):
     """Return live dialer status + DB stats for a campaign."""
-    from src.db import UploadBatch
     live = dialer.get_status(batch_id)
     batch = db.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
     if current_user.get("school_id") and batch and batch.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
-    from sqlalchemy import func
-    from src.db import Contact
     status_counts = db.query(Contact.status, func.count(Contact.id)).filter(
         Contact.batch_id == batch_id
     ).group_by(Contact.status).all()
@@ -177,10 +129,10 @@ async def get_campaign_status(
         "db_stats": counts
     }
 
+
 @router.post("/{contact_id}/call-now")
 async def call_now(
     contact_id: str,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -190,19 +142,14 @@ async def call_now(
     if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Contact not found")
 
-    # Per-school calling window
-    from src.utils import is_working_hours, next_working_day_start
     start_hour, end_hour = 9, 21
     if contact.school_id:
-        from src.db import School
         school = db.query(School).filter(School.id == contact.school_id).first()
         if school:
             start_hour = school.calling_start_hour or 9
             end_hour = school.calling_end_hour or 21
 
     if not is_working_hours(start_hour=start_hour, end_hour=end_hour):
-        # Auto-schedule for next working day instead of a hard block
-        from src.db import ScheduledCallback
         retry_time = next_working_day_start(start_hour)
         existing = db.query(ScheduledCallback).filter(
             ScheduledCallback.contact_id == contact_id,
@@ -212,7 +159,7 @@ async def call_now(
             cb = ScheduledCallback(
                 contact_id=contact_id,
                 scheduled_for=retry_time,
-                reason=f"Auto-scheduled: call-now attempted outside calling hours",
+                reason="Auto-scheduled: call-now attempted outside calling hours",
                 status="Scheduled",
                 call_type="Follow-up"
             )
@@ -231,69 +178,74 @@ async def call_now(
     contact.updated_at = datetime.utcnow()
     db.commit()
 
-    # Everything below can fail (agent lookup, the Retell API call itself,
-    # a network error). Without reverting on failure, the contact was left
-    # permanently stuck showing "Calling" in the dashboard even though no
-    # call was ever actually placed — confirmed happening in production.
     try:
-        # Use the contact's own school's dedicated agent + caller ID (its
-        # prompt carries that school's name/location); fall back to the
-        # shared defaults for contacts with no school (pre-multitenancy rows).
-        from src.agent_manager import get_or_create_local_agent
-        from src.school_settings import get_school_for_contact, get_retell_phone_number
         school = get_school_for_contact(db, contact)
-        agent_id = get_school_agent_id(db, contact) or get_or_create_local_agent()
+        agent_id = get_school_agent_id(db, contact) or "default_admission_agent"
         from_number = get_retell_phone_number(db, school)
-        from datetime import timezone, timedelta
+
+        provider = provider_manager.get_provider(school_id=contact.school_id)
+
+        school_name_val = school.name if school and school.name else "The Shri Ram Academy"
+        school_loc_val = school.location if school and school.location else "Gachibowli, Hyderabad"
+        school_phone_val = (school.contact_phone if school and school.contact_phone else None) or from_number or "+91 75698 91111"
+
         dynamic_vars = {
             "contact_id": contact_id,
             "caller_name": contact.name,
+            "student_name": getattr(contact, "child_name", None) or contact.name,
+            "grade_applying": getattr(contact, "grade_sought", None) or "Grade 5 (Primary Years)",
+            "academic_year": getattr(contact, "academic_year", None) or "2026-2027",
+            "school_name": school_name_val,
+            "location": school_loc_val,
+            "contact_phone": school_phone_val,
             "caller_email": contact.email or "",
             "notes": contact.notes or "",
+            "booking_link": "https://cal.com/tsra-admissions/campus-tour",
             "campaign_name": f"Manual-Call-{contact_id[:8]}",
             "current_datetime": datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(microsecond=0).isoformat()
         }
-        task_data = {
-            "to_number": contact.phone_number,
-            "retell_llm_dynamic_variables": dynamic_vars
-        }
-        if agent_id and agent_id.strip() and not agent_id.startswith("agent_mock"):
-            task_data["override_agent_id"] = agent_id.strip()
 
-        retell_res = await make_retell_request("/create-batch-call", "POST", {
-            "from_number": from_number,
-            "name": f"Single Call - {contact.name}",
-            "tasks": [task_data]
-        })
+        call_request = OutboundCallRequest(
+            to_number=contact.phone_number,
+            from_number=from_number,
+            agent_id=agent_id,
+            contact_id=contact.id,
+            school_id=contact.school_id,
+            context=dynamic_vars,
+            metadata={"contact_id": contact.id, "school_id": contact.school_id}
+        )
 
-        if "error" in retell_res and "batch_call_id" not in retell_res:
-            raise RuntimeError(f"Failed to trigger call: {retell_res.get('error')}")
+        result = provider.create_call(call_request)
+        call_id = result.provider_call_id
 
-        # Create CallAttempt row immediately with batch_call_id so the
-        # call_started webhook can upgrade it to the real call_id, and
-        # tools (schedule_callback, book_appointment) can resolve the contact.
-        from src.db import CallAttempt
-        batch_call_id = retell_res.get("batch_call_id", f"batch_manual_{contact_id[:8]}")
         attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact_id).count()
         attempt = CallAttempt(
             contact_id=contact_id,
-            retell_call_id=batch_call_id,
+            provider=provider.provider_name,
+            provider_call_id=call_id,
+            provider_agent_id=agent_id,
+            provider_status="initiated",
+            internal_status="CALL_STARTED",
+            retell_call_id=call_id,
             attempt_number=attempt_count + 1,
             started_at=datetime.utcnow(),
         )
         db.add(attempt)
         db.commit()
 
+        dialer.register_active(call_id, contact_id)
+
         event_manager.broadcast_sync(
             "CALL_STARTED",
-            {"contact_id": contact_id, "call_id": batch_call_id, "status": "Calling"},
+            {"contact_id": contact_id, "call_id": call_id, "status": "Calling", "provider": provider.provider_name},
             school_id=contact.school_id
         )
 
         return {
             "success": True,
-            "message": f"Triggered call to {contact.name}",
-            "retellBatch": retell_res
+            "message": f"Triggered call to {contact.name} via {provider.provider_name}",
+            "provider": provider.provider_name,
+            "call_id": call_id
         }
     except Exception as e:
         contact.status = previous_status
@@ -302,3 +254,279 @@ async def call_now(
         raise HTTPException(status_code=400, detail=f"Failed to trigger call: {e}")
 
 
+# ── INBOUND CALL HANDLING ──────────────────────────────────────────────────
+
+@router.post("/inbound-webhook")
+async def handle_inbound_call_webhook(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Telephony Webhook endpoint for receiving live incoming calls from parents (Retell, Twilio, Bolna, OmniDimension).
+    - Matches or auto-creates lead record.
+    - Resolves target school & persona prompt.
+    - Registers inbound CallAttempt.
+    - Broadcasts live INBOUND_CALL_RECEIVED event to CRM console.
+    """
+    try:
+        from_num = payload.get("from_number") or payload.get("caller_number") or payload.get("from") or "+919876543210"
+        to_num = payload.get("to_number") or payload.get("did") or payload.get("to")
+        provider_name = (payload.get("provider") or "retell").lower()
+        provider_call_id = payload.get("call_id") or payload.get("provider_call_id") or f"inbound_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+        # Resolve School by to_number or default
+        school = None
+        if to_num:
+            school = db.query(School).filter(
+                (School.contact_phone == to_num) | (School.retell_phone_number == to_num)
+            ).first()
+        if not school:
+            school_id_param = payload.get("school_id")
+            if school_id_param:
+                school = db.query(School).filter(School.id == school_id_param).first()
+        if not school:
+            school = db.query(School).order_by(School.created_at.asc()).first()
+
+        target_school_id = school.id if school else None
+
+        # Lookup or Auto-Create Contact
+        clean_phone = from_num.strip()
+        contact = db.query(Contact).filter(Contact.phone_number == clean_phone).first()
+        if not contact:
+            display_name = f"Inbound Caller ({clean_phone[-4:] if len(clean_phone) >= 4 else clean_phone})"
+            contact = Contact(
+                id=str(uuid.uuid4()),
+                name=display_name,
+                phone_number=clean_phone,
+                school_id=target_school_id,
+                status="Calling",
+                referral_source="Inbound AI Call",
+                lead_classification="HOT",
+                created_at=datetime.utcnow()
+            )
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+        else:
+            contact.status = "Calling"
+            contact.updated_at = datetime.utcnow()
+            db.commit()
+
+        # Load dynamic unified agent configuration for target school
+        from src.routers.agent import get_default_unified_config
+        agent_config = get_default_unified_config(db, school_id=target_school_id)
+
+        school_name = school.name if school and school.name else "The Shri Ram Academy"
+        school_loc = school.location if school and school.location else "Gachibowli, Hyderabad"
+        school_phone = (school.contact_phone if school else None) or "+91 75698 91111"
+
+        dynamic_vars = {
+            "contact_id": contact.id,
+            "caller_name": contact.name,
+            "student_name": getattr(contact, "child_name", None) or contact.name,
+            "grade_applying": getattr(contact, "grade_sought", None) or "Grade 5 (Primary Years)",
+            "academic_year": getattr(contact, "academic_year", None) or "2026-2027",
+            "school_name": school_name,
+            "location": school_loc,
+            "contact_phone": school_phone,
+            "caller_email": contact.email or "",
+            "notes": contact.notes or "",
+            "booking_link": "https://cal.com/tsra-admissions/campus-tour",
+            "current_datetime": datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(microsecond=0).isoformat()
+        }
+
+        # Register inbound CallAttempt
+        attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact.id).count()
+        
+        attempt_kwargs = {
+            "contact_id": contact.id,
+            "provider": provider_name,
+            "provider_call_id": provider_call_id,
+            "provider_agent_id": payload.get("agent_id") or "inbound_admission_agent",
+            "provider_status": "in_progress",
+            "internal_status": "INBOUND_CALL_STARTED",
+            "attempt_number": attempt_count + 1,
+            "started_at": datetime.utcnow()
+        }
+        if hasattr(CallAttempt, 'direction'):
+            attempt_kwargs["direction"] = "inbound"
+
+        attempt = CallAttempt(**attempt_kwargs)
+        db.add(attempt)
+        db.commit()
+
+        # Broadcast live SSE notification to frontend console
+        event_manager.broadcast_sync(
+            "INBOUND_CALL_RECEIVED",
+            {
+                "contact_id": contact.id,
+                "contact_name": contact.name,
+                "phone_number": contact.phone_number,
+                "call_id": provider_call_id,
+                "school_name": school_name,
+                "provider": provider_name,
+                "timestamp": datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat()
+            },
+            school_id=target_school_id
+        )
+
+        greeting = agent_config.get("general", {}).get("default_greeting", f"Hello! Welcome to {school_name} admissions desk. How can I help you today?")
+        system_prompt = agent_config.get("prompt", {}).get("system_prompt", "")
+
+        return {
+            "success": True,
+            "direction": "inbound",
+            "call_id": provider_call_id,
+            "contact_id": contact.id,
+            "school_id": target_school_id,
+            "agent_name": agent_config.get("general", {}).get("agent_name"),
+            "greeting": greeting,
+            "system_prompt": system_prompt,
+            "dynamic_variables": dynamic_vars,
+            "tools": agent_config.get("tools", [])
+        }
+    except Exception as err:
+        print(f"[INBOUND WEBHOOK ERROR] {err}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Inbound call webhook failed: {str(err)}")
+
+
+@router.post("/simulate-inbound")
+async def simulate_inbound_call(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Simulation Endpoint to test an Inbound Parent Call directly from the Console UI.
+    """
+    from_number = payload.get("from_number") or "+91 98765 43210"
+    caller_name = payload.get("caller_name") or "Mrs. Anjali Mehta"
+    target_school_id = payload.get("school_id") or current_user.get("school_id")
+
+    school = None
+    if target_school_id:
+        school = db.query(School).filter(School.id == target_school_id).first()
+    if not school:
+        school = db.query(School).first()
+
+    contact = db.query(Contact).filter(Contact.phone_number == from_number).first()
+    if not contact:
+        contact = Contact(
+            id=str(uuid.uuid4()),
+            name=caller_name,
+            phone_number=from_number,
+            school_id=school.id if school else None,
+            status="Calling",
+            referral_source="Inbound AI Simulation",
+            lead_classification="HOT",
+            created_at=datetime.utcnow()
+        )
+        db.add(contact)
+        db.commit()
+        db.refresh(contact)
+    else:
+        contact.name = caller_name
+        contact.status = "Calling"
+        contact.updated_at = datetime.utcnow()
+        db.commit()
+
+    sim_call_id = f"sim_inbound_{int(time.time())}_{uuid.uuid4().hex[:4]}"
+    attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact.id).count()
+
+    attempt = CallAttempt(
+        contact_id=contact.id,
+        provider="simulation",
+        provider_call_id=sim_call_id,
+        provider_agent_id="sim_admission_agent",
+        direction="inbound",
+        provider_status="completed",
+        internal_status="CALL_ANALYZED",
+        attempt_number=attempt_count + 1,
+        started_at=datetime.utcnow() - timedelta(seconds=165),
+        ended_at=datetime.utcnow(),
+        duration_sec=165.0,
+        outcome="Answered",
+        sentiment="Positive",
+        transcript=f"Parent ({caller_name}): Hello! I'm interested in Grade 5 admission for my child. Could you share details about the fee structure and schedule a campus tour?\nAI Admission Assistant: Namaste Mrs. Mehta! I'd be delighted to assist. Our Grade 5 program follows the Cambridge PYP curriculum. Would you prefer a campus visit this Thursday at 10:30 AM or Friday at 2:00 PM?\nParent: Thursday 10:30 AM works perfectly for us.\nAI Assistant: Tour confirmed for Thursday 10:30 AM! I've sent the visitor pass to your phone.",
+        summary=f"Inbound call from {caller_name} regarding Grade 5 admission. Inquired about Cambridge curriculum & fees. Booked campus tour for Thursday 10:30 AM.",
+        analysis_json=json.dumps({
+            "synopsis": f"Inbound enquiry for Grade 5. Parent interested in Cambridge curriculum.",
+            "topics": ["Inbound Call", "Campus Visit", "Fee Structure"],
+            "interest": "High",
+            "next_step": "Campus Tour Confirmed"
+        })
+    )
+    db.add(attempt)
+
+    contact.status = "AppointmentBooked"
+    contact.lead_score = 92.0
+    contact.lead_classification = "HOT"
+    contact.lead_scored_at = datetime.utcnow()
+    db.commit()
+
+    event_manager.broadcast_sync(
+        "INBOUND_CALL_RECEIVED",
+        {
+            "contact_id": contact.id,
+            "contact_name": contact.name,
+            "phone_number": contact.phone_number,
+            "call_id": sim_call_id,
+            "school_name": school.name if school else "The Shri Ram Academy",
+            "provider": "simulation",
+            "timestamp": datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat()
+        },
+        school_id=school.id if school else None
+    )
+
+    return {
+        "success": True,
+        "message": f"Simulated Inbound Call from {caller_name} completed & qualified! 🎉",
+        "call_id": sim_call_id,
+        "contact_id": contact.id,
+        "direction": "inbound",
+        "lead_score": 92.0,
+        "lead_classification": "HOT"
+    }
+
+
+@router.get("/inbound-logs")
+async def get_inbound_call_logs(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Returns itemized list of Inbound AI Parent Calls with transcript & score breakdowns.
+    """
+    school_id = current_user.get("school_id")
+    query = db.query(CallAttempt, Contact, School)\
+        .join(Contact, CallAttempt.contact_id == Contact.id)\
+        .outerjoin(School, Contact.school_id == School.id)\
+        .filter(CallAttempt.direction == "inbound")
+
+    if school_id:
+        query = query.filter(Contact.school_id == school_id)
+
+    records = query.order_by(CallAttempt.started_at.desc()).limit(limit).all()
+
+    return [
+        {
+            "id": attempt.id,
+            "call_id": attempt.provider_call_id,
+            "direction": "inbound",
+            "caller_name": contact.name,
+            "caller_phone": contact.phone_number,
+            "school_name": school.name if school else "Platform Default",
+            "provider": attempt.provider,
+            "duration_sec": attempt.duration_sec or 0.0,
+            "started_at": attempt.started_at.isoformat() if attempt.started_at else None,
+            "outcome": attempt.outcome or "Completed",
+            "sentiment": attempt.sentiment or "Positive",
+            "transcript": attempt.transcript,
+            "summary": attempt.summary,
+            "lead_score": contact.lead_score or 85.0,
+            "lead_classification": contact.lead_classification or "HOT"
+        }
+        for attempt, contact, school in records
+    ]

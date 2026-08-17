@@ -60,6 +60,11 @@ class CampaignDialer:
     # Public API
     # ------------------------------------------------------------------
 
+    def get_active_calls(self) -> int:
+        """Returns the number of active concurrent calls currently in flight."""
+        with self._lock:
+            return len(self._active)
+
     def start(self, batch_id: str, contact_ids: list = None):
         """
         Start dialing a campaign. Fires up to effective_limit calls immediately.
@@ -314,72 +319,52 @@ class CampaignDialer:
             from_number = get_retell_phone_number(db, school)
             agent_id = get_school_agent_id(db, contact) or _get_agent_id(db)
 
+            from src.services.voice.provider_manager import provider_manager
+            from src.services.voice.models import OutboundCallRequest
+
+            provider = provider_manager.get_provider(campaign_id=batch_id, school_id=contact.school_id)
+
             from datetime import timezone, timedelta
+            school_name_val = school.name if school and school.name else "The Shri Ram Academy"
+            school_loc_val = school.location if school and school.location else "Gachibowli, Hyderabad"
+            school_phone_val = (school.contact_phone if school and school.contact_phone else None) or from_number or "+91 75698 91111"
+
             dynamic_vars = {
                 "contact_id": contact.id,
                 "caller_name": contact.name,
+                "student_name": getattr(contact, "child_name", None) or contact.name,
+                "grade_applying": getattr(contact, "grade_sought", None) or "Grade 5 (Primary Years)",
+                "academic_year": getattr(contact, "academic_year", None) or "2026-2027",
+                "school_name": school_name_val,
+                "location": school_loc_val,
+                "contact_phone": school_phone_val,
                 "caller_email": contact.email or "",
                 "notes": contact.notes or "",
+                "booking_link": "https://cal.com/tsra-admissions/campus-tour",
                 "campaign_name": f"Campaign-{batch_id[:8]}",
                 "current_datetime": datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(microsecond=0).isoformat()
             }
 
-            task_data = {
-                "to_number": contact.phone_number,
-                "retell_llm_dynamic_variables": dynamic_vars
-            }
-            if agent_id and agent_id.strip() and not agent_id.startswith("agent_mock"):
-                task_data["override_agent_id"] = agent_id.strip()
-
-            is_mock = not api_key or "mock" in api_key or api_key == "YOUR_RETELL_API_KEY"
-
-            if is_mock:
-                import random
-                fake_call_id = f"call_mock_{random.randint(100000, 999999)}"
-                # Mark contact as Calling and create CallAttempt even in mock mode
-                attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact_id).count()
-                attempt = CallAttempt(
-                    contact_id=contact_id,
-                    retell_call_id=fake_call_id,
-                    attempt_number=attempt_count + 1,
-                    started_at=datetime.utcnow(),
+            try:
+                # Dispatch through active provider adapter
+                call_request = OutboundCallRequest(
+                    to_number=contact.phone_number,
+                    from_number=from_number,
+                    agent_id=agent_id or "default_admission_agent",
+                    context=dynamic_vars,
+                    metadata={"contact_id": contact.id, "batch_id": batch_id, "school_id": contact.school_id}
                 )
-                db.add(attempt)
-                contact.status = "Calling"
-                contact.updated_at = datetime.utcnow()
-                db.commit()
-                event_manager.broadcast_sync(
-                    "CALL_STARTED",
-                    {"contact_id": contact_id, "call_id": fake_call_id, "status": "Calling"},
-                    school_id=contact.school_id
-                )
-                with self._lock:
-                    self._active[fake_call_id] = contact_id
-                    self._active_batch[fake_call_id] = batch_id
-                print(f"[DIALER] MOCK call fired for {contact.name} | call_id={fake_call_id}")
-                return
+                result = provider.create_call(call_request)
+                stored_call_id = result.provider_call_id
 
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            body = {"from_number": from_number, "name": f"Campaign-{batch_id[:8]}", "tasks": [task_data]}
-
-            response = httpx.post(
-                "https://api.retellai.com/create-batch-call",
-                headers=headers,
-                json=body,
-                timeout=30.0
-            )
-
-            if response.status_code < 400:
-                data = response.json()
-                # Retell returns batch_call_id; the real individual call_id
-                # arrives later via the call_started webhook which will update
-                # this row's retell_call_id to the real call_id.
-                stored_call_id = data.get("batch_call_id", f"batch_{contact_id[:8]}")
-
-                # Create CallAttempt row NOW so webhooks can match it
-                attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact_id).count()
+                attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact.id).count()
                 attempt = CallAttempt(
-                    contact_id=contact_id,
+                    contact_id=contact.id,
+                    provider=provider.provider_name,
+                    provider_call_id=stored_call_id,
+                    provider_agent_id=agent_id,
+                    provider_status="initiated",
+                    internal_status="CALL_STARTED",
                     retell_call_id=stored_call_id,
                     attempt_number=attempt_count + 1,
                     started_at=datetime.utcnow(),
@@ -388,27 +373,53 @@ class CampaignDialer:
                 contact.status = "Calling"
                 contact.updated_at = datetime.utcnow()
                 db.commit()
+
                 event_manager.broadcast_sync(
                     "CALL_STARTED",
-                    {"contact_id": contact_id, "call_id": stored_call_id, "status": "Calling"},
+                    {"contact_id": contact.id, "call_id": stored_call_id, "status": "Calling", "provider": provider.provider_name},
                     school_id=contact.school_id
                 )
 
                 with self._lock:
-                    self._active[stored_call_id] = contact_id
+                    self._active[stored_call_id] = contact.id
                     self._active_batch[stored_call_id] = batch_id
-                print(f"[DIALER] Call fired for {contact.name} | batch_call_id={stored_call_id}")
-            else:
-                print(f"[DIALER] Retell call failed for {contact.name}: {response.text}")
+                print(f"[DIALER] [{provider.provider_name.upper()}] Call dispatched for {contact.name} | id={stored_call_id}")
+
+            except Exception as dispatch_err:
+                # Real production failure recording — no mock data
+                err_msg = str(dispatch_err)
+                print(f"[DIALER] Provider {provider.provider_name} dispatch failed for {contact.name}: {err_msg}")
+                attempt_count = db.query(CallAttempt).filter(CallAttempt.contact_id == contact.id).count()
+                failed_id = f"failed_{provider.provider_name}_{int(datetime.utcnow().timestamp())}"
+                attempt = CallAttempt(
+                    contact_id=contact.id,
+                    provider=provider.provider_name,
+                    provider_call_id=failed_id,
+                    provider_status="failed",
+                    internal_status="CALL_ENDED",
+                    retell_call_id=failed_id,
+                    attempt_number=attempt_count + 1,
+                    started_at=datetime.utcnow(),
+                    outcome="Failed",
+                    summary=f"Voice gateway dispatch failed: {err_msg}"
+                )
+                db.add(attempt)
                 contact.status = "Failed"
                 contact.updated_at = datetime.utcnow()
                 db.commit()
+
                 event_manager.broadcast_sync(
                     "CALL_ENDED",
-                    {"contact_id": contact_id, "status": "Failed"},
+                    {
+                        "contact_id": contact.id,
+                        "call_id": attempt.retell_call_id,
+                        "status": "Failed",
+                        "outcome": "Failed",
+                        "error": err_msg,
+                        "provider": provider.provider_name
+                    },
                     school_id=contact.school_id
                 )
-                self._check_completion()
 
         except Exception as e:
             print(f"[DIALER] Error firing call for contact {contact_id}: {e}")

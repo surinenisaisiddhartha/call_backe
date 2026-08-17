@@ -21,6 +21,7 @@ from src.routers.schools import router as schools_router
 from src.routers.analytics import router as analytics_router
 from src.routers.courses import router as courses_router
 from src.routers.classes import router as classes_router
+from src.routers.providers import router as providers_router
 from src.events import router as events_router, event_manager
 
 app = FastAPI(title="EnquiryCall API", version="1.0.0")
@@ -49,6 +50,7 @@ app.include_router(schools_router)
 app.include_router(analytics_router)
 app.include_router(courses_router)
 app.include_router(classes_router)
+app.include_router(providers_router)
 app.include_router(events_router)
 
 # Mount static files for uploads (like logos)

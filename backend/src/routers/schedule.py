@@ -4,7 +4,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from src.db import get_db, Contact, ScheduledCallback
 from src.routers.auth import get_current_user
-from src.routers.calls import make_retell_request
 
 router = APIRouter(prefix="/api/schedule", tags=["Scheduling"])
 

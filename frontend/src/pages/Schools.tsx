@@ -4,7 +4,7 @@ import Pagination from '../components/Pagination';
 import {
   School as SchoolIcon, Plus, X, RefreshCw, Copy, Check,
   MapPin, Phone, Mail, Users, Bot, AlertTriangle, Trash2, KeyRound, Settings2, Save,
-  Pencil, AtSign, Globe
+  Pencil, AtSign, Globe, ArrowLeft, Eye, ExternalLink
 } from 'lucide-react';
 
 interface School {
@@ -225,7 +225,9 @@ export default function Schools({ showToast }: SchoolsProps) {
     try {
       const res = await api.get(`/schools/${school.id}/settings`);
       const overrides = res.data?.overrides || {};
-      const form: Record<string, string> = {};
+      const form: Record<string, string> = {
+        active_provider: res.data?.active_provider || 'retell'
+      };
       Object.keys(overrides).forEach(k => { form[k] = overrides[k] == null ? '' : String(overrides[k]); });
       setSettingsForm(form);
       setEffective(res.data?.effective || {});
@@ -332,6 +334,37 @@ export default function Schools({ showToast }: SchoolsProps) {
     }
   };
 
+  const handleViewAs = async (s: School) => {
+    try {
+      const res = await api.post(`/schools/${s.id}/view-as`);
+      if (res.data?.token && res.data?.user) {
+        if (!localStorage.getItem('admin_token')) {
+          localStorage.setItem('admin_token', localStorage.getItem('token') || '');
+        }
+        localStorage.setItem('token', res.data.token);
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+        showToast(`Switched into ${s.name} tenant portal`, 'success');
+        window.location.hash = '#dashboard';
+        window.location.reload();
+      }
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to switch into school portal'), 'error');
+    }
+  };
+
+  const handleScrapeKB = async (s: School) => {
+    if (!s.website) {
+      showToast('No website configured for this school. Edit school to add a website first.', 'error');
+      return;
+    }
+    try {
+      await api.post(`/schools/${s.id}`, { website: s.website });
+      showToast(`Website crawling initiated for ${s.name} (${s.website})`, 'success');
+    } catch (err: any) {
+      showToast(getErrorMessage(err, 'Failed to trigger knowledge scrape'), 'error');
+    }
+  };
+
   const copyCredentials = () => {
     if (!credentials) return;
     navigator.clipboard.writeText(`Email: ${credentials.email}\nTemporary password: ${credentials.password}`);
@@ -341,9 +374,24 @@ export default function Schools({ showToast }: SchoolsProps) {
 
   return (
     <div>
+      {/* Back Navigation Bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '18px' }}>
+        <button
+          onClick={() => window.history.length > 1 ? window.history.back() : (window.location.hash = '#dashboard')}
+          className="btn btn-secondary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', fontSize: '0.8rem', borderRadius: '8px' }}
+        >
+          <ArrowLeft size={14} /> Back
+        </button>
+        <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>/</span>
+        <a href="#dashboard" style={{ color: 'var(--text-muted)', fontSize: '0.82rem', textDecoration: 'none' }}>Dashboard</a>
+        <span style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>/</span>
+        <span style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: 600 }}>Schools Multitenancy</span>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, marginBottom: '4px' }}>Schools</h1>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', fontWeight: 800, marginBottom: '4px' }}>Schools Multitenancy</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             Onboard a school to give it its own login, its own leads, and its own voice agent.
           </p>
@@ -510,6 +558,14 @@ export default function Schools({ showToast }: SchoolsProps) {
               </div>
 
               <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  onClick={() => handleViewAs(s)}
+                  title={`Switch to ${s.name} tenant portal`}
+                >
+                  <Eye size={14} /> View Portal
+                </button>
                 <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
                   onClick={() => openEdit(s)} title="Edit this school's name, location, phone and website">
                   <Pencil size={14} /> Edit
@@ -518,6 +574,12 @@ export default function Schools({ showToast }: SchoolsProps) {
                   onClick={() => handleReprovision(s)} title="Re-create/refresh this school's voice agent">
                   <RefreshCw size={14} /> Agent
                 </button>
+                {s.website && (
+                  <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+                    onClick={() => handleScrapeKB(s)} title="Re-crawl this school's website into its Knowledge Base">
+                    <Globe size={14} /> Sync KB
+                  </button>
+                )}
                 <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px' }}
                   onClick={() => openSettings(s)} title="See and change this school's Cal.com, calendar, email and caller ID settings">
                   <Settings2 size={14} /> Settings
@@ -534,7 +596,7 @@ export default function Schools({ showToast }: SchoolsProps) {
                   </button>
                 )}
                 <button className="btn btn-secondary" style={{ fontSize: '0.8rem', padding: '6px 12px', color: 'var(--accent-error)' }}
-                  onClick={() => handleDelete(s)}>
+                  onClick={() => handleDelete(s)} title="Delete school">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -554,214 +616,259 @@ export default function Schools({ showToast }: SchoolsProps) {
 
       {/* Per-school settings modal */}
       {settingsSchool && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
-        }} onClick={(e) => { if (e.target === e.currentTarget) closeSettings(); }}>
-          <div className="glass-panel" style={{ maxWidth: '560px', width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+        <div className="app-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) closeSettings(); }}>
+          <div className="app-modal-dialog modal-lg">
+            <div className="app-modal-header">
               <div>
-                <h2 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Settings2 size={20} /> {settingsSchool.name}
+                <h2 className="app-modal-title">
+                  <Settings2 size={20} color="var(--accent-primary)" /> {settingsSchool.name} Settings
                 </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: '2px', marginBottom: 0 }}>
                   Leave any field blank to use the shared platform default instead.
                 </p>
               </div>
-              <button className="btn btn-secondary" onClick={closeSettings}><X size={16} /></button>
+              <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={closeSettings}><X size={16} /></button>
             </div>
 
-            {settingsLoading ? (
-              <div style={{ textAlign: 'center', padding: '40px' }}>
-                <RefreshCw size={24} style={{ animation: 'spin 2s linear infinite' }} />
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', marginTop: '18px' }}>
-                {bookingProvider && (
+            <div className="app-modal-body">
+              {settingsLoading ? (
+                <div style={{ textAlign: 'center', padding: '40px' }}>
+                  <RefreshCw size={24} style={{ animation: 'spin 2s linear infinite' }} />
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                  {bookingProvider && (
+                    <div style={{
+                      padding: '12px 14px', borderRadius: '10px', fontSize: '0.82rem',
+                      background: bookingProvider === 'cal.com' ? 'rgba(16,185,129,0.10)' : 'rgba(245,158,11,0.10)',
+                      border: `1px solid ${bookingProvider === 'cal.com' ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
+                    }}>
+                      {bookingProvider === 'cal.com' ? (
+                        <>Bookings run through <strong>Cal.com</strong> — it creates the booking, adds the
+                        calendar event and emails the attendee. Google Calendar and SMTP below are unused
+                        while a Cal.com key is set.</>
+                      ) : (
+                        <>No Cal.com key is set, so this school falls back to <strong>Google Calendar + SMTP</strong>
+                        {' '}for calendar events and confirmation emails.</>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Voice Provider Switcher Section */}
                   <div style={{
-                    padding: '10px 12px', borderRadius: '10px', fontSize: '0.8rem',
-                    background: bookingProvider === 'cal.com' ? 'rgba(16,185,129,0.10)' : 'rgba(245,158,11,0.10)',
-                    border: `1px solid ${bookingProvider === 'cal.com' ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
+                    padding: '16px',
+                    borderRadius: '12px',
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
                   }}>
-                    {bookingProvider === 'cal.com' ? (
-                      <>Bookings run through <strong>Cal.com</strong> — it creates the booking, adds the
-                      calendar event and emails the attendee. Google Calendar and SMTP below are unused
-                      while a Cal.com key is set.</>
-                    ) : (
-                      <>No Cal.com key is set, so this school falls back to <strong>Google Calendar + SMTP</strong>
-                      {' '}for calendar events and confirmation emails.</>
-                    )}
-                  </div>
-                )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.92rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Bot size={16} color="var(--accent-primary)" />
+                        Active Voice AI Gateway
+                      </div>
+                      <span style={{
+                        fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: '8px',
+                        background: 'rgba(99,102,241,0.12)', color: 'var(--accent-primary)', textTransform: 'uppercase'
+                      }}>
+                        Per-School Override
+                      </span>
+                    </div>
 
-                <SettingField field="retell_phone_number">
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>Outbound Caller ID</div>
-                  <input className="form-input" style={{ width: '100%' }} placeholder="+91 9876543210 (default: platform number)"
-                    value={settingsForm.retell_phone_number || ''} onChange={e => handleSettingsField('retell_phone_number', e.target.value)} />
-                </SettingField>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
+                      {[
+                        { id: 'retell', name: 'Retell AI', desc: 'Low Latency & Transfers' },
+                        { id: 'omnidimension', name: 'OmniDimension', desc: 'RAG & Knowledge Base' },
+                        { id: 'bolna', name: 'Bolna Voice', desc: 'Multi-Carrier Telephony' }
+                      ].map(p => (
+                        <label
+                          key={p.id}
+                          style={{
+                            display: 'flex', flexDirection: 'column', padding: '10px 12px', borderRadius: '10px',
+                            border: `2px solid ${settingsForm.active_provider === p.id ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                            background: settingsForm.active_provider === p.id ? 'rgba(99,102,241,0.08)' : 'transparent',
+                            cursor: 'pointer', transition: 'all 0.2s ease'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <input
+                              type="radio"
+                              name="active_provider"
+                              value={p.id}
+                              checked={settingsForm.active_provider === p.id}
+                              onChange={() => handleSettingsField('active_provider', p.id)}
+                            />
+                            <span style={{ fontWeight: 700, fontSize: '0.84rem' }}>{p.name}</span>
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            {p.desc}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
 
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>
-                    Cal.com — bookings, calendar &amp; email
+                    <SettingField field="retell_phone_number">
+                      <div style={{ fontWeight: 600, fontSize: '0.82rem', marginBottom: '4px', marginTop: '4px' }}>
+                        Outbound Caller ID (DID Phone Number)
+                      </div>
+                      <input className="form-input" style={{ width: '100%' }} placeholder="+91 9876543210 (default: platform number)"
+                        value={settingsForm.retell_phone_number || ''} onChange={e => handleSettingsField('retell_phone_number', e.target.value)} />
+                    </SettingField>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <SettingField field="cal_com_api_key">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com API key (default: platform account)"
-                        value={settingsForm.cal_com_api_key || ''} onChange={e => handleSettingsField('cal_com_api_key', e.target.value)} />
-                    </SettingField>
-                    <SettingField field="cal_com_event_link">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com event link"
-                        value={settingsForm.cal_com_event_link || ''} onChange={e => handleSettingsField('cal_com_event_link', e.target.value)} />
-                    </SettingField>
-                    <SettingField field="cal_com_in_person_event_slug">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="In-person event slug, e.g. campus-visit"
-                        value={settingsForm.cal_com_in_person_event_slug || ''} onChange={e => handleSettingsField('cal_com_in_person_event_slug', e.target.value)} />
-                    </SettingField>
-                    <SettingField field="cal_com_virtual_event_slug">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="Virtual (Cal Video) event slug, e.g. calling"
-                        value={settingsForm.cal_com_virtual_event_slug || ''} onChange={e => handleSettingsField('cal_com_virtual_event_slug', e.target.value)} />
-                    </SettingField>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                      Both slugs matter once an account has more than one event type: they decide whether an
-                      attendee is emailed a campus address or a video link. If a slug is missing, that
-                      meeting kind is not booked at all rather than guessed.
+
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '8px' }}>
+                      Cal.com — bookings, calendar &amp; email
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <SettingField field="cal_com_api_key">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com API key (default: platform account)"
+                          value={settingsForm.cal_com_api_key || ''} onChange={e => handleSettingsField('cal_com_api_key', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="cal_com_event_link">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="Cal.com event link"
+                          value={settingsForm.cal_com_event_link || ''} onChange={e => handleSettingsField('cal_com_event_link', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="cal_com_in_person_event_slug">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="In-person event slug, e.g. campus-visit"
+                          value={settingsForm.cal_com_in_person_event_slug || ''} onChange={e => handleSettingsField('cal_com_in_person_event_slug', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="cal_com_virtual_event_slug">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="Virtual (Cal Video) event slug, e.g. calling"
+                          value={settingsForm.cal_com_virtual_event_slug || ''} onChange={e => handleSettingsField('cal_com_virtual_event_slug', e.target.value)} />
+                      </SettingField>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '4px' }}>Google Calendar</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+                      <SettingField field="google_calendar_credentials_json">
+                        <textarea className="form-input" style={{ width: '100%', minHeight: '70px', fontFamily: 'monospace', fontSize: '0.78rem' }}
+                          placeholder="Service account credentials JSON"
+                          value={settingsForm.google_calendar_credentials_json || ''}
+                          onChange={e => handleSettingsField('google_calendar_credentials_json', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="google_calendar_id">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="Calendar ID, e.g. admissions@school.edu.in"
+                          value={settingsForm.google_calendar_id || ''} onChange={e => handleSettingsField('google_calendar_id', e.target.value)} />
+                      </SettingField>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '4px' }}>Confirmation Email (SMTP)</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: '8px' }}>
+                        <SettingField field="smtp_server">
+                          <input className="form-input" style={{ width: '100%' }} placeholder="SMTP server, e.g. smtp.gmail.com"
+                            value={settingsForm.smtp_server || ''} onChange={e => handleSettingsField('smtp_server', e.target.value)} />
+                        </SettingField>
+                        <SettingField field="smtp_port">
+                          <input className="form-input" style={{ width: '100%' }} placeholder="Port" value={settingsForm.smtp_port || ''}
+                            onChange={e => handleSettingsField('smtp_port', e.target.value)} />
+                        </SettingField>
+                      </div>
+                      <SettingField field="smtp_username">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="SMTP username"
+                          value={settingsForm.smtp_username || ''} onChange={e => handleSettingsField('smtp_username', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="smtp_password">
+                        <input className="form-input" style={{ width: '100%' }} type="password" placeholder="SMTP password"
+                          value={settingsForm.smtp_password || ''} onChange={e => handleSettingsField('smtp_password', e.target.value)} />
+                      </SettingField>
+                      <SettingField field="smtp_from_email">
+                        <input className="form-input" style={{ width: '100%' }} placeholder="From email, e.g. admissions@school.edu.in"
+                          value={settingsForm.smtp_from_email || ''} onChange={e => handleSettingsField('smtp_from_email', e.target.value)} />
+                      </SettingField>
                     </div>
                   </div>
                 </div>
+              )}
+            </div>
 
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '4px' }}>Google Calendar</div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                    Fallback only — used when no Cal.com key is configured.
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <SettingField field="google_calendar_credentials_json">
-                      <textarea className="form-input" style={{ width: '100%', minHeight: '70px', fontFamily: 'monospace', fontSize: '0.78rem' }}
-                        placeholder="Service account credentials JSON (default: platform calendar)"
-                        value={settingsForm.google_calendar_credentials_json || ''}
-                        onChange={e => handleSettingsField('google_calendar_credentials_json', e.target.value)} />
-                    </SettingField>
-                    <SettingField field="google_calendar_id">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="Calendar ID, e.g. admissions@school.edu.in"
-                        value={settingsForm.google_calendar_id || ''} onChange={e => handleSettingsField('google_calendar_id', e.target.value)} />
-                    </SettingField>
-                  </div>
-                </div>
-
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '4px' }}>Confirmation Email (SMTP)</div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                    Fallback only — Cal.com sends the confirmation when a Cal.com key is configured.
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: '8px' }}>
-                      <SettingField field="smtp_server">
-                        <input className="form-input" style={{ width: '100%' }} placeholder="SMTP server, e.g. smtp.gmail.com"
-                          value={settingsForm.smtp_server || ''} onChange={e => handleSettingsField('smtp_server', e.target.value)} />
-                      </SettingField>
-                      <SettingField field="smtp_port">
-                        <input className="form-input" style={{ width: '100%' }} placeholder="Port" value={settingsForm.smtp_port || ''}
-                          onChange={e => handleSettingsField('smtp_port', e.target.value)} />
-                      </SettingField>
-                    </div>
-                    <SettingField field="smtp_username">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="SMTP username"
-                        value={settingsForm.smtp_username || ''} onChange={e => handleSettingsField('smtp_username', e.target.value)} />
-                    </SettingField>
-                    <SettingField field="smtp_password">
-                      <input className="form-input" style={{ width: '100%' }} type="password" placeholder="SMTP password"
-                        value={settingsForm.smtp_password || ''} onChange={e => handleSettingsField('smtp_password', e.target.value)} />
-                    </SettingField>
-                    <SettingField field="smtp_from_email">
-                      <input className="form-input" style={{ width: '100%' }} placeholder="From email, e.g. admissions@school.edu.in"
-                        value={settingsForm.smtp_from_email || ''} onChange={e => handleSettingsField('smtp_from_email', e.target.value)} />
-                    </SettingField>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '4px' }}>
-                  <button className="btn btn-secondary" onClick={closeSettings}>Cancel</button>
-                  <button className="btn btn-primary" onClick={saveSettings} disabled={settingsSaving}>
-                    {settingsSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <Save size={16} />}
-                    {settingsSaving ? 'Saving…' : 'Save Settings'}
-                  </button>
-                </div>
-              </div>
-            )}
+            <div className="app-modal-footer">
+              <button className="btn btn-secondary" onClick={closeSettings}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveSettings} disabled={settingsSaving}>
+                {settingsSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <Save size={16} />}
+                {settingsSaving ? 'Saving…' : 'Save Settings'}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Edit a school's own identity fields */}
       {editSchool && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
-        }} onClick={(e) => { if (e.target === e.currentTarget) setEditSchool(null); }}>
-          <div className="glass-panel" style={{ maxWidth: '480px', width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div className="app-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setEditSchool(null); }}>
+          <div className="app-modal-dialog">
+            <div className="app-modal-header">
               <div>
-                <h2 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Pencil size={18} /> Edit {editSchool.name}
+                <h2 className="app-modal-title">
+                  <Pencil size={18} color="var(--accent-primary)" /> Edit {editSchool.name}
                 </h2>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
-                  Changing the name, location or phone re-renders this school's voice agent prompt.
-                  Changing the website rebuilds its knowledge base.
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: '2px', marginBottom: 0 }}>
+                  Updates prompt knowledge base and voice agent configuration.
                 </p>
               </div>
-              <button className="btn btn-secondary" onClick={() => setEditSchool(null)}><X size={16} /></button>
+              <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={() => setEditSchool(null)}><X size={16} /></button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '18px' }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>School name</div>
-                <input className="form-input" style={{ width: '100%' }} value={editForm.name || ''}
-                  onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} />
-              </div>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Location</div>
-                <input className="form-input" style={{ width: '100%' }} placeholder="e.g. Gachibowli, Hyderabad"
-                  value={editForm.location || ''} onChange={e => setEditForm(p => ({ ...p, location: e.target.value }))} />
-              </div>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Contact phone</div>
-                <input className="form-input" style={{ width: '100%' }} placeholder="+91 7569891111"
-                  value={editForm.contact_phone || ''} onChange={e => setEditForm(p => ({ ...p, contact_phone: e.target.value }))} />
-              </div>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Globe size={14} /> Website
+            <div className="app-modal-body">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>School Name</div>
+                  <input className="form-input" style={{ width: '100%' }} value={editForm.name || ''}
+                    onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} />
                 </div>
-                <input className="form-input" style={{ width: '100%' }} placeholder="https://school.edu.in"
-                  value={editForm.website || ''} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))} />
-              </div>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Status</div>
-                <select className="form-input" style={{ width: '100%' }} value={editForm.status || 'active'}
-                  onChange={e => setEditForm(p => ({ ...p, status: e.target.value }))}>
-                  <option value="active">active</option>
-                  <option value="suspended">suspended</option>
-                </select>
-              </div>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>School Logo</div>
-                <input type="file" className="form-input" style={{ width: '100%' }} accept="image/*"
-                  onChange={e => {
-                    if (e.target.files && e.target.files[0]) {
-                      setEditLogoFile(e.target.files[0]);
-                    }
-                  }} />
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  Select an image to change the logo.
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Location</div>
+                  <input className="form-input" style={{ width: '100%' }} placeholder="e.g. Gachibowli, Hyderabad"
+                    value={editForm.location || ''} onChange={e => setEditForm(p => ({ ...p, location: e.target.value }))} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Contact Phone</div>
+                  <input className="form-input" style={{ width: '100%' }} placeholder="+91 7569891111"
+                    value={editForm.contact_phone || ''} onChange={e => setEditForm(p => ({ ...p, contact_phone: e.target.value }))} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Globe size={14} /> Website
+                  </div>
+                  <input className="form-input" style={{ width: '100%' }} placeholder="https://school.edu.in"
+                    value={editForm.website || ''} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>Status</div>
+                  <select className="form-input" style={{ width: '100%' }} value={editForm.status || 'active'}
+                    onChange={e => setEditForm(p => ({ ...p, status: e.target.value }))}>
+                    <option value="active">active</option>
+                    <option value="suspended">suspended</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>School Logo</div>
+                  <input type="file" className="form-input" style={{ width: '100%' }} accept="image/*"
+                    onChange={e => {
+                      if (e.target.files && e.target.files[0]) {
+                        setEditLogoFile(e.target.files[0]);
+                      }
+                    }} />
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Select an image to change the logo.
+                  </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '4px' }}>
-                <button className="btn btn-secondary" onClick={() => setEditSchool(null)}>Cancel</button>
-                <button className="btn btn-primary" onClick={saveEdit} disabled={editSaving}>
-                  {editSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <Save size={16} />}
-                  {editSaving ? 'Saving…' : 'Save Changes'}
-                </button>
-              </div>
+            </div>
+
+            <div className="app-modal-footer">
+              <button className="btn btn-secondary" onClick={() => setEditSchool(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveEdit} disabled={editSaving}>
+                {editSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <Save size={16} />}
+                {editSaving ? 'Saving…' : 'Save Changes'}
+              </button>
             </div>
           </div>
         </div>
@@ -769,38 +876,37 @@ export default function Schools({ showToast }: SchoolsProps) {
 
       {/* Move a school's login to a different email */}
       {emailSchool && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
-        }} onClick={(e) => { if (e.target === e.currentTarget) setEmailSchool(null); }}>
-          <div className="glass-panel" style={{ maxWidth: '460px', width: '100%', padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <h2 style={{ fontSize: '1.2rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <AtSign size={18} /> Change login email
+        <div className="app-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setEmailSchool(null); }}>
+          <div className="app-modal-dialog">
+            <div className="app-modal-header">
+              <h2 className="app-modal-title">
+                <AtSign size={18} color="var(--accent-primary)" /> Change Login Email
               </h2>
-              <button className="btn btn-secondary" onClick={() => setEmailSchool(null)}><X size={16} /></button>
+              <button className="btn btn-secondary" style={{ padding: '6px' }} onClick={() => setEmailSchool(null)}><X size={16} /></button>
             </div>
 
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '8px' }}>
-              {emailSchool.name} currently signs in as{' '}
-              <strong>{emailSchool.admin_email || 'no login yet'}</strong>.
-            </p>
+            <div className="app-modal-body">
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: 0 }}>
+                {emailSchool.name} currently signs in as{' '}
+                <strong>{emailSchool.admin_email || 'no login yet'}</strong>.
+              </p>
 
-            <div style={{
-              marginTop: '12px', padding: '10px 12px', borderRadius: '10px', fontSize: '0.78rem',
-              background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)',
-            }}>
-              A brand-new login is created for the new address and a temporary password is emailed to it.
-              The old login is then removed and stops working immediately.
+              <div style={{
+                marginTop: '12px', padding: '12px 14px', borderRadius: '10px', fontSize: '0.8rem',
+                background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)',
+              }}>
+                A brand-new login is created for the new address and a temporary password is emailed to it.
+                The old login is then removed and stops working immediately.
+              </div>
+
+              <div style={{ marginTop: '16px' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>New Login Email</div>
+                <input className="form-input" style={{ width: '100%' }} type="email" placeholder="admissions@school.edu.in"
+                  value={newEmail} onChange={e => setNewEmail(e.target.value)} />
+              </div>
             </div>
 
-            <div style={{ marginTop: '14px' }}>
-              <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>New login email</div>
-              <input className="form-input" style={{ width: '100%' }} type="email" placeholder="admissions@school.edu.in"
-                value={newEmail} onChange={e => setNewEmail(e.target.value)} />
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '18px' }}>
+            <div className="app-modal-footer">
               <button className="btn btn-secondary" onClick={() => setEmailSchool(null)}>Cancel</button>
               <button className="btn btn-primary" onClick={saveNewEmail} disabled={emailSaving}>
                 {emailSaving ? <RefreshCw size={16} style={{ animation: 'spin 2s linear infinite' }} /> : <AtSign size={16} />}

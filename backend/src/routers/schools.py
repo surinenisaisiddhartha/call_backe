@@ -50,25 +50,15 @@ def _serialize(db: Session, school: School) -> dict:
 
 
 def _provision_agent(db: Session, school: School) -> str:
-    """Best-effort agent provisioning. Returns '' on success, error text on failure."""
+    """Best-effort agent provisioning via active provider adapter. Returns '' on success, error text on failure."""
     try:
-        from src.school_agent import provision_school_agent
-        api_key = _get_setting(db, "retell_api_key", "RETELL_API_KEY")
-        base_url = os.getenv("WEBHOOK_BASE_URL", "")
-        secret = _get_setting(db, "aegis_tools_secret", "AEGIS_TOOLS_SECRET")
-        if not api_key or not base_url:
-            return "RETELL_API_KEY or WEBHOOK_BASE_URL not configured"
-        result = provision_school_agent(school, api_key, base_url, secret)
-        school.retell_agent_id = result["agent_id"]
-        school.retell_llm_id = result["llm_id"]
-        db.commit()
-        # The agent id -> school mapping is cached on the live-call path; a
-        # newly provisioned agent must resolve to this school immediately.
-        from src.cache import school_cache
-        school_cache.invalidate()
-        return ""
+        from src.services.admission_agent_service import admission_agent_service
+        res = admission_agent_service.provision_school_agent(school.id)
+        if res.get("success"):
+            return ""
+        return res.get("error", "Agent provisioning failed")
     except Exception as e:
-        print(f"[SCHOOLS] Agent provisioning failed for '{school.name}': {e}")
+        print(f"[SCHOOLS] Agent provisioning failed for {school.name}: {e}")
         return str(e)
 
 
@@ -366,25 +356,85 @@ def delete_school(school_id: str, db: Session = Depends(get_db), _admin: dict = 
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
 
-    contact_count = db.query(Contact).filter(Contact.school_id == school.id).count()
-    if contact_count > 0:
+    # Protect default primary platform school
+    if school.slug == "shri-ram-academy":
         raise HTTPException(
             status_code=400,
-            detail=f"This school still has {contact_count} contacts. Delete or reassign its data first."
+            detail="Cannot delete the default platform school (The Shri Ram Academy)."
         )
 
-    from src import cognito
-    if school.admin_email and cognito.cognito_enabled():
-        cognito.delete_school_user(school.admin_email)
+    from src.db import (
+        Contact, UploadBatch, Counselor, CounselorActivity,
+        Course, ClassType, ClassBooking, Appointment,
+        ScheduledCallback, KnowledgeChunk, SchoolBillingSettings,
+        VoiceProviderConfig, CallAttempt, CallCostSnapshot, AgentConfigVersion
+    )
 
+    # 1. Preserve immutable financial ledger & call snapshot records
+    db.query(CallCostSnapshot).filter(CallCostSnapshot.school_id == school.id).update({
+        "school_name": school.name,
+        "school_id": None
+    }, synchronize_session=False)
+
+    db.query(CallAttempt).filter(CallAttempt.school_id == school.id).update({
+        "school_id": None,
+        "contact_id": None
+    }, synchronize_session=False)
+
+    # 2. Unlink contact calls and clean up contact-dependent rows
+    contacts = db.query(Contact).filter(Contact.school_id == school.id).all()
+    contact_ids = [c.id for c in contacts]
+    if contact_ids:
+        db.query(CallAttempt).filter(CallAttempt.contact_id.in_(contact_ids)).update({
+            "contact_id": None
+        }, synchronize_session=False)
+        db.query(ScheduledCallback).filter(ScheduledCallback.contact_id.in_(contact_ids)).delete(synchronize_session=False)
+        db.query(Appointment).filter(Appointment.contact_id.in_(contact_ids)).delete(synchronize_session=False)
+        db.query(CounselorActivity).filter(CounselorActivity.contact_id.in_(contact_ids)).delete(synchronize_session=False)
+
+    # 3. Clean up counselors and activity logs
+    counselors = db.query(Counselor).filter(Counselor.school_id == school.id).all()
+    counselor_ids = [cn.id for cn in counselors]
+    if counselor_ids:
+        db.query(CounselorActivity).filter(CounselorActivity.counselor_id.in_(counselor_ids)).delete(synchronize_session=False)
+
+    from src import cognito
+    if cognito.cognito_enabled():
+        for cn in counselors:
+            if cn.email:
+                try:
+                    cognito.delete_school_user(cn.email)
+                except Exception as e:
+                    print(f"[COGNITO] Failed deleting counselor {cn.email}: {e}")
+
+    # 4. Clean up school-specific records
+    db.query(ClassBooking).filter(ClassBooking.school_id == school.id).delete(synchronize_session=False)
+    db.query(ClassType).filter(ClassType.school_id == school.id).delete(synchronize_session=False)
+    db.query(Course).filter(Course.school_id == school.id).delete(synchronize_session=False)
+    db.query(Contact).filter(Contact.school_id == school.id).delete(synchronize_session=False)
+    db.query(UploadBatch).filter(UploadBatch.school_id == school.id).delete(synchronize_session=False)
+    db.query(Counselor).filter(Counselor.school_id == school.id).delete(synchronize_session=False)
+    db.query(KnowledgeChunk).filter(KnowledgeChunk.school_id == school.id).delete(synchronize_session=False)
+    db.query(SchoolBillingSettings).filter(SchoolBillingSettings.school_id == school.id).delete(synchronize_session=False)
+    db.query(VoiceProviderConfig).filter(VoiceProviderConfig.school_id == school.id).delete(synchronize_session=False)
+    db.query(AgentConfigVersion).filter(AgentConfigVersion.school_id == school.id).delete(synchronize_session=False)
+
+    # 5. Delete school admin login from Cognito
+    if school.admin_email and cognito.cognito_enabled():
+        try:
+            cognito.delete_school_user(school.admin_email)
+        except Exception as e:
+            print(f"[COGNITO] Failed deleting school admin {school.admin_email}: {e}")
+
+    # 6. Delete the School record
     db.delete(school)
     db.commit()
-    # Per-school Cal.com credentials may have changed, so the cached event
-    # types for the old key no longer apply to this school.
+
+    # Invalidate caches
     from src.cache import cal_event_types_cache, school_cache
     cal_event_types_cache.invalidate()
     school_cache.invalidate()
-    return {"success": True}
+    return {"success": True, "message": f"School '{school.name}' deleted successfully"}
 
 
 # ── Per-school settings (calendar, Cal.com, SMTP, phone number) ──────────
@@ -491,12 +541,24 @@ def get_school_settings(school_id: str, db: Session = Depends(get_db), _admin: d
             overrides[field] = value
 
     from src.school_settings import cal_com_is_configured
+    from src.services.voice.provider_manager import provider_manager
+    active_adapter = provider_manager.get_provider(school_id=school.id)
+    caller_id = school.retell_phone_number or os.getenv("RETELL_PHONE_NUMBER", "+18645812715")
+
     return {
         "overrides": overrides,
         "effective": _effective_settings(db, school),
-        # Which of the two delivery paths this school is actually on, so the UI
-        # doesn't have to re-derive the rule.
         "booking_provider": "cal.com" if cal_com_is_configured(db, school) else "google+smtp",
+        "active_provider": active_adapter.provider_name,
+        "caller_id": caller_id,
+        "agent": {
+            "internal_agent_id": school.id,
+            "provider_agent_id": school.retell_agent_id or f"{active_adapter.provider_name}_agent_{school.slug}"
+        },
+        "phone": {
+            "internal_phone_id": school.id,
+            "provider_phone_id": caller_id
+        }
     }
 
 
@@ -505,6 +567,12 @@ def update_school_settings(school_id: str, updates: dict, db: Session = Depends(
     school = db.query(School).filter(School.id == school_id).first()
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
+
+    if "active_provider" in updates and updates["active_provider"]:
+        new_provider = str(updates["active_provider"]).lower().strip()
+        if new_provider in ("retell", "omnidimension", "bolna"):
+            from src.services.voice.provider_manager import provider_manager
+            provider_manager.activate_provider(new_provider, school_id=school.id)
 
     for field, value in updates.items():
         if field not in _SCHOOL_SETTING_FIELDS:

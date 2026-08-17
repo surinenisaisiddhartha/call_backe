@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School, CounselorActivity, Appointment, Counselor
+from src.db import get_db, Contact, UploadBatch, CallAttempt, ScheduledCallback, School, CounselorActivity, Appointment, Counselor, CallCostSnapshot
 from src.routers.auth import get_current_user
 from src.profile import profile_dict, completeness
 import openpyxl
@@ -354,7 +354,17 @@ def delete_batch(
     if current_user.get("school_id") and batch.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Campaign not found")
     
-    # Due to cascade='all, delete-orphan' on UploadBatch.contacts, this will delete contacts as well.
+    # Preserve immutable call attempts and billing cost snapshots before deleting campaign contacts
+    contacts = db.query(Contact).filter(Contact.batch_id == batch_id).all()
+    for c in contacts:
+        db.query(CallAttempt).filter(CallAttempt.contact_id == c.id).update({
+            "school_id": c.school_id,
+            "contact_name": c.name,
+            "contact_phone": c.phone_number,
+            "contact_id": None
+        }, synchronize_session=False)
+        db.query(ScheduledCallback).filter(ScheduledCallback.contact_id == c.id).delete(synchronize_session=False)
+
     db.delete(batch)
     db.commit()
     return {"success": True, "message": "Campaign deleted"}
@@ -525,7 +535,11 @@ def get_all_call_history(
         "contact_id": a.contact_id,
         "contact_name": c.name,
         "contact_phone": c.phone_number,
-        "retell_call_id": a.retell_call_id,
+        "provider": a.provider or "retell",
+        "provider_call_id": a.provider_call_id or a.retell_call_id,
+        "retell_call_id": a.retell_call_id or a.provider_call_id,
+        "provider_status": a.provider_status,
+        "internal_status": a.internal_status,
         "attempt_number": a.attempt_number,
         "outcome": a.outcome,
         "duration_sec": a.duration_sec,
@@ -540,7 +554,7 @@ def get_all_call_history(
         "started_at": a.started_at.isoformat() if a.started_at else None,
         "ended_at": a.ended_at.isoformat() if a.ended_at else None,
         "batch_id": c.batch_id,
-        "campaign_name": batch_names.get(c.batch_id, "")
+        "campaign_name": batch_names.get(c.batch_id, c.batch_id) if c.batch_id else None
     } for a, c in results]
 
     if page is not None:
@@ -1122,6 +1136,8 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
                 "parameter_scores": {k: 0 for k in PARAM_WEIGHTS},
                 "weighted_score_breakdown": {k: 0.0 for k in PARAM_WEIGHTS},
                 "classification_reason": "Uncontacted lead — scoring activates after the first call attempt.",
+                "qualification_source": [],
+                "qualification_reason": "Uncontacted lead",
                 "missing_params": list(PARAM_WEIGHTS.keys()),
                 "uncontacted": True,
             }
@@ -1132,6 +1148,27 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
         engaged = had_engaged.get(c.id, False)
         is_booked = c.id in booked
         is_callback = c.id in callbacks
+
+        # ── DNC / Permanent Suppression Hard Rule Override ───────────────
+        # An explicit DNC request or wrong number overrides any numerical score.
+        is_dnc = (
+            getattr(c, "status", None) in ("DoNotCall", "DNC", "Unqualified") or
+            (analysis and analysis.get("caller_type") == "WrongNumber") or
+            (analysis and "do not call" in (analysis.get("call_synopsis") or "").lower())
+        )
+        if is_dnc:
+            out[c.id] = {
+                "score": 0.0,
+                "classification": "DO_NOT_CALL",
+                "reasons": ["Explicit do-not-call request / contact suppression override."],
+                "parameter_scores": {k: 0 for k in PARAM_WEIGHTS},
+                "weighted_score_breakdown": {k: 0.0 for k in PARAM_WEIGHTS},
+                "classification_reason": "Explicit do-not-call request / contact suppression override",
+                "qualification_source": ["DNC Override"],
+                "qualification_reason": "Caller requested Do Not Call or number is invalid",
+                "missing_params": [],
+            }
+            continue
 
         # Compute each parameter (None = missing signal)
         raw_scores = {
@@ -1178,6 +1215,25 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
 
         reason = _generate_reason(param_scores, weighted_breakdown, classification, missing)
 
+        # Derive qualification sources (why lead was prioritized)
+        sources = []
+        if is_booked:
+            sources.append("Campus visit / appointment booked")
+        if is_callback:
+            sources.append("Counselor callback requested")
+        if getattr(c, "grade_sought", None):
+            sources.append(f"Target grade: {c.grade_sought}")
+        if getattr(c, "budget_range", None):
+            sources.append(f"Budget: {c.budget_range}")
+        if merged_sentiment.get(c.id) == "Positive":
+            sources.append("High positive sentiment")
+        if not sources:
+            sources.append("General admission inquiry")
+
+        qual_reason = reason
+        if classification == "COLD":
+            qual_reason = "Low immediate intent / future inquiry timeline"
+
         out[c.id] = {
             "score": final_score,
             "classification": classification,
@@ -1185,10 +1241,116 @@ def compute_lead_scores(db: Session, contacts: list) -> dict:
             "parameter_scores": param_scores,
             "weighted_score_breakdown": weighted_breakdown,
             "classification_reason": reason,
+            "qualification_source": sources,
+            "qualification_reason": qual_reason,
             "missing_params": missing,
         }
     return out
 
+
+def rescore_contact(db: Session, contact_id: str) -> dict | None:
+    """Computes and writes fresh lead_score and lead_classification to the Contact table."""
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        return None
+    scores = compute_lead_scores(db, [contact])
+    if contact_id in scores:
+        data = scores[contact_id]
+        contact.lead_score = data.get("score")
+        contact.lead_classification = data.get("classification")
+        db.commit()
+        db.refresh(contact)
+        return data
+    return None
+
+
+def persist_lead_scores(db: Session, contacts: list) -> dict:
+    """Batched helper to compute and persist lead scores on multiple contacts."""
+    if not contacts:
+        return {}
+    scores = compute_lead_scores(db, contacts)
+    for c in contacts:
+        if c.id in scores:
+            c.lead_score = scores[c.id].get("score")
+            c.lead_classification = scores[c.id].get("classification")
+    db.commit()
+    return scores
+
+
+def auto_assign_hot_lead_to_available_counselor(db: Session, contact: Contact) -> Counselor | None:
+    """
+    Auto-assigns an unassigned qualified lead (HOT, WARM, or Callback requested)
+    to the available Counselor who currently has the fewest active leads and is not
+    at max capacity. Returns the assigned Counselor or None.
+    """
+    if contact.assigned_counselor_id:
+        return None
+
+    classification = (contact.lead_classification or "COLD").upper()
+    is_qualified = (
+        classification in ("HOT", "WARM") or 
+        (contact.lead_score or 0) >= 40 or 
+        contact.status in ("NeedsReschedule", "Scheduled") or
+        contact.counselor_followup_status == "Pending"
+    )
+    if not is_qualified:
+        return None
+
+    from sqlalchemy import func
+    counselors = db.query(Counselor).filter(
+        Counselor.school_id == contact.school_id,
+        Counselor.availability_status == "Available"
+    ).all()
+    if not counselors:
+        return None
+
+    # Build active-lead counts (counselor follow-up not completed)
+    lead_counts = dict(
+        db.query(Contact.assigned_counselor_id, func.count(Contact.id))
+        .filter(
+            Contact.school_id == contact.school_id,
+            Contact.assigned_counselor_id.isnot(None),
+            Contact.counselor_followup_status != "Completed"
+        )
+        .group_by(Contact.assigned_counselor_id)
+        .all()
+    )
+
+    # Filter out at-capacity counselors, then pick the one with fewest leads
+    eligible = [
+        c for c in counselors
+        if lead_counts.get(c.id, 0) < (c.max_capacity or 50)
+    ]
+    if not eligible:
+        return None
+
+    best = min(eligible, key=lambda c: lead_counts.get(c.id, 0))
+    contact.assigned_counselor_id = best.id
+    contact.counselor_followup_status = "Pending"
+
+    # Log as activity
+    activity = CounselorActivity(
+        contact_id=contact.id,
+        counselor_id=best.id,
+        action_type="AutoAssign",
+        outcome=f"{classification} Lead Auto-Assigned",
+        notes=f"Auto-assigned to {best.name} (active leads: {lead_counts.get(best.id, 0)})"
+    )
+    db.add(activity)
+
+    try:
+        from src.events import event_manager
+        event_manager.broadcast_sync(
+            "COUNSELOR_ASSIGNED",
+            {"contact_id": contact.id, "counselor_id": best.id, "counselor_name": best.name},
+            school_id=contact.school_id
+        )
+    except Exception:
+        pass
+
+    return best
+
+auto_assign_hot_lead = auto_assign_hot_lead_to_available_counselor
 
 
 def persist_lead_scores(db: Session, contacts: list) -> dict:
@@ -1222,6 +1384,9 @@ def persist_lead_scores(db: Session, contacts: list) -> dict:
                 c.lead_score = s["score"]
                 c.lead_classification = s["classification"]
                 c.lead_scored_at = now
+            # Automatically assign HOT/WARM leads to counselors if unassigned
+            if (s.get("classification") in ("HOT", "WARM") or (s.get("score") or 0) >= 50) and not c.assigned_counselor_id:
+                auto_assign_hot_lead_to_available_counselor(db, c)
     db.commit()
     return scored
 
@@ -1385,6 +1550,7 @@ def get_contacts(
     search: str = None,
     interest: str = None,
     counselor_id: str = None,
+    counselor_followup_status: str = None,
     admission_urgency: str = None,
     page: int = 1,
     page_size: int = 50,
@@ -1407,6 +1573,16 @@ def get_contacts(
             query = query.filter(Contact.status == status)
     if batchId:
         query = query.filter(Contact.batch_id == batchId)
+    if counselor_followup_status:
+        norm_followup = counselor_followup_status.strip()
+        if norm_followup.lower() == "active":
+            query = query.filter(Contact.counselor_followup_status != "Completed")
+        elif norm_followup.lower() == "completed":
+            query = query.filter(Contact.counselor_followup_status == "Completed")
+        elif norm_followup.lower() in ("pending", "inprogress"):
+            query = query.filter(Contact.counselor_followup_status == norm_followup)
+        else:
+            query = query.filter(Contact.counselor_followup_status == norm_followup)
     if interest:
         norm_interest = interest.strip().upper()
         if norm_interest == "HOT":
@@ -1470,6 +1646,45 @@ def get_contacts(
         except Exception:
             pass
 
+    # Batch compute per-lead call costs and duration
+    contact_ids = [c.id for c in rows]
+    cost_by_contact = {}
+    if contact_ids:
+        from sqlalchemy import func
+        cost_rows = db.query(
+            CallAttempt.contact_id,
+            func.count(CallAttempt.id),
+            func.coalesce(func.sum(CallCostSnapshot.provider_total_cost), 0.0),
+            func.coalesce(func.sum(CallCostSnapshot.customer_billable_total), 0.0),
+            func.coalesce(func.sum(CallAttempt.duration_sec), 0.0)
+        ).outerjoin(
+            CallCostSnapshot, CallAttempt.id == CallCostSnapshot.call_attempt_id
+        ).filter(
+            CallAttempt.contact_id.in_(contact_ids)
+        ).group_by(CallAttempt.contact_id).all()
+
+        for cid, call_cnt, prov_cost, cust_billed, tot_dur in cost_rows:
+            mins = tot_dur / 60.0 if tot_dur else 0.0
+            # Fallback estimation if snapshots not yet generated for legacy calls
+            if prov_cost == 0.0 and tot_dur > 0:
+                prov_cost = round(mins * 6.68, 2)
+            if cust_billed == 0.0 and tot_dur > 0:
+                cust_billed = round(mins * 15.00, 2)
+
+            margin = max(0.0, float(cust_billed) - float(prov_cost))
+            margin_pct = round((margin / float(cust_billed) * 100.0), 1) if cust_billed > 0 else 0.0
+
+            cost_by_contact[cid] = {
+                "call_count": int(call_cnt),
+                "provider_total_cost": round(float(prov_cost), 2),
+                "customer_billable_total": round(float(cust_billed), 2),
+                "net_margin": round(margin, 2),
+                "gross_margin_percent": margin_pct,
+                "total_duration_sec": round(float(tot_dur), 1),
+            }
+
+    is_admin = current_user.get("role") == "admin" or not current_user.get("school_id")
+
     items = [
         {
             "id": c.id,
@@ -1481,11 +1696,20 @@ def get_contacts(
             "notes": c.notes,
             "status": c.status,
             "interest_level": scored.get(c.id, {}).get("classification", c.lead_classification or "UNSCORED"),
+            "lead_classification": scored.get(c.id, {}).get("classification", c.lead_classification or "UNSCORED"),
             "lead_score": scored.get(c.id, {}).get("score", c.lead_score),
             "score_reasons": scored.get(c.id, {}).get("reasons", []),
             "parameter_scores": scored.get(c.id, {}).get("parameter_scores", {}),
             "weighted_score_breakdown": scored.get(c.id, {}).get("weighted_score_breakdown", {}),
             "classification_reason": scored.get(c.id, {}).get("classification_reason", ""),
+            "call_cost": {
+                "call_count": cost_by_contact.get(c.id, {}).get("call_count", 0),
+                "customer_billable_total": cost_by_contact.get(c.id, {}).get("customer_billable_total", 0.0),
+                "total_duration_sec": cost_by_contact.get(c.id, {}).get("total_duration_sec", 0.0),
+                "provider_total_cost": cost_by_contact.get(c.id, {}).get("provider_total_cost") if is_admin else None,
+                "net_margin": cost_by_contact.get(c.id, {}).get("net_margin") if is_admin else None,
+                "gross_margin_percent": cost_by_contact.get(c.id, {}).get("gross_margin_percent") if is_admin else None,
+            },
             # Only the points actually learned, plus the count — a counselor
             # scanning the queue wants "14/20 known", not twenty nulls.
             "profile": profile_dict(c),
@@ -1538,9 +1762,25 @@ def get_contact_stats(
 
     by_status = {status or "Unknown": count for status, count in query.group_by(Contact.status).all()}
 
+    class_query = db.query(Contact.lead_classification, func.count(Contact.id))
+    if current_user.get("school_id"):
+        class_query = class_query.filter(Contact.school_id == current_user["school_id"])
+    if batchId:
+        class_query = class_query.filter(Contact.batch_id == batchId)
+    by_class = {c or "UNSCORED": count for c, count in class_query.group_by(Contact.lead_classification).all()}
+
+    followup_query = db.query(Contact.counselor_followup_status, func.count(Contact.id))
+    if current_user.get("school_id"):
+        followup_query = followup_query.filter(Contact.school_id == current_user["school_id"])
+    if batchId:
+        followup_query = followup_query.filter(Contact.batch_id == batchId)
+    by_followup = {f or "Pending": count for f, count in followup_query.group_by(Contact.counselor_followup_status).all()}
+
     return {
         "total": sum(by_status.values()),
         "by_status": by_status,
+        "by_classification": by_class,
+        "by_followup_status": by_followup,
         # Spelled out so the client never has to know the status vocabulary.
         "completed": by_status.get("Completed", 0),
         "calling": by_status.get("Calling", 0),
@@ -1548,6 +1788,12 @@ def get_contact_stats(
         "needs_reschedule": by_status.get("NeedsReschedule", 0),
         "scheduled": by_status.get("Scheduled", 0),
         "failed": by_status.get("Failed", 0),
+        "hot": by_class.get("HOT", 0),
+        "warm": by_class.get("WARM", 0),
+        "cold": by_class.get("COLD", 0),
+        "unscored": by_class.get("UNSCORED", 0),
+        "followup_pending": by_followup.get("Pending", 0) + by_followup.get("InProgress", 0),
+        "followup_completed": by_followup.get("Completed", 0),
     }
 
 
@@ -1655,16 +1901,21 @@ def auto_assign_contacts(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
+    from src.events import event_manager
     school_id = resolve_school_id(db, current_user)
     
     counselors = db.query(Counselor).filter(Counselor.school_id == school_id).all()
     if not counselors:
         raise HTTPException(status_code=400, detail="No onboarded counselors available for assignment")
     
-    # Collect valid/active counselor IDs so we can detect orphaned assignments
+    # Priority: filter for available counselors first
+    available_counselors = [c for c in counselors if c.availability_status == "Available"]
+    if not available_counselors:
+        available_counselors = counselors
+
     active_counselor_ids = {c.id for c in counselors}
 
-    # Pick up (1) truly unassigned AND (2) assigned to a deleted counselor
+    # Pick up (1) unassigned AND (2) assigned to deleted counselor
     all_contacts = db.query(Contact).filter(Contact.school_id == school_id).all()
     needs_assignment = [
         c for c in all_contacts
@@ -1675,16 +1926,175 @@ def auto_assign_contacts(
     if not needs_assignment:
         return {"success": True, "message": "All contacts are already assigned to active counselors", "assigned_count": 0}
         
-    counselor_count = len(counselors)
+    # Sort priority: HOT leads first, then WARM, then others
+    def _lead_priority(c: Contact):
+        if c.lead_classification == "HOT" or (c.lead_score or 0) >= 75:
+            return 0
+        if c.lead_classification == "WARM" or (c.lead_score or 0) >= 50:
+            return 1
+        return 2
+
+    needs_assignment.sort(key=_lead_priority)
+
+    cns_count = len(available_counselors)
     for idx, contact in enumerate(needs_assignment):
-        contact.assigned_counselor_id = counselors[idx % counselor_count].id
+        chosen = available_counselors[idx % cns_count]
+        contact.assigned_counselor_id = chosen.id
+        contact.counselor_followup_status = contact.counselor_followup_status or "Pending"
         
+        # Log activity
+        activity = CounselorActivity(
+            contact_id=contact.id,
+            counselor_id=chosen.id,
+            action_type="Assignment",
+            outcome="Auto-Assigned",
+            notes=f"Auto-assigned to {chosen.name} ({chosen.availability_status})"
+        )
+        db.add(activity)
+
     db.commit()
+
+    # Broadcast real-time SSE updates for all affected leads
+    for contact in needs_assignment:
+        event_manager.broadcast_sync(
+            "COUNSELOR_ASSIGNED",
+            {"contact_id": contact.id, "counselor_id": contact.assigned_counselor_id},
+            school_id=school_id
+        )
+
     return {
         "success": True,
-        "message": f"Successfully auto-assigned {len(needs_assignment)} leads across {counselor_count} counselors",
+        "message": f"Successfully auto-assigned {len(needs_assignment)} leads across {cns_count} active counselors",
         "assigned_count": len(needs_assignment)
     }
+
+
+class BulkUpdatePayload(BaseModel):
+    contact_ids: list[str]
+    action: str  # 'assign', 'auto_assign', 'status', 'status_change', 'schedule'
+    assigned_counselor_id: str | None = None
+    status: str | None = None
+    counselor_followup_status: str | None = None
+    scheduled_for: str | None = None
+
+
+@router.post("/bulk-update")
+def bulk_update_contacts(
+    payload: BulkUpdatePayload,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    from src.events import event_manager
+    school_id = resolve_school_id(db, current_user)
+    
+    if not payload.contact_ids:
+        raise HTTPException(status_code=400, detail="No contact IDs provided")
+        
+    contacts = db.query(Contact).filter(
+        Contact.id.in_(payload.contact_ids),
+        Contact.school_id == school_id
+    ).all()
+    
+    if not contacts:
+        raise HTTPException(status_code=404, detail="No matching contacts found")
+        
+    counselors_map = {c.id: c for c in db.query(Counselor).filter(Counselor.school_id == school_id).all()}
+    
+    if payload.action == "assign":
+        target_cns = counselors_map.get(payload.assigned_counselor_id) if payload.assigned_counselor_id else None
+        for c in contacts:
+            c.assigned_counselor_id = target_cns.id if target_cns else None
+            if target_cns:
+                c.counselor_followup_status = c.counselor_followup_status or "Pending"
+                activity = CounselorActivity(
+                    contact_id=c.id,
+                    counselor_id=target_cns.id,
+                    action_type="Assignment",
+                    outcome="Assigned to Counselor",
+                    notes=f"Assigned to counselor {target_cns.name}"
+                )
+                db.add(activity)
+            else:
+                c.counselor_followup_status = "Pending"
+        db.commit()
+        for c in contacts:
+            event_manager.broadcast_sync("COUNSELOR_ASSIGNED", {"contact_id": c.id, "counselor_id": c.assigned_counselor_id}, school_id=school_id)
+        return {"success": True, "message": f"Successfully assigned {len(contacts)} contacts"}
+
+    elif payload.action == "auto_assign":
+        available_cns = [c for c in counselors_map.values() if c.availability_status == "Available"] or list(counselors_map.values())
+        if not available_cns:
+            raise HTTPException(status_code=400, detail="No active counselors available for auto-assignment")
+            
+        cns_count = len(available_cns)
+        for idx, c in enumerate(contacts):
+            chosen = available_cns[idx % cns_count]
+            c.assigned_counselor_id = chosen.id
+            c.counselor_followup_status = c.counselor_followup_status or "Pending"
+            activity = CounselorActivity(
+                contact_id=c.id,
+                counselor_id=chosen.id,
+                action_type="Assignment",
+                outcome="Auto-Assigned",
+                notes=f"Auto-assigned to {chosen.name}"
+            )
+            db.add(activity)
+        db.commit()
+        for c in contacts:
+            event_manager.broadcast_sync("COUNSELOR_ASSIGNED", {"contact_id": c.id, "counselor_id": c.assigned_counselor_id}, school_id=school_id)
+        return {"success": True, "message": f"Auto-assigned {len(contacts)} contacts across {cns_count} counselors"}
+
+    elif payload.action in ("status", "status_change"):
+        st = payload.status or "Completed"
+        for c in contacts:
+            if st in ("Pending", "Calling", "Completed", "NeedsReschedule", "Scheduled", "Failed"):
+                c.status = st
+            if st in ("Completed", "InProgress", "Pending") or payload.counselor_followup_status:
+                c.counselor_followup_status = payload.counselor_followup_status or st
+            activity = CounselorActivity(
+                contact_id=c.id,
+                counselor_id=c.assigned_counselor_id,
+                action_type="StatusChange",
+                outcome=f"Status set to {st}",
+                notes="Bulk status updated by counselor / admin"
+            )
+            db.add(activity)
+        db.commit()
+        for c in contacts:
+            event_manager.broadcast_sync("CONTACT_UPDATED", {"contact_id": c.id, "status": c.status}, school_id=school_id)
+        return {"success": True, "message": f"Updated status for {len(contacts)} contacts"}
+
+    elif payload.action == "schedule":
+        if not payload.scheduled_for:
+            raise HTTPException(status_code=400, detail="scheduled_for datetime is required")
+        try:
+            dt = datetime.fromisoformat(payload.scheduled_for.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            dt = datetime.utcnow()
+
+        for c in contacts:
+            c.status = "Scheduled"
+            sched = ScheduledCallback(
+                contact_id=c.id,
+                scheduled_for=dt,
+                status="Scheduled"
+            )
+            db.add(sched)
+            activity = CounselorActivity(
+                contact_id=c.id,
+                counselor_id=c.assigned_counselor_id,
+                action_type="Call",
+                outcome="Callback Scheduled",
+                notes=f"Bulk callback scheduled for {dt.strftime('%d %b %Y, %I:%M %p')}"
+            )
+            db.add(activity)
+        db.commit()
+        for c in contacts:
+            event_manager.broadcast_sync("CALLBACK_SCHEDULED", {"contact_id": c.id, "scheduled_for": dt.isoformat()}, school_id=school_id)
+        return {"success": True, "message": f"Scheduled callbacks for {len(contacts)} contacts"}
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported bulk action: {payload.action}")
 
 
 # ── Counselor Availability Toggle ──────────────────────────────────────
@@ -1805,81 +2215,7 @@ def get_counselor_analytics(
     return results
 
 
-# ── Smart Auto-Assignment Helper ───────────────────────────────────────
 
-def auto_assign_hot_lead_to_available_counselor(db: Session, contact: Contact) -> Counselor | None:
-    """
-    Auto-assigns an unassigned qualified lead (HOT, WARM, or Callback requested)
-    to the available Counselor who currently has the fewest active leads and is not
-    at max capacity.  Returns the assigned Counselor or None.
-    """
-    if contact.assigned_counselor_id:
-        return None
-
-    classification = (contact.lead_classification or "COLD").upper()
-    is_qualified = (
-        classification in ("HOT", "WARM") or 
-        (contact.lead_score or 0) >= 40 or 
-        contact.status in ("NeedsReschedule", "Scheduled")
-    )
-    if not is_qualified:
-        return None
-
-    from sqlalchemy import func
-    counselors = db.query(Counselor).filter(
-        Counselor.school_id == contact.school_id,
-        Counselor.availability_status == "Available"
-    ).all()
-    if not counselors:
-        return None
-
-    # Build active-lead counts (counselor follow-up not completed)
-    lead_counts = dict(
-        db.query(Contact.assigned_counselor_id, func.count(Contact.id))
-        .filter(
-            Contact.school_id == contact.school_id,
-            Contact.assigned_counselor_id.isnot(None),
-            Contact.counselor_followup_status != "Completed"
-        )
-        .group_by(Contact.assigned_counselor_id)
-        .all()
-    )
-
-    # Filter out at-capacity counselors, then pick the one with fewest leads
-    eligible = [
-        c for c in counselors
-        if lead_counts.get(c.id, 0) < (c.max_capacity or 50)
-    ]
-    if not eligible:
-        return None
-
-    best = min(eligible, key=lambda c: lead_counts.get(c.id, 0))
-    contact.assigned_counselor_id = best.id
-    contact.counselor_followup_status = "Pending"
-
-    # Log as activity
-    activity = CounselorActivity(
-        contact_id=contact.id,
-        counselor_id=best.id,
-        action_type="AutoAssign",
-        outcome="HOT lead auto-assigned",
-        notes=f"Auto-assigned to {best.name} (fewest active leads: {lead_counts.get(best.id, 0)})"
-    )
-    db.add(activity)
-
-    try:
-        from src.events import event_manager
-        event_manager.broadcast_sync(
-            "COUNSELOR_ASSIGNED",
-            {"contact_id": contact.id, "counselor_id": best.id, "counselor_name": best.name},
-            school_id=contact.school_id
-        )
-    except Exception:
-        pass
-
-    return best
-
-auto_assign_hot_lead = auto_assign_hot_lead_to_available_counselor
 
 
 # ── Structured Follow-Up Activities ────────────────────────────────────
@@ -2092,6 +2428,14 @@ def get_contact_history(
     schedules = db.query(ScheduledCallback).filter(ScheduledCallback.contact_id == id).order_by(ScheduledCallback.scheduled_for.desc()).all()
     appointments = db.query(Appointment).filter(Appointment.contact_id == id).order_by(Appointment.scheduled_for.desc()).all()
 
+    # Pre-fetch call cost snapshots for itemized per-call financial auditing
+    attempt_ids = [a.id for a in attempts]
+    snapshots_by_attempt = {}
+    if attempt_ids:
+        snaps = db.query(CallCostSnapshot).filter(CallCostSnapshot.call_attempt_id.in_(attempt_ids)).all()
+        for s in snaps:
+            snapshots_by_attempt[s.call_attempt_id] = s
+
     # Serialise attempts explicitly so the post-call analysis comes back as a
     # real object rather than the JSON string it is stored as. A malformed or
     # legacy value must not break the whole history view, so parsing failures
@@ -2107,8 +2451,42 @@ def get_contact_history(
                     analysis = parsed
             except (ValueError, TypeError):
                 analysis = None
+
+        snap = snapshots_by_attempt.get(a.id)
+        dur = float(a.duration_sec or 0.0)
+        mins = dur / 60.0
+        if snap:
+            prov_cost = float(snap.provider_total_cost or 0.0)
+            cust_billed = float(snap.customer_billable_total or 0.0)
+            markup = float(snap.markup_amount or 0.0)
+            margin_pct = float(snap.gross_margin_percent or 0.0)
+            source = snap.cost_source or "rate_card"
+            curr = snap.currency or "INR"
+        else:
+            prov_cost = round(mins * 6.68, 2)
+            cust_billed = round(mins * 15.00, 2)
+            markup = max(0.0, cust_billed - prov_cost)
+            margin_pct = round((markup / cust_billed * 100.0), 1) if cust_billed > 0 else 0.0
+            source = "estimated"
+            curr = "INR"
+
+        is_admin_user = current_user.get("role") == "admin" or not current_user.get("school_id")
+        cost_obj = {
+            "customer_billable_total": round(cust_billed, 2),
+            "currency": curr,
+            "provider_total_cost": round(prov_cost, 2) if is_admin_user else None,
+            "markup_amount": round(markup, 2) if is_admin_user else None,
+            "gross_margin_percent": margin_pct if is_admin_user else None,
+            "cost_source": source if is_admin_user else None,
+        }
+
         return {
             "id": a.id,
+            "provider": a.provider or "retell",
+            "provider_call_id": a.provider_call_id or a.retell_call_id,
+            "retell_call_id": a.retell_call_id or a.provider_call_id,
+            "provider_status": a.provider_status,
+            "internal_status": a.internal_status,
             "attempt_number": a.attempt_number,
             "started_at": a.started_at.isoformat() if a.started_at else None,
             "ended_at": a.ended_at.isoformat() if a.ended_at else None,
@@ -2121,6 +2499,7 @@ def get_contact_history(
             "user_sentiment": a.user_sentiment,
             "call_successful": a.call_successful,
             "analysis": analysis,
+            "cost": cost_obj,
             "detected_topics": [x for x in (a.detected_topics or "").split(",") if x],
         }
 
@@ -2160,6 +2539,29 @@ def get_contact_history(
             "created_at": sch.created_at.isoformat() if sch.created_at else None,
         }
 
+    # Counselor Activities & Timeline
+    activities = db.query(CounselorActivity).filter(CounselorActivity.contact_id == id).order_by(CounselorActivity.created_at.desc()).all()
+    counselor_ids = {a.counselor_id for a in activities if a.counselor_id}
+    if contact.assigned_counselor_id:
+        counselor_ids.add(contact.assigned_counselor_id)
+    counselor_map = {}
+    if counselor_ids:
+        for c in db.query(Counselor).filter(Counselor.id.in_(counselor_ids)).all():
+            counselor_map[c.id] = {"id": c.id, "name": c.name, "email": c.email, "phone_number": c.phone_number}
+
+    assigned_counselor = counselor_map.get(contact.assigned_counselor_id) if contact.assigned_counselor_id else None
+
+    def _activity_dict(act):
+        return {
+            "id": act.id,
+            "counselor_id": act.counselor_id,
+            "counselor_name": counselor_map.get(act.counselor_id, {}).get("name", "System"),
+            "action_type": act.action_type,
+            "outcome": act.outcome,
+            "notes": act.notes,
+            "created_at": act.created_at.isoformat() if act.created_at else None,
+        }
+
     return {
         "contact": contact,
         "lead_score": scored.get("score", 0),
@@ -2168,6 +2570,8 @@ def get_contact_history(
         "parameter_scores": scored.get("parameter_scores", {}),
         "weighted_score_breakdown": scored.get("weighted_score_breakdown", {}),
         "classification_reason": scored.get("classification_reason", ""),
+        "assigned_counselor": assigned_counselor,
+        "counselor_followup_status": contact.counselor_followup_status or "Pending",
         # What the agent learned about the family, mid-call. Only the points
         # actually captured — see profile.py.
         "profile": profile_dict(contact),
@@ -2176,6 +2580,7 @@ def get_contact_history(
         "attempts": [_attempt_dict(a) for a in attempts],
         "schedules": [_schedule_dict(sch) for sch in schedules],
         "appointments": [_appointment_dict(apt) for apt in appointments],
+        "activities": [_activity_dict(act) for act in activities],
     }
 
 @router.delete("/{id}")
@@ -2189,6 +2594,17 @@ def delete_contact(
         raise HTTPException(status_code=404, detail="Contact not found")
     if current_user.get("school_id") and contact.school_id != current_user["school_id"]:
         raise HTTPException(status_code=404, detail="Contact not found")
+    
+    # Preserve immutable call attempts and billing cost snapshots before deleting contact
+    db.query(CallAttempt).filter(CallAttempt.contact_id == id).update({
+        "school_id": contact.school_id,
+        "contact_name": contact.name,
+        "contact_phone": contact.phone_number,
+        "contact_id": None
+    }, synchronize_session=False)
+
+    # Clean up dependent scheduling records
+    db.query(ScheduledCallback).filter(ScheduledCallback.contact_id == id).delete(synchronize_session=False)
     
     db.delete(contact)
     db.commit()
@@ -2223,8 +2639,6 @@ def update_contact(
         contact.email = payload.email
     if payload.name is not None:
         contact.name = payload.name
-    if payload.counselor_followup_status is not None:
-        contact.counselor_followup_status = payload.counselor_followup_status
 
     # Track status changes and assignment changes as structured activities
     counselor_id = None
@@ -2233,6 +2647,19 @@ def update_contact(
         cns = db.query(Counselor).filter(Counselor.email == email_user, Counselor.school_id == contact.school_id).first()
         if cns:
             counselor_id = cns.id
+
+    if payload.counselor_followup_status is not None:
+        old_followup = contact.counselor_followup_status
+        contact.counselor_followup_status = payload.counselor_followup_status
+        if old_followup != payload.counselor_followup_status:
+            activity = CounselorActivity(
+                contact_id=contact.id,
+                counselor_id=counselor_id,
+                action_type="FollowupStatus",
+                outcome=payload.counselor_followup_status,
+                notes=f"Follow-up status updated: {old_followup or 'Pending'} → {payload.counselor_followup_status}"
+            )
+            db.add(activity)
 
     if payload.status is not None:
         old_status = contact.status
@@ -2254,17 +2681,29 @@ def update_contact(
         else:
             contact.assigned_counselor_id = payload.assigned_counselor_id
         if old_counselor != contact.assigned_counselor_id:
+            assigned_cns = db.query(Counselor).filter(Counselor.id == contact.assigned_counselor_id).first() if contact.assigned_counselor_id else None
             activity = CounselorActivity(
                 contact_id=contact.id,
                 counselor_id=counselor_id,
                 action_type="Assignment",
-                outcome=f"Assigned to {contact.assigned_counselor_id or 'Unassigned'}",
-                notes=f"Reassigned from {old_counselor or 'Unassigned'}"
+                outcome=f"Assigned to {assigned_cns.name if assigned_cns else 'Unassigned'}",
+                notes=f"Assigned counselor changed to {assigned_cns.name if assigned_cns else 'Unassigned'}"
             )
             db.add(activity)
 
+    contact.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(contact)
+
+    try:
+        from src.events import event_manager
+        event_manager.broadcast_sync(
+            "CONTACT_UPDATED",
+            {"contact_id": contact.id, "status": contact.status, "counselor_followup_status": contact.counselor_followup_status},
+            school_id=contact.school_id
+        )
+    except Exception:
+        pass
     return {
         "success": True, 
         "contact": {
